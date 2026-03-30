@@ -1,0 +1,2 @@
+﻿id_iniciativa,nombre,responsable_id,servicio,estado,avance_pct,fecha_inicio,fecha_fin,prioridad,comentario,tipo,criticidad
+1,Integración con Transporte Publico,1,Biotren,En curso,40,2026-01-01,2026-07-01,Media,Ejemplo: Avance según cronograma,Proyecto,Alta
