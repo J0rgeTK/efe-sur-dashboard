@@ -46,13 +46,14 @@ st.markdown(
         font-size: 2.2rem;
         font-weight: 800;
         color: {EFE_BLUE};
-        margin-bottom: 0.1rem;
+        margin-top: 0.7rem;
+        margin-bottom: 0.15rem;
     }}
 
     .subtitle {{
         font-size: 0.95rem;
         color: {TEXT_MUTED};
-        margin-bottom: 0.2rem;
+        margin-bottom: 0.35rem;
     }}
 
     .section-title {{
@@ -103,8 +104,17 @@ st.markdown(
     }}
 
     .block-container {{
-        padding-top: 1.2rem;
+        padding-top: 2rem;
         padding-bottom: 1rem;
+    }}
+
+    .service-title {{
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: {EFE_BLUE};
+        margin: 0.2rem 0 0.8rem 0;
+        padding-bottom: 0.35rem;
+        border-bottom: 2px solid {BORDER};
     }}
 
     div[data-testid="stMetric"] {{
@@ -398,21 +408,31 @@ tabs = st.tabs(["Resumen ejecutivo", "KPIs", "Personas"])
 with tabs[0]:
     st.markdown("<div class='section-title'>Resumen ejecutivo</div>", unsafe_allow_html=True)
 
-    kpi_cards = kpis_f.head(4).copy()
-    if kpi_cards.empty:
+    servicios_con_datos = [svc for svc in servicios_sel if svc in kpis_f["servicio"].astype(str).unique().tolist()]
+    if kpis_f.empty:
         st.warning("No existen KPI para los filtros seleccionados.")
+    elif not servicios_con_datos:
+        st.warning("No existen servicios con KPI para el período y filtros seleccionados.")
     else:
-        cols = st.columns(min(4, len(kpi_cards)))
-        for idx, (_, row) in enumerate(kpi_cards.iterrows()):
-            titulo = f"{row['nombre']} - {row['servicio']}"
+        cols = st.columns(len(servicios_con_datos))
+        for idx, servicio in enumerate(servicios_con_datos):
+            servicio_df = kpis_f[kpis_f["servicio"].astype(str) == str(servicio)].copy()
+            if "orden" in servicio_df.columns:
+                servicio_df = servicio_df.sort_values(["orden", "nombre", "categoria"])
+            else:
+                servicio_df = servicio_df.sort_values(["nombre", "categoria"])
+
             with cols[idx]:
-                render_kpi_card(
-                    titulo,
-                    fmt_number(row["valor"], row["unidad"]),
-                    f"Meta: {fmt_number(row['meta'], row['unidad'])}",
-                    f"Desviación: {fmt_pct(row['variacion_pct'])}",
-                    row["estado"]
-                )
+                st.markdown(f"<div class='service-title'>{servicio}</div>", unsafe_allow_html=True)
+                for _, row in servicio_df.iterrows():
+                    render_kpi_card(
+                        str(row["nombre"]),
+                        fmt_number(row["valor"], row["unidad"]),
+                        f"Meta: {fmt_number(row['meta'], row['unidad'])}",
+                        f"Desviación: {fmt_pct(row['variacion_pct'])}",
+                        row["estado"]
+                    )
+                    st.markdown("<div style='height: 0.55rem;'></div>", unsafe_allow_html=True)
 
     st.markdown("<div class='section-title'>Evolución del KPI</div>", unsafe_allow_html=True)
     nombres_kpi = sorted(kpis_hist["nombre"].dropna().astype(str).unique().tolist())
@@ -439,7 +459,7 @@ with tabs[0]:
                 st.info("No hay datos rurales para el KPI y filtros seleccionados.")
             else:
                 hist_rural_plot = hist_rural.groupby(["periodo", "servicio"], as_index=False)["valor"].sum()
-                fig_rural = build_line_chart(hist_rural_plot, f"{kpi_hist_sel} - Servicios rurales", color="servicio")
+                fig_rural = build_line_chart(hist_rural_plot, f"{kpi_hist_sel} - Otros servicios", color="servicio")
                 st.plotly_chart(fig_rural, use_container_width=True)
     else:
         st.info("No hay KPIs disponibles para graficar.")
@@ -495,7 +515,7 @@ with tabs[1]:
             st.info("No hay datos rurales para el KPI seleccionado.")
         else:
             rural_hist = rural_hist.groupby(["periodo", "servicio"], as_index=False)["valor"].sum()
-            fig_rural = build_line_chart(rural_hist, f"{kpi_sel} - Servicios rurales", color="servicio", height=360)
+            fig_rural = build_line_chart(rural_hist, f"{kpi_sel} - Otros servicios", color="servicio", height=360)
             st.plotly_chart(fig_rural, use_container_width=True)
 
     st.markdown("<div class='section-title'>Valor vs meta en el período seleccionado</div>", unsafe_allow_html=True)
