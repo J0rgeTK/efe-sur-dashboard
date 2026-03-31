@@ -1,9 +1,0 @@
-﻿id_kpi,nombre,categoria,servicio,valor,meta,unidad,periodo,variacion_pct,estado,orden,observacion
-1,Pasajeros,Afluencia,Biotren,781451,961169.263122306,pax,2026-01,-18.6978787210175,alerta,1,Afluencia enero 2026
-2,Pasajeros,Afluencia,Biotren,746327,806743.579710007,pax,2026-02,-7.48894459522378,alerta,2,Afluencia febrero 2026
-3,Pasajeros,Afluencia,Tren Araucanía,39424,62968.2093766987,pax,2026-01,-37.3906287152755,critico,3,Afluencia enero 2026
-4,Pasajeros,Afluencia,Tren Araucanía,42486,64884.3856789122,pax,2026-02,-34.5204557992629,critico,4,Afluencia febrero 2026
-5,Pasajeros,Afluencia,Laja Talcahuano,47831,64330.5466607723,pax,2026-01,-25.6480746973559,critico,5,Afluencia enero 2026
-6,Pasajeros,Afluencia,Laja Talcahuano,55341,65364.7725147057,pax,2026-02,-15.3351295033584,alerta,6,Afluencia febrero 2026
-7,Pasajeros,Afluencia,Llanquihue Puerto Montt,77145,51655.748375,pax,2026-01,49.3444629626857,ok,7,Afluencia enero 2026
-8,Pasajeros,Afluencia,Llanquihue Puerto Montt,76278,49195.9508333333,pax,2026-02,55.0493459480346,ok,8,Afluencia febrero 2026
