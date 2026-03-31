@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -47,14 +48,19 @@ st.markdown(
         font-size: 2.2rem;
         font-weight: 800;
         color: {EFE_BLUE};
-        margin-top: 0.7rem;
+        margin-top: 1.15rem;
         margin-bottom: 0.15rem;
     }}
 
     .subtitle {{
         font-size: 0.95rem;
         color: {TEXT_MUTED};
+        margin-top: 0.45rem;
         margin-bottom: 0.35rem;
+    }}
+
+    .top-period-wrapper {{
+        margin-top: 1.25rem;
     }}
 
     .section-title {{
@@ -406,6 +412,7 @@ with col_title:
     )
 
 with col_periodo:
+    st.markdown("<div class='top-period-wrapper'></div>", unsafe_allow_html=True)
     periodo_sel = st.selectbox("Período de análisis", options=periodos, index=default_period_index, key="periodo_top")
 
 # =========================================================
