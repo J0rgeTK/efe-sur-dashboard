@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -14,7 +13,7 @@ st.set_page_config(
     page_title="EFE Sur | KPIs e Iniciativas - Gerencia de Pasajeros",
     page_icon="🚆",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 # =========================================================
@@ -30,6 +29,7 @@ TEXT_MUTED = "#6B7280"
 SUCCESS = "#0F766E"
 WARNING = "#D97706"
 DANGER = "#B91C1C"
+MAP_SCALE = "Reds"
 
 RURAL_SERVICES = ["Laja Talcahuano", "Tren Araucanía", "Llanquihue Puerto Montt"]
 
@@ -140,6 +140,16 @@ st.markdown(
         border-bottom: 2px solid {BORDER};
     }}
 
+    .map-note {{
+        background: #EFF6FF;
+        border: 1px solid #BFDBFE;
+        border-radius: 12px;
+        padding: 0.75rem 0.9rem;
+        font-size: 0.85rem;
+        color: {TEXT_MAIN};
+        margin-bottom: 0.75rem;
+    }}
+
     div[data-testid="stMetric"] {{
         background: {EFE_WHITE};
         border: 1px solid {BORDER};
@@ -168,36 +178,54 @@ def normalize_text(text):
 
 def is_occupancy_rate_kpi(kpi_name):
     name = normalize_text(kpi_name)
-    return "tasa" in name and "ocup" in name
+    return "tasa" in name and "ocupacion" in name
 
 
-def get_display_value(value, unit="", kpi_name=""):
+def maybe_scale_percent(value):
     if pd.isna(value):
         return value
-    if unit == "%" and is_occupancy_rate_kpi(kpi_name) and abs(float(value)) <= 1.5:
-        return float(value) * 100
-    return value
+    try:
+        value = float(value)
+    except Exception:
+        return value
+    return value * 100 if abs(value) <= 1.5 else value
 
 
-def fmt_number(value, unit="", kpi_name=""):
-    value = get_display_value(value, unit, kpi_name)
+def fmt_number(value, unit="", kpi_name=None):
     if pd.isna(value):
         return "-"
+    if unit == "%" or is_occupancy_rate_kpi(kpi_name):
+        value = maybe_scale_percent(value)
     if unit == "CLP":
         return f"$ {value:,.0f}".replace(",", ".")
-    if unit == "%":
+    if unit == "%" or is_occupancy_rate_kpi(kpi_name):
         return f"{value:,.1f}%".replace(",", "X").replace(".", ",").replace("X", ".")
     if unit == "pax":
         return f"{value:,.0f}".replace(",", ".")
     return f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
 
 def fmt_pct(value):
     if pd.isna(value):
         return "-"
     return f"{value:,.1f}%".replace(",", "X").replace(".", ",").replace("X", ".")
 
+
+def fmt_pax(value):
+    if pd.isna(value):
+        return "-"
+    return f"{float(value):,.0f}".replace(",", ".")
+
+
+def fmt_fuga_pct(value):
+    if pd.isna(value):
+        return "-"
+    value = maybe_scale_percent(value)
+    return f"{value:,.1f}%".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def classify_status(value, meta, higher_is_better=True):
-    if pd.isna(meta) or meta == 0:
+    if pd.isna(meta) or meta == 0 or pd.isna(value):
         return "ok"
 
     ratio = value / meta if higher_is_better else meta / value if value != 0 else 0
@@ -207,6 +235,7 @@ def classify_status(value, meta, higher_is_better=True):
     if ratio >= 0.95:
         return "alerta"
     return "critico"
+
 
 def status_color(status):
     return {
@@ -219,6 +248,7 @@ def status_color(status):
         "Finalizada": SUCCESS,
         "Pausada": WARNING,
     }.get(str(status).strip(), TEXT_MUTED)
+
 
 def render_kpi_card(title, value, meta, delta_text, status):
     color = status_color(status)
@@ -233,28 +263,20 @@ def render_kpi_card(title, value, meta, delta_text, status):
     st.markdown(html, unsafe_allow_html=True)
 
 
-def has_meaningful_text(value):
-    if value is None or pd.isna(value):
-        return False
-    return str(value).strip() != ""
-
-
 def render_observation_box(observacion):
-    if has_meaningful_text(observacion):
-        st.markdown(
-            f"<div class='efe-observation'><strong>Observación:</strong> {str(observacion).strip()}</div>",
-            unsafe_allow_html=True,
-        )
+    if observacion is None:
+        return
+    txt = str(observacion).strip()
+    if not txt:
+        return
+    st.markdown(f"<div class='efe-observation'><strong>Observación:</strong> {txt}</div>", unsafe_allow_html=True)
 
 
 def option_selector(label, options, key, default=None, horizontal=True):
     if not options:
         return None
-
-    options = [str(opt) for opt in options]
-    if default is None or str(default) not in options:
+    if default is None or default not in options:
         default = options[0]
-
     try:
         selected = st.pills(
             label,
@@ -272,19 +294,17 @@ def option_selector(label, options, key, default=None, horizontal=True):
 def safe_to_datetime(series):
     return pd.to_datetime(series, errors="coerce")
 
+
 def validate_columns(df, required_cols, label):
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
         st.error(f"El archivo {label} no contiene las columnas requeridas: {', '.join(missing)}")
         st.stop()
 
+
 def get_repo_data_path():
     base = Path(__file__).resolve().parent
-    candidates = [
-        base / "data",
-        base / "datos",
-        base,
-    ]
+    candidates = [base / "data", base / "datos", base]
     for folder in candidates:
         if (folder / "kpis.csv").exists() and (folder / "iniciativas.csv").exists() and (folder / "personas.csv").exists():
             return folder
@@ -293,6 +313,7 @@ def get_repo_data_path():
         "Ubíquelos en la raíz del proyecto o dentro de una carpeta llamada data."
     )
     st.stop()
+
 
 def periodo_to_date(value):
     value = "" if value is None else str(value).strip()
@@ -304,10 +325,8 @@ def periodo_to_date(value):
 
 
 def periodo_to_label(value):
-    meses = {
-        1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
-        7: "jul", 8: "ago", 9: "sep", 10: "oct", 11: "nov", 12: "dic",
-    }
+    meses = {1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
+             7: "jul", 8: "ago", 9: "sep", 10: "oct", 11: "nov", 12: "dic"}
     dt = periodo_to_date(value)
     if pd.isna(dt):
         return str(value)
@@ -319,9 +338,7 @@ def build_line_chart(df, title, color=None, line_dash=None, height=340):
     plot_df["periodo_date"] = plot_df["periodo"].apply(periodo_to_date)
     plot_df = plot_df.sort_values(["periodo_date", "periodo"])
     plot_df["periodo_label"] = plot_df["periodo"].apply(periodo_to_label)
-
-    category_order = plot_df["periodo_label"].dropna().tolist()
-    category_order = list(dict.fromkeys(category_order))
+    category_order = list(dict.fromkeys(plot_df["periodo_label"].dropna().tolist()))
 
     fig = px.line(
         plot_df,
@@ -337,14 +354,9 @@ def build_line_chart(df, title, color=None, line_dash=None, height=340):
         paper_bgcolor=EFE_WHITE,
         margin=dict(l=20, r=20, t=55, b=20),
         height=height,
-        legend_title_text=""
+        legend_title_text="",
     )
-    fig.update_xaxes(
-        title="",
-        tickangle=-90,
-        categoryorder="array",
-        categoryarray=category_order
-    )
+    fig.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=category_order)
     fig.update_yaxes(title="")
     return fig
 
@@ -354,8 +366,62 @@ def scale_kpi_dataframe_for_display(df, kpi_name, value_columns=("valor",)):
     if is_occupancy_rate_kpi(kpi_name):
         for col in value_columns:
             if col in df.columns:
-                df[col] = df[col].apply(lambda x: x * 100 if pd.notna(x) and abs(float(x)) <= 1.5 else x)
+                df[col] = df[col].apply(maybe_scale_percent)
     return df
+
+
+def build_station_map(df_map, color_metric_label):
+    center = {"lat": df_map["latitud"].mean(), "lon": df_map["longitud"].mean()}
+    plot_df = df_map.copy()
+    plot_df["entradas_size"] = plot_df["entradas"].fillna(0).clip(lower=0)
+    plot_df["entradas_size"] = plot_df["entradas_size"].replace(0, 1)
+
+    fig = px.scatter_mapbox(
+        plot_df,
+        lat="latitud",
+        lon="longitud",
+        size="entradas_size",
+        color="color_metric",
+        size_max=28,
+        zoom=8,
+        center=center,
+        mapbox_style="open-street-map",
+        color_continuous_scale=MAP_SCALE,
+        hover_name="estacion",
+        text="estacion",
+        hover_data={
+            "servicio": True,
+            "comuna": True,
+            "region": True,
+            "entradas_fmt": True,
+            "meta_entradas_fmt": True,
+            "perdida_pax_fmt": True,
+            "fuga_pct_fmt": True,
+            "observacion_afluencia": True,
+            "observacion_estacion": True,
+            "latitud": False,
+            "longitud": False,
+            "entradas_size": False,
+            "color_metric": False,
+        },
+        labels={
+            "entradas_fmt": "Entradas",
+            "meta_entradas_fmt": "Meta",
+            "perdida_pax_fmt": "Pérdida",
+            "fuga_pct_fmt": "Fuga %",
+            "observacion_afluencia": "Obs. afluencia",
+            "observacion_estacion": "Obs. estación",
+        },
+        title=f"Mapa de estaciones - {color_metric_label}",
+    )
+    fig.update_traces(textposition="top center")
+    fig.update_layout(
+        margin=dict(l=10, r=10, t=50, b=10),
+        paper_bgcolor=EFE_WHITE,
+        height=620,
+        coloraxis_colorbar_title=color_metric_label,
+    )
+    return fig
 
 # =========================================================
 # CARGA DE DATOS
@@ -370,6 +436,12 @@ def load_data():
 
     servicios_path = data_path / "servicios.csv"
     servicios = pd.read_csv(servicios_path) if servicios_path.exists() else pd.DataFrame()
+
+    estaciones_path = data_path / "estaciones.csv"
+    estaciones = pd.read_csv(estaciones_path) if estaciones_path.exists() else pd.DataFrame()
+
+    afluencia_estacion_path = data_path / "afluencia_estacion.csv"
+    afluencia_estacion = pd.read_csv(afluencia_estacion_path) if afluencia_estacion_path.exists() else pd.DataFrame()
 
     validate_columns(
         kpis,
@@ -386,8 +458,19 @@ def load_data():
         ["id_persona", "nombre", "cargo", "area", "activo"],
         "personas.csv",
     )
+    if not estaciones.empty:
+        validate_columns(
+            estaciones,
+            ["id_estacion", "estacion", "servicio", "comuna", "region", "latitud", "longitud", "orden_trazado", "activa"],
+            "estaciones.csv",
+        )
+    if not afluencia_estacion.empty:
+        validate_columns(
+            afluencia_estacion,
+            ["id_afluencia_estacion", "periodo", "servicio", "id_estacion", "entradas", "meta_entradas", "perdida_pax", "fuga_pct"],
+            "afluencia_estacion.csv",
+        )
 
-    # Tipos
     kpis["valor"] = pd.to_numeric(kpis["valor"], errors="coerce")
     kpis["meta"] = pd.to_numeric(kpis["meta"], errors="coerce")
     kpis["variacion_pct"] = pd.to_numeric(kpis["variacion_pct"], errors="coerce")
@@ -402,14 +485,28 @@ def load_data():
     if "orden" in personas.columns:
         personas["orden"] = pd.to_numeric(personas["orden"], errors="coerce")
 
-    if not servicios.empty and "activo" in servicios.columns:
-        servicios["activo"] = pd.to_numeric(servicios["activo"], errors="coerce").fillna(0).astype(int)
+    if not servicios.empty:
+        if "activo" in servicios.columns:
+            servicios["activo"] = pd.to_numeric(servicios["activo"], errors="coerce").fillna(0).astype(int)
         if "orden" in servicios.columns:
             servicios["orden"] = pd.to_numeric(servicios["orden"], errors="coerce")
 
-    return kpis, iniciativas, personas, servicios, data_path
+    if not estaciones.empty:
+        estaciones["latitud"] = pd.to_numeric(estaciones["latitud"], errors="coerce")
+        estaciones["longitud"] = pd.to_numeric(estaciones["longitud"], errors="coerce")
+        estaciones["orden_trazado"] = pd.to_numeric(estaciones["orden_trazado"], errors="coerce")
+        estaciones["activa"] = pd.to_numeric(estaciones["activa"], errors="coerce").fillna(0).astype(int)
 
-kpis, iniciativas, personas, servicios, data_path = load_data()
+    if not afluencia_estacion.empty:
+        afluencia_estacion["entradas"] = pd.to_numeric(afluencia_estacion["entradas"], errors="coerce")
+        afluencia_estacion["meta_entradas"] = pd.to_numeric(afluencia_estacion["meta_entradas"], errors="coerce")
+        afluencia_estacion["perdida_pax"] = pd.to_numeric(afluencia_estacion["perdida_pax"], errors="coerce")
+        afluencia_estacion["fuga_pct"] = pd.to_numeric(afluencia_estacion["fuga_pct"], errors="coerce")
+
+    return kpis, iniciativas, personas, servicios, estaciones, afluencia_estacion, data_path
+
+
+kpis, iniciativas, personas, servicios, estaciones, afluencia_estacion, data_path = load_data()
 
 # =========================================================
 # PREPARACIÓN DE DATOS
@@ -420,12 +517,11 @@ iniciativas = iniciativas.merge(
     personas_activas[["id_persona", "nombre"]],
     how="left",
     left_on="responsable_id",
-    right_on="id_persona"
+    right_on="id_persona",
 )
 iniciativas = iniciativas.rename(columns={"nombre_y": "responsable"} if "nombre_y" in iniciativas.columns else {})
 if "nombre" in iniciativas.columns and "responsable" not in iniciativas.columns:
     iniciativas = iniciativas.rename(columns={"nombre": "responsable"})
-
 if "nombre_x" in iniciativas.columns:
     iniciativas = iniciativas.rename(columns={"nombre_x": "nombre_iniciativa"})
 elif "nombre" in iniciativas.columns:
@@ -438,7 +534,6 @@ iniciativas["critica"] = iniciativas.apply(
     axis=1,
 )
 
-# Orden de servicios
 if not servicios.empty and "servicio" in servicios.columns:
     servicios_activos = servicios.copy()
     if "activo" in servicios_activos.columns:
@@ -470,21 +565,15 @@ with st.sidebar:
     responsables_sel = st.multiselect("Responsable", options=responsables, default=responsables)
 
     st.markdown("---")
-    st.markdown(
-        f"<div class='small-note'>Lectura de archivos desde: <b>{data_path}</b></div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"<div class='small-note'>Lectura de archivos desde: <b>{data_path}</b></div>", unsafe_allow_html=True)
 
 # =========================================================
 # ENCABEZADO Y PERÍODO VISIBLE
 # =========================================================
-col_logo, col_title, col_periodo = st.columns([1, 4.5, 1.8])
+col_logo, col_title, col_periodo = st.columns([1, 4.4, 1.6])
 
 with col_logo:
-    logo_candidates = [
-        Path(__file__).resolve().parent / "assets" / "logoefe-azul.png",
-        Path(__file__).resolve().parent / "logoefe-azul.png",
-    ]
+    logo_candidates = [Path(__file__).resolve().parent / "assets" / "logoefe-azul.png", Path(__file__).resolve().parent / "logoefe-azul.png"]
     for logo_path in logo_candidates:
         if logo_path.exists():
             st.image(str(logo_path), use_container_width=True)
@@ -492,10 +581,7 @@ with col_logo:
 
 with col_title:
     st.markdown("<div class='main-title'>KPIs e Iniciativas - Gerencia de Pasajeros</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='subtitle'>Seleccione el período en la parte superior y use la barra lateral para filtros complementarios.</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<div class='subtitle'>Panel de seguimiento ejecutivo de desempeño e iniciativas.</div>", unsafe_allow_html=True)
 
 with col_periodo:
     st.markdown("<div class='top-period-wrapper'></div>", unsafe_allow_html=True)
@@ -504,18 +590,8 @@ with col_periodo:
 # =========================================================
 # FILTRADO
 # =========================================================
-kpis_f = kpis[
-    (kpis["periodo"].astype(str) == str(periodo_sel))
-    & (kpis["servicio"].isin(servicios_sel))
-].copy()
-
-iniciativas_f = iniciativas[
-    (iniciativas["servicio"].isin(servicios_sel))
-    & (iniciativas["estado"].isin(estados_ini_sel))
-    & (iniciativas["prioridad"].isin(prioridades_sel))
-    & (iniciativas["responsable"].isin(responsables_sel))
-].copy()
-
+kpis_f = kpis[(kpis["periodo"].astype(str) == str(periodo_sel)) & (kpis["servicio"].isin(servicios_sel))].copy()
+iniciativas_f = iniciativas[(iniciativas["servicio"].isin(servicios_sel)) & (iniciativas["estado"].isin(estados_ini_sel)) & (iniciativas["prioridad"].isin(prioridades_sel)) & (iniciativas["responsable"].isin(responsables_sel))].copy()
 kpis_hist = kpis[kpis["servicio"].isin(servicios_sel)].copy()
 
 if "orden" in kpis_f.columns:
@@ -523,7 +599,7 @@ if "orden" in kpis_f.columns:
 else:
     kpis_f = kpis_f.sort_values(["nombre", "servicio"])
 
-tabs = st.tabs(["Resumen ejecutivo", "KPIs", "Personas"])
+tabs = st.tabs(["Resumen ejecutivo", "KPIs", "Personas", "Detalle Servicio"])
 
 # =========================================================
 # TAB 1 - RESUMEN EJECUTIVO
@@ -553,7 +629,7 @@ with tabs[0]:
                         fmt_number(row["valor"], row["unidad"], row["nombre"]),
                         f"Meta: {fmt_number(row['meta'], row['unidad'], row['nombre'])}",
                         f"Desviación: {fmt_pct(row['variacion_pct'])}",
-                        row["estado"]
+                        row["estado"],
                     )
                     if "observacion" in servicio_df.columns:
                         render_observation_box(row.get("observacion"))
@@ -562,21 +638,13 @@ with tabs[0]:
     st.markdown("<div class='section-title'>Evolución del KPI</div>", unsafe_allow_html=True)
     nombres_kpi = sorted(kpis_hist["nombre"].dropna().astype(str).unique().tolist())
     if nombres_kpi:
-        kpi_hist_sel = option_selector(
-            "KPI para evolución",
-            nombres_kpi,
-            key="kpi_hist_sel_resumen",
-            default=nombres_kpi[0],
-            horizontal=True,
-        )
-
+        kpi_hist_sel = option_selector("KPI para evolución", nombres_kpi, key="kpi_hist_sel_resumen", default=nombres_kpi[0], horizontal=True)
         hist_sel = kpis_hist[kpis_hist["nombre"] == kpi_hist_sel].copy()
         hist_sel = scale_kpi_dataframe_for_display(hist_sel, kpi_hist_sel, ("valor", "meta"))
         hist_bt = hist_sel[hist_sel["servicio"] == "Biotren"].copy()
         hist_rural = hist_sel[hist_sel["servicio"].isin(RURAL_SERVICES)].copy()
 
         col_bt, col_rural = st.columns(2)
-
         with col_bt:
             if hist_bt.empty:
                 st.info("No hay datos de Biotren para el KPI y filtros seleccionados.")
@@ -597,23 +665,12 @@ with tabs[0]:
         st.info("No hay KPIs disponibles para graficar.")
 
     st.markdown("<div class='section-title'>Iniciativas críticas</div>", unsafe_allow_html=True)
-
-    criticas = iniciativas_f[iniciativas_f["critica"]].copy()
-    criticas = criticas.sort_values(["prioridad", "fecha_fin", "avance_pct"], ascending=[True, True, True])
-
+    criticas = iniciativas_f[iniciativas_f["critica"]].copy().sort_values(["prioridad", "fecha_fin", "avance_pct"], ascending=[True, True, True])
     if criticas.empty:
         st.info("No existen iniciativas críticas con los filtros actuales.")
     else:
-        criticas_table = criticas[[
-            "nombre_iniciativa", "responsable", "servicio", "estado", "avance_pct", "fecha_fin", "prioridad"
-        ]].rename(columns={
-            "nombre_iniciativa": "Iniciativa",
-            "responsable": "Responsable",
-            "servicio": "Servicio",
-            "estado": "Estado",
-            "avance_pct": "Avance %",
-            "fecha_fin": "Fecha fin",
-            "prioridad": "Prioridad",
+        criticas_table = criticas[["nombre_iniciativa", "responsable", "servicio", "estado", "avance_pct", "fecha_fin", "prioridad"]].rename(columns={
+            "nombre_iniciativa": "Iniciativa", "responsable": "Responsable", "servicio": "Servicio", "estado": "Estado", "avance_pct": "Avance %", "fecha_fin": "Fecha fin", "prioridad": "Prioridad"
         })
         st.dataframe(criticas_table, use_container_width=True, hide_index=True)
 
@@ -622,22 +679,13 @@ with tabs[0]:
 # =========================================================
 with tabs[1]:
     st.markdown("<div class='section-title'>Análisis de KPIs</div>", unsafe_allow_html=True)
-
     nombres_kpi = sorted(kpis["nombre"].dropna().astype(str).unique().tolist())
-    kpi_sel = option_selector(
-        "Seleccione KPI",
-        nombres_kpi,
-        key="kpi_analisis",
-        default=nombres_kpi[0] if nombres_kpi else None,
-        horizontal=True,
-    )
-
+    kpi_sel = option_selector("Seleccione KPI", nombres_kpi, key="kpi_analisis", default=nombres_kpi[0] if nombres_kpi else None, horizontal=True)
     hist_kpi = kpis_hist[kpis_hist["nombre"] == kpi_sel].copy()
     hist_kpi = scale_kpi_dataframe_for_display(hist_kpi, kpi_sel, ("valor", "meta"))
 
     st.markdown("<div class='section-title'>Evolución por grupos de servicio</div>", unsafe_allow_html=True)
     col_a, col_b = st.columns(2)
-
     with col_a:
         bt_hist = hist_kpi[hist_kpi["servicio"] == "Biotren"].copy()
         if bt_hist.empty:
@@ -647,7 +695,6 @@ with tabs[1]:
             fig_bt = build_line_chart(bt_hist, f"{kpi_sel} - Biotren", height=360)
             fig_bt.update_traces(line_color=EFE_BLUE)
             st.plotly_chart(fig_bt, use_container_width=True)
-
     with col_b:
         rural_hist = hist_kpi[hist_kpi["servicio"].isin(RURAL_SERVICES)].copy()
         if rural_hist.empty:
@@ -662,52 +709,27 @@ with tabs[1]:
     actual = scale_kpi_dataframe_for_display(actual, kpi_sel, ("valor", "meta"))
     if not actual.empty:
         fig_meta = go.Figure()
-        fig_meta.add_trace(go.Bar(
-            x=actual["servicio"],
-            y=actual["valor"],
-            name="Valor",
-            marker_color=EFE_BLUE
-        ))
-        fig_meta.add_trace(go.Bar(
-            x=actual["servicio"],
-            y=actual["meta"],
-            name="Meta",
-            marker_color=EFE_RED
-        ))
-        fig_meta.update_layout(
-            barmode="group",
-            title=f"Valor vs meta - {periodo_sel}",
-            plot_bgcolor=EFE_WHITE,
-            paper_bgcolor=EFE_WHITE,
-            margin=dict(l=20, r=20, t=50, b=20),
-            height=380
-        )
+        fig_meta.add_trace(go.Bar(x=actual["servicio"], y=actual["valor"], name="Valor", marker_color=EFE_BLUE))
+        fig_meta.add_trace(go.Bar(x=actual["servicio"], y=actual["meta"], name="Meta", marker_color=EFE_RED))
+        fig_meta.update_layout(barmode="group", title=f"Valor vs meta - {periodo_sel}", plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=380)
         st.plotly_chart(fig_meta, use_container_width=True)
     else:
         st.info("No hay datos para el KPI seleccionado en el período actual.")
 
     st.markdown("<div class='section-title'>Detalle del KPI</div>", unsafe_allow_html=True)
-
     detalle_cols = ["nombre", "servicio", "categoria", "valor", "meta", "unidad", "variacion_pct", "estado"]
     if "observacion" in kpis_f.columns:
         detalle_cols.append("observacion")
     detalle_kpi = kpis_f[kpis_f["nombre"] == kpi_sel][detalle_cols].copy()
-
     if not detalle_kpi.empty:
         detalle_kpi["Valor"] = detalle_kpi.apply(lambda r: fmt_number(r["valor"], r["unidad"], r["nombre"]), axis=1)
         detalle_kpi["Meta"] = detalle_kpi.apply(lambda r: fmt_number(r["meta"], r["unidad"], r["nombre"]), axis=1)
         detalle_kpi["Variación"] = detalle_kpi["variacion_pct"].apply(fmt_pct)
-
         cols_show = ["servicio", "categoria", "Valor", "Meta", "Variación", "estado"]
-        rename_map = {
-            "servicio": "Servicio",
-            "categoria": "Categoría",
-            "estado": "Estado",
-        }
+        rename_map = {"servicio": "Servicio", "categoria": "Categoría", "estado": "Estado"}
         if "observacion" in detalle_kpi.columns:
             cols_show.append("observacion")
             rename_map["observacion"] = "Observación"
-
         detalle_show = detalle_kpi[cols_show].rename(columns=rename_map)
         st.dataframe(detalle_show, use_container_width=True, hide_index=True)
     else:
@@ -718,7 +740,6 @@ with tabs[1]:
 # =========================================================
 with tabs[2]:
     st.markdown("<div class='section-title'>Vista por persona</div>", unsafe_allow_html=True)
-
     total_ini = len(iniciativas_f)
     en_curso = int((iniciativas_f["estado"] == "En curso").sum())
     atrasadas = int((iniciativas_f["estado"] == "Atrasada").sum())
@@ -731,72 +752,30 @@ with tabs[2]:
     m4.metric("Finalizadas", finalizadas)
 
     col_left, col_right = st.columns([1.1, 1])
-
     with col_left:
-        por_responsable = (
-            iniciativas_f.groupby("responsable", as_index=False)
-            .agg(cantidad=("id_iniciativa", "count"), avance_promedio=("avance_pct", "mean"))
-            .sort_values("cantidad", ascending=False)
-        )
-
+        por_responsable = iniciativas_f.groupby("responsable", as_index=False).agg(cantidad=("id_iniciativa", "count"), avance_promedio=("avance_pct", "mean")).sort_values("cantidad", ascending=False)
         if por_responsable.empty:
             st.info("No hay iniciativas para mostrar según los filtros seleccionados.")
         else:
-            fig = px.bar(
-                por_responsable,
-                x="responsable",
-                y="cantidad",
-                title="Carga de iniciativas por responsable",
-                text="cantidad"
-            )
+            fig = px.bar(por_responsable, x="responsable", y="cantidad", title="Carga de iniciativas por responsable", text="cantidad")
             fig.update_traces(marker_color=EFE_BLUE)
-            fig.update_layout(
-                plot_bgcolor=EFE_WHITE,
-                paper_bgcolor=EFE_WHITE,
-                margin=dict(l=20, r=20, t=50, b=20),
-                height=340
-            )
+            fig.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=340)
             fig.update_xaxes(title="")
             fig.update_yaxes(title="Cantidad")
             st.plotly_chart(fig, use_container_width=True)
-
     with col_right:
         por_prioridad = iniciativas_f["prioridad"].value_counts().reset_index()
         por_prioridad.columns = ["prioridad", "cantidad"]
-
         if por_prioridad.empty:
-            st.info("No hay prioridades disponibles para los filtros seleccionados.")
+            st.info("No hay prioridades para graficar.")
         else:
-            fig2 = px.pie(
-                por_prioridad,
-                names="prioridad",
-                values="cantidad",
-                title="Distribución por prioridad",
-                color="prioridad",
-                color_discrete_map={
-                    "Alta": EFE_RED,
-                    "Media": WARNING,
-                    "Baja": EFE_BLUE
-                }
-            )
-            fig2.update_layout(
-                paper_bgcolor=EFE_WHITE,
-                margin=dict(l=20, r=20, t=50, b=20),
-                height=340
-            )
+            fig2 = px.pie(por_prioridad, names="prioridad", values="cantidad", title="Distribución por prioridad", color="prioridad", color_discrete_map={"Alta": EFE_RED, "Media": WARNING, "Baja": EFE_BLUE})
+            fig2.update_layout(paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=340)
             st.plotly_chart(fig2, use_container_width=True)
 
     personas_opts = sorted(iniciativas_f["responsable"].dropna().astype(str).unique().tolist())
     if personas_opts:
-        st.markdown("<div class='section-title'>Detalle del responsable</div>", unsafe_allow_html=True)
-        persona_sel = option_selector(
-            "Seleccione responsable",
-            personas_opts,
-            key="persona_detalle",
-            default=personas_opts[0],
-            horizontal=False,
-        )
-
+        persona_sel = option_selector("Seleccione responsable", personas_opts, key="persona_selector", default=personas_opts[0], horizontal=True)
         per_df = iniciativas_f[iniciativas_f["responsable"] == persona_sel].copy()
 
         total_p = len(per_df)
@@ -811,77 +790,189 @@ with tabs[2]:
         p4.metric("Avance promedio", fmt_pct(avance_prom))
 
         left_p, right_p = st.columns([1.1, 1])
-
         with left_p:
-            fig = px.bar(
-                per_df.sort_values("avance_pct"),
-                x="avance_pct",
-                y="nombre_iniciativa",
-                orientation="h",
-                title=f"Avance por iniciativa - {persona_sel}",
-                text="avance_pct"
-            )
+            fig = px.bar(per_df.sort_values("avance_pct"), x="avance_pct", y="nombre_iniciativa", orientation="h", title=f"Avance por iniciativa - {persona_sel}", text="avance_pct")
             fig.update_traces(marker_color=EFE_BLUE)
-            fig.update_layout(
-                plot_bgcolor=EFE_WHITE,
-                paper_bgcolor=EFE_WHITE,
-                margin=dict(l=20, r=20, t=50, b=20),
-                height=420
-            )
+            fig.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=420)
             fig.update_xaxes(title="Avance %")
             fig.update_yaxes(title="")
             st.plotly_chart(fig, use_container_width=True)
-
         with right_p:
             estado_persona = per_df["estado"].value_counts().reset_index()
             estado_persona.columns = ["estado", "cantidad"]
-
-            fig2 = px.bar(
-                estado_persona,
-                x="estado",
-                y="cantidad",
-                title="Distribución por estado",
-                color="estado",
-                color_discrete_map={
-                    "Planificada": TEXT_MUTED,
-                    "En curso": EFE_BLUE,
-                    "Atrasada": EFE_RED,
-                    "Finalizada": SUCCESS,
-                    "Pausada": WARNING,
-                }
-            )
-            fig2.update_layout(
-                plot_bgcolor=EFE_WHITE,
-                paper_bgcolor=EFE_WHITE,
-                margin=dict(l=20, r=20, t=50, b=20),
-                height=420,
-                showlegend=False
-            )
+            fig2 = px.bar(estado_persona, x="estado", y="cantidad", title="Distribución por estado", color="estado", color_discrete_map={"Planificada": TEXT_MUTED, "En curso": EFE_BLUE, "Atrasada": EFE_RED, "Finalizada": SUCCESS, "Pausada": WARNING})
+            fig2.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=420, showlegend=False)
             st.plotly_chart(fig2, use_container_width=True)
 
-        detalle_cols = [
-            "nombre_iniciativa", "servicio", "estado", "avance_pct", "fecha_inicio", "fecha_fin", "prioridad"
-        ]
-        if "criticidad" in per_df.columns:
-            detalle_cols.append("criticidad")
-        if "comentario" in per_df.columns:
-            detalle_cols.append("comentario")
-
-        detalle_persona = per_df[detalle_cols].copy()
-        detalle_persona = detalle_persona.rename(columns={
-            "nombre_iniciativa": "Iniciativa",
-            "servicio": "Servicio",
-            "estado": "Estado",
-            "avance_pct": "Avance %",
-            "fecha_inicio": "Inicio",
-            "fecha_fin": "Fin",
-            "prioridad": "Prioridad",
-            "criticidad": "Criticidad",
-            "comentario": "Comentario"
-        })
+        st.markdown("<div class='section-title'>Detalle por responsable</div>", unsafe_allow_html=True)
+        detalle_persona = per_df[["nombre_iniciativa", "servicio", "estado", "avance_pct", "fecha_inicio", "fecha_fin", "prioridad", "criticidad", "comentario"]].copy()
+        detalle_persona = detalle_persona.rename(columns={"nombre_iniciativa": "Iniciativa", "servicio": "Servicio", "estado": "Estado", "avance_pct": "Avance %", "fecha_inicio": "Inicio", "fecha_fin": "Fin", "prioridad": "Prioridad", "criticidad": "Criticidad", "comentario": "Comentario"})
         st.dataframe(detalle_persona, use_container_width=True, hide_index=True)
     else:
         st.warning("No hay responsables disponibles con los filtros actuales.")
+
+# =========================================================
+# TAB 4 - DETALLE SERVICIO
+# =========================================================
+with tabs[3]:
+    st.markdown("<div class='section-title'>Detalle Servicio</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='map-note'>"
+        "Esta sección combina la georreferenciación de estaciones con la afluencia mensual, la meta y la pérdida de pasajeros. "
+        "El tamaño del punto representa las entradas y el color puede mostrar pérdida absoluta o fuga porcentual."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    if estaciones.empty or afluencia_estacion.empty:
+        st.info("Para habilitar esta vista, agregue los archivos estaciones.csv y afluencia_estacion.csv al repositorio.")
+    else:
+        estaciones_activas = estaciones[estaciones["activa"] == 1].copy()
+        servicios_detalle = sorted(
+            list(
+                set(estaciones_activas["servicio"].dropna().astype(str).tolist())
+                & set(afluencia_estacion["servicio"].dropna().astype(str).tolist())
+            )
+        )
+        servicios_detalle = [s for s in servicios_lista if s in servicios_detalle] or servicios_detalle
+        if not servicios_detalle:
+            st.warning("No existen servicios comunes entre estaciones.csv y afluencia_estacion.csv.")
+        else:
+            default_detalle_servicio = servicios_detalle[0]
+            if len(servicios_sel) == 1 and servicios_sel[0] in servicios_detalle:
+                default_detalle_servicio = servicios_sel[0]
+            detalle_servicio_sel = option_selector(
+                "Servicio para análisis georreferenciado",
+                servicios_detalle,
+                key="detalle_servicio_selector",
+                default=default_detalle_servicio,
+                horizontal=True,
+            )
+
+            periodos_detalle = sorted(
+                afluencia_estacion[afluencia_estacion["servicio"].astype(str) == str(detalle_servicio_sel)]["periodo"].dropna().astype(str).unique().tolist()
+            )
+            if not periodos_detalle:
+                st.warning("No existen períodos disponibles para el servicio seleccionado.")
+            else:
+                default_detalle_periodo = str(periodo_sel) if str(periodo_sel) in periodos_detalle else periodos_detalle[-1]
+                detalle_periodo_sel = option_selector(
+                    "Período de detalle",
+                    periodos_detalle,
+                    key="detalle_periodo_selector",
+                    default=default_detalle_periodo,
+                    horizontal=True,
+                )
+
+                metric_map = {
+                    "Pérdida de pasajeros": "perdida_pax",
+                    "Fuga porcentual": "fuga_pct",
+                }
+                detalle_metric_label = option_selector(
+                    "Color del mapa",
+                    list(metric_map.keys()),
+                    key="detalle_metric_selector",
+                    default="Pérdida de pasajeros",
+                    horizontal=True,
+                )
+                detalle_metric_col = metric_map[detalle_metric_label]
+
+                estaciones_srv = estaciones_activas[estaciones_activas["servicio"].astype(str) == str(detalle_servicio_sel)].copy()
+                if "orden_trazado" in estaciones_srv.columns:
+                    estaciones_srv = estaciones_srv.sort_values(["orden_trazado", "estacion"])
+                else:
+                    estaciones_srv = estaciones_srv.sort_values("estacion")
+
+                afluencia_srv = afluencia_estacion[
+                    (afluencia_estacion["servicio"].astype(str) == str(detalle_servicio_sel))
+                    & (afluencia_estacion["periodo"].astype(str) == str(detalle_periodo_sel))
+                ].copy()
+
+                detail_df = estaciones_srv.merge(
+                    afluencia_srv,
+                    how="left",
+                    on=["id_estacion", "servicio"],
+                    suffixes=("_est", "_afl"),
+                )
+                detail_df["entradas"] = pd.to_numeric(detail_df.get("entradas"), errors="coerce")
+                detail_df["meta_entradas"] = pd.to_numeric(detail_df.get("meta_entradas"), errors="coerce")
+                detail_df["perdida_pax"] = pd.to_numeric(detail_df.get("perdida_pax"), errors="coerce")
+                detail_df["fuga_pct"] = pd.to_numeric(detail_df.get("fuga_pct"), errors="coerce")
+                detail_df["fuga_pct_display"] = detail_df["fuga_pct"].apply(maybe_scale_percent)
+                detail_df["color_metric"] = detail_df[detalle_metric_col]
+                if detalle_metric_col == "fuga_pct":
+                    detail_df["color_metric"] = detail_df["fuga_pct_display"]
+
+                detail_df["entradas_fmt"] = detail_df["entradas"].apply(fmt_pax)
+                detail_df["meta_entradas_fmt"] = detail_df["meta_entradas"].apply(fmt_pax)
+                detail_df["perdida_pax_fmt"] = detail_df["perdida_pax"].apply(fmt_pax)
+                detail_df["fuga_pct_fmt"] = detail_df["fuga_pct"].apply(fmt_fuga_pct)
+                detail_df["observacion_estacion"] = detail_df.get("observacion_est", detail_df.get("observacion_x", None))
+                detail_df["observacion_afluencia"] = detail_df.get("observacion_afl", detail_df.get("observacion_y", None))
+
+                valid_map_df = detail_df.dropna(subset=["latitud", "longitud"]).copy()
+
+                top_left, top_right = st.columns([1.8, 1])
+                with top_left:
+                    if valid_map_df.empty:
+                        st.warning("No existen coordenadas válidas para graficar las estaciones del servicio seleccionado.")
+                    else:
+                        map_fig = build_station_map(valid_map_df, detalle_metric_label)
+                        st.plotly_chart(map_fig, use_container_width=True)
+
+                with top_right:
+                    total_entradas = detail_df["entradas"].sum(min_count=1)
+                    total_meta = detail_df["meta_entradas"].sum(min_count=1)
+                    total_perdida = detail_df["perdida_pax"].sum(min_count=1)
+                    fuga_prom = detail_df["fuga_pct_display"].mean()
+
+                    m1, m2 = st.columns(2)
+                    m3, m4 = st.columns(2)
+                    m1.metric("Entradas", fmt_pax(total_entradas))
+                    m2.metric("Meta entradas", fmt_pax(total_meta))
+                    m3.metric("Pérdida total", fmt_pax(total_perdida))
+                    m4.metric("Fuga promedio", fmt_fuga_pct(fuga_prom))
+
+                    st.markdown("<div class='section-title'>Focos de intervención</div>", unsafe_allow_html=True)
+                    focos = detail_df[["estacion", "entradas", "meta_entradas", "perdida_pax", "fuga_pct_display"]].copy()
+                    focos = focos.sort_values(["perdida_pax", "fuga_pct_display"], ascending=[False, False]).head(10)
+                    focos["Entradas"] = focos["entradas"].apply(fmt_pax)
+                    focos["Meta"] = focos["meta_entradas"].apply(fmt_pax)
+                    focos["Pérdida"] = focos["perdida_pax"].apply(fmt_pax)
+                    focos["Fuga %"] = focos["fuga_pct_display"].apply(fmt_fuga_pct)
+                    focos_show = focos[["estacion", "Entradas", "Meta", "Pérdida", "Fuga %"]].rename(columns={"estacion": "Estación"})
+                    st.dataframe(focos_show, use_container_width=True, hide_index=True)
+
+                st.markdown("<div class='section-title'>Comparativo de pérdida por estación</div>", unsafe_allow_html=True)
+                bar_df = detail_df[["estacion", "perdida_pax"]].copy().dropna().sort_values("perdida_pax", ascending=False).head(15)
+                if bar_df.empty:
+                    st.info("No hay datos de pérdida de pasajeros para el período seleccionado.")
+                else:
+                    fig_bar = px.bar(bar_df, x="estacion", y="perdida_pax", title="Estaciones con mayor pérdida de pasajeros", text="perdida_pax")
+                    fig_bar.update_traces(marker_color=EFE_RED)
+                    fig_bar.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=360)
+                    fig_bar.update_xaxes(title="", tickangle=-45)
+                    fig_bar.update_yaxes(title="Pérdida de pasajeros")
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                st.markdown("<div class='section-title'>Detalle de estaciones</div>", unsafe_allow_html=True)
+                detail_table = detail_df[[
+                    "estacion", "comuna", "region", "entradas", "meta_entradas", "perdida_pax", "fuga_pct_display", "observacion_afluencia", "observacion_estacion"
+                ]].copy()
+                detail_table["Entradas"] = detail_table["entradas"].apply(fmt_pax)
+                detail_table["Meta entradas"] = detail_table["meta_entradas"].apply(fmt_pax)
+                detail_table["Pérdida pax"] = detail_table["perdida_pax"].apply(fmt_pax)
+                detail_table["Fuga %"] = detail_table["fuga_pct_display"].apply(fmt_fuga_pct)
+                detail_table = detail_table[[
+                    "estacion", "comuna", "region", "Entradas", "Meta entradas", "Pérdida pax", "Fuga %", "observacion_afluencia", "observacion_estacion"
+                ]].rename(columns={
+                    "estacion": "Estación",
+                    "comuna": "Comuna",
+                    "region": "Región",
+                    "observacion_afluencia": "Obs. afluencia",
+                    "observacion_estacion": "Obs. estación",
+                })
+                st.dataframe(detail_table, use_container_width=True, hide_index=True)
 
 # =========================================================
 # PIE
