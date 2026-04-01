@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -264,10 +265,12 @@ def render_kpi_card(title, value, meta, delta_text, status):
 
 
 def render_observation_box(observacion):
-    if observacion is None:
-        return
-    txt = str(observacion).strip()
-    if not txt:
+    txt = "" if observacion is None else str(observacion).strip()
+    if not txt or txt.lower() == "nan":
+        st.markdown(
+            "<div class='efe-observation-empty'><strong>Observación:</strong> Sin observaciones</div>",
+            unsafe_allow_html=True,
+        )
         return
     st.markdown(f"<div class='efe-observation'><strong>Observación:</strong> {txt}</div>", unsafe_allow_html=True)
 
