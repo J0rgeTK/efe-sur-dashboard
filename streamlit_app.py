@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 # CONFIGURACIÓN GENERAL
 # =========================================================
 st.set_page_config(
-    page_title="EFE Sur | KPIs e Iniciativas",
+    page_title="EFE Sur | KPIs e Iniciativas - Gerencia de Pasajeros",
     page_icon="🚆",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -103,6 +103,22 @@ st.markdown(
     .efe-card-delta {{
         font-size: 0.88rem;
         font-weight: 600;
+    }}
+
+    .efe-observation {{
+        background: #FFF7ED;
+        border: 1px solid #FED7AA;
+        border-radius: 12px;
+        padding: 0.7rem 0.85rem;
+        font-size: 0.84rem;
+        color: {TEXT_MAIN};
+        margin-top: 0.45rem;
+        margin-bottom: 0.1rem;
+        line-height: 1.35;
+    }}
+
+    .efe-observation strong {{
+        color: {WARNING};
     }}
 
     .small-note {{
@@ -216,6 +232,43 @@ def render_kpi_card(title, value, meta, delta_text, status):
     """
     st.markdown(html, unsafe_allow_html=True)
 
+
+def has_meaningful_text(value):
+    if value is None or pd.isna(value):
+        return False
+    return str(value).strip() != ""
+
+
+def render_observation_box(observacion):
+    if has_meaningful_text(observacion):
+        st.markdown(
+            f"<div class='efe-observation'><strong>Observación:</strong> {str(observacion).strip()}</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def option_selector(label, options, key, default=None, horizontal=True):
+    if not options:
+        return None
+
+    options = [str(opt) for opt in options]
+    if default is None or str(default) not in options:
+        default = options[0]
+
+    try:
+        selected = st.pills(
+            label,
+            options=options,
+            selection_mode="single",
+            default=default,
+            key=key,
+        )
+        return selected if selected is not None else default
+    except Exception:
+        default_index = options.index(default)
+        return st.radio(label, options=options, index=default_index, key=f"{key}_radio", horizontal=horizontal)
+
+
 def safe_to_datetime(series):
     return pd.to_datetime(series, errors="coerce")
 
@@ -241,10 +294,38 @@ def get_repo_data_path():
     )
     st.stop()
 
+def periodo_to_date(value):
+    value = "" if value is None else str(value).strip()
+    if not value:
+        return pd.NaT
+    if len(value) == 7:
+        value = value + "-01"
+    return pd.to_datetime(value, errors="coerce")
+
+
+def periodo_to_label(value):
+    meses = {
+        1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
+        7: "jul", 8: "ago", 9: "sep", 10: "oct", 11: "nov", 12: "dic",
+    }
+    dt = periodo_to_date(value)
+    if pd.isna(dt):
+        return str(value)
+    return f"{meses.get(int(dt.month), str(dt.month))}-{str(dt.year)[2:]}"
+
+
 def build_line_chart(df, title, color=None, line_dash=None, height=340):
+    plot_df = df.copy()
+    plot_df["periodo_date"] = plot_df["periodo"].apply(periodo_to_date)
+    plot_df = plot_df.sort_values(["periodo_date", "periodo"])
+    plot_df["periodo_label"] = plot_df["periodo"].apply(periodo_to_label)
+
+    category_order = plot_df["periodo_label"].dropna().tolist()
+    category_order = list(dict.fromkeys(category_order))
+
     fig = px.line(
-        df,
-        x="periodo",
+        plot_df,
+        x="periodo_label",
         y="valor",
         color=color,
         line_dash=line_dash,
@@ -258,7 +339,12 @@ def build_line_chart(df, title, color=None, line_dash=None, height=340):
         height=height,
         legend_title_text=""
     )
-    fig.update_xaxes(title="")
+    fig.update_xaxes(
+        title="",
+        tickangle=-90,
+        categoryorder="array",
+        categoryarray=category_order
+    )
     fig.update_yaxes(title="")
     return fig
 
@@ -405,7 +491,7 @@ with col_logo:
             break
 
 with col_title:
-    st.markdown("<div class='main-title'>Dashboard de KPIs e iniciativas</div>", unsafe_allow_html=True)
+    st.markdown("<div class='main-title'>KPIs e Iniciativas - Gerencia de Pasajeros</div>", unsafe_allow_html=True)
     st.markdown(
         "<div class='subtitle'>Seleccione el período en la parte superior y use la barra lateral para filtros complementarios.</div>",
         unsafe_allow_html=True,
@@ -465,16 +551,24 @@ with tabs[0]:
                     render_kpi_card(
                         str(row["nombre"]),
                         fmt_number(row["valor"], row["unidad"], row["nombre"]),
-                        f"Meta: {fmt_number(row['meta'], row["unidad"], row["nombre"])}",
+                        f"Meta: {fmt_number(row['meta'], row['unidad'], row['nombre'])}",
                         f"Desviación: {fmt_pct(row['variacion_pct'])}",
                         row["estado"]
                     )
+                    if "observacion" in servicio_df.columns:
+                        render_observation_box(row.get("observacion"))
                     st.markdown("<div style='height: 0.55rem;'></div>", unsafe_allow_html=True)
 
     st.markdown("<div class='section-title'>Evolución del KPI</div>", unsafe_allow_html=True)
     nombres_kpi = sorted(kpis_hist["nombre"].dropna().astype(str).unique().tolist())
     if nombres_kpi:
-        kpi_hist_sel = st.selectbox("KPI para evolución", options=nombres_kpi, key="kpi_hist_sel_resumen")
+        kpi_hist_sel = option_selector(
+            "KPI para evolución",
+            nombres_kpi,
+            key="kpi_hist_sel_resumen",
+            default=nombres_kpi[0],
+            horizontal=True,
+        )
 
         hist_sel = kpis_hist[kpis_hist["nombre"] == kpi_hist_sel].copy()
         hist_sel = scale_kpi_dataframe_for_display(hist_sel, kpi_hist_sel, ("valor", "meta"))
@@ -494,7 +588,7 @@ with tabs[0]:
 
         with col_rural:
             if hist_rural.empty:
-                st.info("No hay datos rurales para el KPI y filtros seleccionados.")
+                st.info("No hay datos de otros servicios para el KPI y filtros seleccionados.")
             else:
                 hist_rural_plot = hist_rural.groupby(["periodo", "servicio"], as_index=False)["valor"].sum()
                 fig_rural = build_line_chart(hist_rural_plot, f"{kpi_hist_sel} - Otros servicios", color="servicio")
@@ -530,7 +624,13 @@ with tabs[1]:
     st.markdown("<div class='section-title'>Análisis de KPIs</div>", unsafe_allow_html=True)
 
     nombres_kpi = sorted(kpis["nombre"].dropna().astype(str).unique().tolist())
-    kpi_sel = st.selectbox("Seleccione KPI", options=nombres_kpi, key="kpi_analisis")
+    kpi_sel = option_selector(
+        "Seleccione KPI",
+        nombres_kpi,
+        key="kpi_analisis",
+        default=nombres_kpi[0] if nombres_kpi else None,
+        horizontal=True,
+    )
 
     hist_kpi = kpis_hist[kpis_hist["nombre"] == kpi_sel].copy()
     hist_kpi = scale_kpi_dataframe_for_display(hist_kpi, kpi_sel, ("valor", "meta"))
@@ -551,7 +651,7 @@ with tabs[1]:
     with col_b:
         rural_hist = hist_kpi[hist_kpi["servicio"].isin(RURAL_SERVICES)].copy()
         if rural_hist.empty:
-            st.info("No hay datos rurales para el KPI seleccionado.")
+            st.info("No hay datos de otros servicios para el KPI seleccionado.")
         else:
             rural_hist = rural_hist.groupby(["periodo", "servicio"], as_index=False)["valor"].sum()
             fig_rural = build_line_chart(rural_hist, f"{kpi_sel} - Otros servicios", color="servicio", height=360)
@@ -689,7 +789,13 @@ with tabs[2]:
     personas_opts = sorted(iniciativas_f["responsable"].dropna().astype(str).unique().tolist())
     if personas_opts:
         st.markdown("<div class='section-title'>Detalle del responsable</div>", unsafe_allow_html=True)
-        persona_sel = st.selectbox("Seleccione responsable", options=personas_opts)
+        persona_sel = option_selector(
+            "Seleccione responsable",
+            personas_opts,
+            key="persona_detalle",
+            default=personas_opts[0],
+            horizontal=False,
+        )
 
         per_df = iniciativas_f[iniciativas_f["responsable"] == persona_sel].copy()
 
