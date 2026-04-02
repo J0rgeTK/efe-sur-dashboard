@@ -460,10 +460,10 @@ def compute_map_bounds(df_map):
 
     # Expansión mínima para evitar encuadres degenerados en servicios con pocas estaciones
     min_lat_pad = 0.01
-    min_lon_pad = 0.01
+    min_lon_pad = 0.02
 
     lat_pad = max(lat_range * 0.08, min_lat_pad)
-    lon_pad = max(lon_range * 0.08, min_lon_pad)
+    lon_pad = max(lon_range * 0.16, min_lon_pad)
 
     return dict(
         south=lat_min - lat_pad,
@@ -535,7 +535,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
     lon_span = max(max_lon - min_lon, 0.01)
 
     lat_pad = max(lat_span * 0.18, 0.015)
-    lon_pad = max(lon_span * 0.18, 0.015)
+    lon_pad = max(lon_span * 0.30, 0.03)
 
     bounds = {
         "west": min_lon - lon_pad,
