@@ -467,8 +467,8 @@ def compute_map_view(df_map):
 def build_station_map(df_map):
     plot_df = df_map.copy()
     center, zoom = compute_map_view(plot_df)
-    plot_df["afluencia_size"] = pd.to_numeric(plot_df["entradas"], errors="coerce").fillna(0).clip(lower=0)
 
+    plot_df["afluencia_size"] = pd.to_numeric(plot_df["entradas"], errors="coerce").fillna(0).clip(lower=0)
     max_val = float(plot_df["afluencia_size"].max()) if len(plot_df) else 0
     if max_val <= 0:
         plot_df["marker_size"] = 10
@@ -479,81 +479,37 @@ def build_station_map(df_map):
     plot_df["hover_meta"] = plot_df["meta_entradas"].apply(fmt_pax)
     plot_df["label_station"] = plot_df["estacion"].apply(compact_station_name).fillna("")
     plot_df["label_value"] = plot_df["entradas"].apply(fmt_pax).fillna("")
+    plot_df["map_text"] = plot_df.apply(
+        lambda r: f"{r['label_station']}<br>{r['label_value']}" if str(r['label_station']).strip() else "",
+        axis=1,
+    )
     plot_df["lat_float"] = pd.to_numeric(plot_df["latitud"], errors="coerce")
     plot_df["lon_float"] = pd.to_numeric(plot_df["longitud"], errors="coerce")
+    plot_df = plot_df.dropna(subset=["lat_float", "lon_float"]).copy()
 
     fig = go.Figure()
     fig.add_trace(
         go.Scattermapbox(
-            lat=plot_df["lat_float"],
-            lon=plot_df["lon_float"],
-            mode="markers",
+            lat=plot_df["lat_float"].tolist(),
+            lon=plot_df["lon_float"].tolist(),
+            mode="markers+text",
+            text=plot_df["map_text"].tolist(),
+            textposition="top right",
+            textfont=dict(size=11, color="#17324D", family="Arial, sans-serif"),
             marker=dict(
-                size=plot_df["marker_size"],
+                size=plot_df["marker_size"].tolist(),
                 color=EFE_BLUE,
-                opacity=0.9,
+                opacity=0.92,
                 sizemode="diameter",
                 symbol="circle",
             ),
-            customdata=plot_df[["estacion", "servicio", "hover_afluencia", "hover_meta"]].fillna(""),
+            customdata=plot_df[["estacion", "servicio", "hover_afluencia", "hover_meta"]].fillna("").values,
             hovertemplate=(
                 "<b>%{customdata[0]}</b><br>"
                 "Servicio: %{customdata[1]}<br>"
                 "%{customdata[2]}<br>"
                 "Meta: %{customdata[3]}<extra></extra>"
             ),
-            showlegend=False,
-        )
-    )
-
-    # Capa de apoyo blanca para mejorar legibilidad
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=plot_df["lat_float"],
-            lon=plot_df["lon_float"],
-            mode="text",
-            text=plot_df["label_station"],
-            textposition="middle right",
-            textfont=dict(size=15, color="#FFFFFF", family="Arial Black, Arial, sans-serif"),
-            hoverinfo="skip",
-            showlegend=False,
-        )
-    )
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=plot_df["lat_float"],
-            lon=plot_df["lon_float"],
-            mode="text",
-            text=plot_df["label_station"],
-            textposition="middle right",
-            textfont=dict(size=12, color=EFE_BLUE, family="Arial Black, Arial, sans-serif"),
-            hoverinfo="skip",
-            showlegend=False,
-        )
-    )
-
-    # Valor visible permanentemente bajo el nombre
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=plot_df["lat_float"],
-            lon=plot_df["lon_float"],
-            mode="text",
-            text=plot_df["label_value"],
-            textposition="bottom right",
-            textfont=dict(size=14, color="#FFFFFF", family="Arial Black, Arial, sans-serif"),
-            hoverinfo="skip",
-            showlegend=False,
-        )
-    )
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=plot_df["lat_float"],
-            lon=plot_df["lon_float"],
-            mode="text",
-            text=plot_df["label_value"],
-            textposition="bottom right",
-            textfont=dict(size=11, color="#1F2937", family="Arial Black, Arial, sans-serif"),
-            hoverinfo="skip",
             showlegend=False,
         )
     )
