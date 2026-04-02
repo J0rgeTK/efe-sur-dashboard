@@ -536,7 +536,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
     lon_span = max(max_lon - min_lon, 0.01)
 
     lat_pad = max(lat_span * 0.18, 0.015)
-    lon_pad = max(lon_span * 0.40, 0.04)
+    lon_pad = max(lon_span * 0.50, 0.04)
 
     bounds = {
         "west": min_lon - lon_pad,
