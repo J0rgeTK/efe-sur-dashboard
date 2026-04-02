@@ -471,7 +471,7 @@ def build_station_map(df_map):
                 color=EFE_BLUE,
                 opacity=0.88,
                 sizemode="diameter",
-                line=dict(width=2, color="#FFFFFF"),
+                symbol="circle",
             ),
             customdata=plot_df[["estacion", "servicio", "hover_afluencia", "hover_meta"]].fillna(""),
             hovertemplate=(
