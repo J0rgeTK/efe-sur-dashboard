@@ -473,53 +473,114 @@ def compute_map_bounds(df_map):
     )
 
 
-def build_station_map(df_map):
-    plot_df = df_map.copy()
-    plot_df["afluencia_size"] = pd.to_numeric(plot_df["entradas"], errors="coerce").fillna(0).clip(lower=0)
-    max_val = float(plot_df["afluencia_size"].max()) if len(plot_df) else 0
-    if max_val <= 0:
-        plot_df["marker_size"] = 10
-    else:
-        plot_df["marker_size"] = 9 + (plot_df["afluencia_size"] / max_val) * 20
+import pandas as pd
+import plotly.graph_objects as go
 
-    plot_df["hover_afluencia"] = plot_df["entradas"].apply(fmt_pax)
-    plot_df["hover_meta"] = plot_df["meta_entradas"].apply(fmt_pax)
-    plot_df["label_station"] = plot_df["estacion"].apply(compact_station_name).fillna("")
-    plot_df["label_value"] = plot_df["entradas"].apply(fmt_pax).fillna("")
-    plot_df["map_text"] = plot_df.apply(
-        lambda r: f"{r['label_station']}<br>{r['label_value']}" if str(r['label_station']).strip() else "",
-        axis=1,
+EFE_BLUE = "#002857"
+EFE_WHITE = "#FFFFFF"
+
+def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
+    """
+    Reemplazo sugerido para la función build_station_map().
+
+    Cambios incorporados:
+    - encuadre automático un poco más amplio para que entren todas las estaciones;
+    - solo se muestra el nombre de la estación en el mapa;
+    - se elimina la afluencia visible en la etiqueta;
+    - se mantiene hover con información de apoyo.
+    """
+
+    plot_df = valid_map_df.copy()
+
+    if plot_df.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=0, b=0),
+            height=760
+        )
+        return fig
+
+    # Conversión robusta de coordenadas
+    plot_df["latitud"] = pd.to_numeric(plot_df["latitud"], errors="coerce")
+    plot_df["longitud"] = pd.to_numeric(plot_df["longitud"], errors="coerce")
+    plot_df = plot_df.dropna(subset=["latitud", "longitud"]).copy()
+
+    if plot_df.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=0, b=0),
+            height=760
+        )
+        return fig
+
+    # Etiqueta visible: solo nombre de estación
+    plot_df["label_mapa"] = (
+        plot_df["estacion"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
     )
-    plot_df["lat_float"] = pd.to_numeric(plot_df["latitud"], errors="coerce")
-    plot_df["lon_float"] = pd.to_numeric(plot_df["longitud"], errors="coerce")
-    plot_df = plot_df.dropna(subset=["lat_float", "lon_float"]).copy()
 
-    bounds = compute_map_bounds(plot_df)
+    # Tamaño de marcadores según afluencia, manteniendo un rango legible
+    afluencia = pd.to_numeric(plot_df["afluencia"], errors="coerce").fillna(0)
+    if afluencia.max() > afluencia.min():
+        plot_df["marker_size"] = 10 + ((afluencia - afluencia.min()) / (afluencia.max() - afluencia.min())) * 18
+    else:
+        plot_df["marker_size"] = 14
+
+    # ---- Encuadre automático más amplio ----
+    min_lat = float(plot_df["latitud"].min())
+    max_lat = float(plot_df["latitud"].max())
+    min_lon = float(plot_df["longitud"].min())
+    max_lon = float(plot_df["longitud"].max())
+
+    lat_span = max(max_lat - min_lat, 0.01)
+    lon_span = max(max_lon - min_lon, 0.01)
+
+    # Padding mayor que en la versión anterior para abrir un poco el encuadre
+    lat_pad = lat_span * 0.18
+    lon_pad = lon_span * 0.18
+
+    # Para servicios muy cortos, asegurar margen mínimo visible
+    lat_pad = max(lat_pad, 0.015)
+    lon_pad = max(lon_pad, 0.015)
+
+    bounds = {
+        "west": min_lon - lon_pad,
+        "east": max_lon + lon_pad,
+        "south": min_lat - lat_pad,
+        "north": max_lat + lat_pad,
+    }
 
     fig = go.Figure()
+
     fig.add_trace(
         go.Scattermapbox(
-            lat=plot_df["lat_float"].tolist(),
-            lon=plot_df["lon_float"].tolist(),
+            lat=plot_df["latitud"].astype(float),
+            lon=plot_df["longitud"].astype(float),
             mode="markers+text",
-            text=plot_df["map_text"].tolist(),
+            text=plot_df["label_mapa"],
             textposition="top right",
-            textfont=dict(size=11, color="#17324D", family="Arial, sans-serif"),
-            marker=dict(
-                size=plot_df["marker_size"].tolist(),
+            textfont=dict(
+                size=12,
                 color=EFE_BLUE,
-                opacity=0.92,
-                sizemode="diameter",
-                symbol="circle",
+                family="Arial Black, Arial, sans-serif"
             ),
-            customdata=plot_df[["estacion", "servicio", "hover_afluencia", "hover_meta"]].fillna("").values,
+            marker=dict(
+                size=plot_df["marker_size"],
+                color=EFE_BLUE,
+                opacity=0.88,
+                sizemode="diameter",
+                symbol="circle"
+            ),
+            customdata=plot_df[["estacion", "afluencia", "meta_entradas"]].fillna(""),
             hovertemplate=(
                 "<b>%{customdata[0]}</b><br>"
-                "Servicio: %{customdata[1]}<br>"
-                "%{customdata[2]}<br>"
-                "Meta: %{customdata[3]}<extra></extra>"
+                "%{customdata[1]:,.0f}<br>"
+                "Meta: %{customdata[2]:,.0f}"
+                "<extra></extra>"
             ),
-            showlegend=False,
+            showlegend=False
         )
     )
 
@@ -529,22 +590,19 @@ def build_station_map(df_map):
             layers=[
                 dict(
                     sourcetype="raster",
-                    sourceattribution="© OpenStreetMap contributors © CARTO",
                     source=[
-                        "https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
-                        "https://b.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
-                        "https://c.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
+                        "https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png"
                     ],
-                    below="traces",
+                    below="traces"
                 )
             ],
-            bounds=bounds,
+            bounds=bounds
         ),
-        margin=dict(l=8, r=8, t=20, b=8),
-        paper_bgcolor=EFE_WHITE,
-        height=920,
-        showlegend=False,
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=760,
+        showlegend=False
     )
+
     return fig
 
 # =========================================================
