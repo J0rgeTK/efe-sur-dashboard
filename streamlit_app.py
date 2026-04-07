@@ -158,19 +158,19 @@ st.markdown(
         margin-bottom: 0.75rem;
     }}
 
-    .nav-panel {
+    .nav-panel {{
         background: rgba(255,255,255,0.82);
         border: 1px solid #E2E8F0;
         border-radius: 16px;
         padding: 0.7rem 0.95rem 0.15rem 0.95rem;
         margin: 0.35rem 0 1rem 0;
         box-shadow: 0 8px 18px rgba(0, 40, 87, 0.05);
-    }
+    }}
 
-    .content-panel {
+    .content-panel {{
         background: transparent;
         animation: fadeSlideIn 0.22s ease-out;
-    }
+    }}
 
     @keyframes fadeSlideIn {{
         from {{ opacity: 0; transform: translateY(6px); }}
