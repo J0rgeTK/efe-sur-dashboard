@@ -562,7 +562,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
     lon_span = max(max_lon - min_lon, 0.01)
 
     lat_pad = max(lat_span * 0.18, 0.015)
-    lon_pad = max(lon_span * 0.60, 0.04)
+    lon_pad = max(lon_span * 0.40, 0.04)
 
     bounds = {
         "west": min_lon - lon_pad,
@@ -910,22 +910,45 @@ def render_kpis():
             fig_ot = build_line_chart(otros_hist, f"{kpi_sel} - Otros servicios", color="servicio", height=360)
             st.plotly_chart(fig_ot, use_container_width=True)
 
-    st.markdown("<div class='section-title'>Valor vs meta</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Valor vs meta por servicio</div>", unsafe_allow_html=True)
     actual = kpis_f[kpis_f["nombre"] == kpi_sel].copy()
     actual = scale_kpi_dataframe_for_display(actual, kpi_sel, ("valor", "meta"))
     if not actual.empty:
-        fig_meta = go.Figure()
-        fig_meta.add_trace(go.Bar(x=actual["servicio"], y=actual["valor"], name="Valor", marker_color=EFE_BLUE))
-        fig_meta.add_trace(go.Bar(x=actual["servicio"], y=actual["meta"], name="Meta", marker_color=EFE_RED))
-        fig_meta.update_layout(
-            barmode="group",
-            title=f"Valor vs meta - {periodo_sel}",
-            plot_bgcolor=EFE_WHITE,
-            paper_bgcolor=EFE_WHITE,
-            margin=dict(l=20, r=20, t=50, b=20),
-            height=380,
-        )
-        st.plotly_chart(fig_meta, use_container_width=True)
+        servicios_actuales = [svc for svc in servicios_sel if svc in actual["servicio"].astype(str).unique().tolist()]
+        if not servicios_actuales:
+            servicios_actuales = actual["servicio"].dropna().astype(str).unique().tolist()
+
+        cols_por_fila = 2 if len(servicios_actuales) > 1 else 1
+        for i in range(0, len(servicios_actuales), cols_por_fila):
+            row_services = servicios_actuales[i:i + cols_por_fila]
+            row_cols = st.columns(cols_por_fila)
+            for j, servicio in enumerate(row_services):
+                servicio_df = actual[actual["servicio"].astype(str) == str(servicio)].copy()
+                with row_cols[j]:
+                    if servicio_df.empty:
+                        st.info(f"No hay datos para {servicio}.")
+                    else:
+                        fig_meta = go.Figure()
+                        fig_meta.add_trace(go.Bar(
+                            x=["Valor", "Meta"],
+                            y=[servicio_df["valor"].sum(), servicio_df["meta"].sum()],
+                            marker_color=[EFE_BLUE, EFE_RED],
+                            text=[fmt_number(servicio_df["valor"].sum(), servicio_df["unidad"].iloc[0], kpi_sel),
+                                  fmt_number(servicio_df["meta"].sum(), servicio_df["unidad"].iloc[0], kpi_sel)],
+                            textposition="outside",
+                            showlegend=False,
+                        ))
+                        fig_meta.update_layout(
+                            title=f"{servicio} - {periodo_sel}",
+                            plot_bgcolor=EFE_WHITE,
+                            paper_bgcolor=EFE_WHITE,
+                            margin=dict(l=20, r=20, t=50, b=20),
+                            height=360,
+                            xaxis_title="",
+                            yaxis_title="",
+                        )
+                        st.plotly_chart(fig_meta, use_container_width=True)
+        st.caption("Cada gráfico compara el valor observado y la meta del KPI seleccionado por servicio.")
     else:
         st.info("No hay datos para el KPI seleccionado en el período actual.")
 
