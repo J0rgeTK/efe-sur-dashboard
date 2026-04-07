@@ -405,7 +405,7 @@ def periodo_to_label(value):
     return f"{meses.get(int(dt.month), str(dt.month))}-{str(dt.year)[2:]}"
 
 
-def build_line_chart(df, title, color=None, line_dash=None, height=340, unit=None, kpi_name=None):
+def build_line_chart(df, title, color=None, line_dash=None, height=340, unit=None, kpi_name=None, boxed_values=True):
     plot_df = df.copy()
     plot_df["periodo_date"] = plot_df["periodo"].apply(periodo_to_date)
     plot_df = plot_df.sort_values(["periodo_date", "periodo"])
@@ -420,10 +420,13 @@ def build_line_chart(df, title, color=None, line_dash=None, height=340, unit=Non
         color=color,
         line_dash=line_dash,
         markers=True,
-        text="valor_label",
         title=title,
     )
-    fig.update_traces(textposition="top center")
+    fig.update_traces(
+        text=None,
+        marker=dict(size=9),
+        line=dict(width=3)
+    )
     fig.update_layout(
         plot_bgcolor=EFE_WHITE,
         paper_bgcolor=EFE_WHITE,
@@ -433,6 +436,34 @@ def build_line_chart(df, title, color=None, line_dash=None, height=340, unit=Non
     )
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=category_order)
     fig.update_yaxes(title="")
+
+    if boxed_values and not plot_df.empty:
+        annotation_cols = ["periodo_label", "valor", "valor_label"]
+        if color and color in plot_df.columns:
+            annotation_cols.append(color)
+        annot_df = plot_df[annotation_cols].copy()
+        for _, row in annot_df.iterrows():
+            xshift = 0
+            if color and color in annot_df.columns:
+                group_name = str(row[color])
+                if len(group_name) % 2 == 0:
+                    xshift = 10
+                else:
+                    xshift = -10
+            fig.add_annotation(
+                x=row["periodo_label"],
+                y=row["valor"],
+                text=row["valor_label"],
+                showarrow=False,
+                yshift=18,
+                xshift=xshift,
+                font=dict(size=10, color=EFE_BLUE),
+                bgcolor="rgba(255,255,255,0.92)",
+                bordercolor=BORDER,
+                borderwidth=1,
+                borderpad=3,
+                align="center",
+            )
     return fig
 
 
@@ -871,26 +902,23 @@ def render_resumen_ejecutivo():
     if not servicios_hist:
         st.info("No hay datos históricos para el KPI seleccionado.")
     else:
-        cols_por_fila = 2 if len(servicios_hist) > 1 else 1
-        for i in range(0, len(servicios_hist), cols_por_fila):
-            servicios_row = servicios_hist[i:i + cols_por_fila]
-            row_cols = st.columns(cols_por_fila)
-            for j, servicio in enumerate(servicios_row):
-                with row_cols[j]:
-                    svc_hist = hist_sel[hist_sel["servicio"].astype(str) == str(servicio)].copy()
-                    if svc_hist.empty:
-                        st.info(f"No hay datos de {servicio} para el KPI seleccionado.")
-                    else:
-                        svc_hist = svc_hist.groupby("periodo", as_index=False)["valor"].sum()
-                        fig_svc = build_line_chart(
-                            svc_hist,
-                            f"{resumen_kpi_sel} - {servicio}",
-                            height=360,
-                            unit=unit_hist,
-                            kpi_name=resumen_kpi_sel,
-                        )
-                        fig_svc.update_traces(line_color=EFE_BLUE)
-                        st.plotly_chart(fig_svc, use_container_width=True)
+        for servicio in servicios_hist:
+            svc_hist = hist_sel[hist_sel["servicio"].astype(str) == str(servicio)].copy()
+            if svc_hist.empty:
+                st.info(f"No hay datos de {servicio} para el KPI seleccionado.")
+            else:
+                svc_hist = svc_hist.groupby("periodo", as_index=False)["valor"].sum()
+                fig_svc = build_line_chart(
+                    svc_hist,
+                    f"{resumen_kpi_sel} - {servicio}",
+                    height=380,
+                    unit=unit_hist,
+                    kpi_name=resumen_kpi_sel,
+                    boxed_values=True,
+                )
+                fig_svc.update_traces(line_color=EFE_BLUE)
+                st.plotly_chart(fig_svc, use_container_width=True)
+                st.markdown("<div style='height:0.55rem'></div>", unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
