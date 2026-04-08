@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -212,35 +211,42 @@ st.markdown(
     }}
 
     .nav-panel {{
-        background: rgba(255,255,255,0.92);
+        background: rgba(255,255,255,0.94);
         border: 1px solid #E2E8F0;
-        border-radius: 16px;
-        padding: 0.7rem 0.95rem 0.15rem 0.95rem;
+        border-radius: 18px;
+        padding: 0.8rem 1rem 0.35rem 1rem;
         margin: 0.35rem 0 1rem 0;
-        box-shadow: 0 8px 18px rgba(0, 40, 87, 0.08);
-        backdrop-filter: blur(6px);
+        box-shadow: 0 10px 22px rgba(0, 40, 87, 0.08);
+        backdrop-filter: blur(8px);
     }}
 
-    .filters-panel {{
-        background: rgba(255,255,255,0.92);
+    .toolbar-panel {{
+        background: rgba(255,255,255,0.88);
         border: 1px solid #E2E8F0;
         border-radius: 16px;
-        padding: 0.95rem 1rem 0.7rem 1rem;
-        margin: 0.6rem 0 1rem 0;
-        box-shadow: 0 8px 18px rgba(0, 40, 87, 0.06);
+        padding: 0.75rem 0.95rem;
+        margin: 0.55rem 0 0.85rem 0;
+        box-shadow: 0 8px 18px rgba(0, 40, 87, 0.05);
     }}
 
-    .filters-title {{
-        font-size: 1rem;
+    .toolbar-label {{
+        font-size: 0.82rem;
         font-weight: 700;
-        color: {EFE_BLUE};
-        margin-bottom: 0.35rem;
+        color: {TEXT_MUTED};
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        margin-bottom: 0.2rem;
     }}
 
-    .chrome-note {{
+    .filters-summary {{
         color: {TEXT_MUTED};
-        font-size: 0.78rem;
-        margin-top: 0.35rem;
+        font-size: 0.84rem;
+        margin-top: 0.1rem;
+        line-height: 1.35;
+    }}
+
+    .filters-summary strong {{
+        color: {EFE_BLUE};
     }}
 
 
@@ -253,10 +259,10 @@ st.markdown(
 
     div[data-testid="stVerticalBlock"]:has(.sticky-nav-anchor) {{
         position: sticky;
-        top: 2.75rem;
+        top: 0.65rem;
         z-index: 999;
-        background: linear-gradient(180deg, rgba(244,246,248,0.98) 0%, rgba(244,246,248,0.96) 88%, rgba(244,246,248,0.0) 100%);
-        padding-top: 0.35rem;
+        background: linear-gradient(180deg, rgba(244,246,248,0.99) 0%, rgba(244,246,248,0.97) 86%, rgba(244,246,248,0.0) 100%);
+        padding-top: 0.25rem;
         padding-bottom: 0.35rem;
     }}
 
@@ -454,6 +460,19 @@ def option_selector(label, options, key, default=None, horizontal=True):
     except Exception:
         default_index = options.index(default)
         return st.radio(label, options=options, index=default_index, key=f"{key}_radio", horizontal=horizontal)
+
+
+def summarize_active_filters(servicios_sel, servicios_lista, estados_ini_sel, estados_ini, prioridades_sel, prioridades, responsables_sel, responsables):
+    parts = []
+    if len(servicios_sel) != len(servicios_lista):
+        parts.append(f"Servicios: {len(servicios_sel)}/{len(servicios_lista)}")
+    if len(estados_ini_sel) != len(estados_ini):
+        parts.append(f"Estados: {len(estados_ini_sel)}/{len(estados_ini)}")
+    if len(prioridades_sel) != len(prioridades):
+        parts.append(f"Prioridades: {len(prioridades_sel)}/{len(prioridades)}")
+    if len(responsables_sel) != len(responsables):
+        parts.append(f"Responsables: {len(responsables_sel)}/{len(responsables)}")
+    return " · ".join(parts) if parts else "Sin filtros adicionales"
 
 
 def safe_to_datetime(series):
@@ -906,36 +925,76 @@ with col_periodo:
     periodo_sel = st.selectbox("Período de análisis", options=periodos, index=default_period_index, key="periodo_top")
 
 # =========================================================
-# FILTROS EN CUERPO PRINCIPAL
+# FILTROS Y NAVEGACIÓN
 # =========================================================
 estados_ini = sorted(iniciativas["estado"].dropna().astype(str).unique().tolist())
 prioridades = sorted(iniciativas["prioridad"].dropna().astype(str).unique().tolist())
 responsables = sorted(iniciativas["responsable"].dropna().astype(str).unique().tolist())
 
-st.markdown("<div class='filters-panel'>", unsafe_allow_html=True)
-st.markdown("<div class='filters-title'>Filtros complementarios</div>", unsafe_allow_html=True)
+servicios_sel = servicios_lista
+estados_ini_sel = estados_ini
+prioridades_sel = prioridades
+responsables_sel = responsables
 
-f1, f2 = st.columns(2)
-with f1:
-    servicios_sel = st.multiselect("Servicio", options=servicios_lista, default=servicios_lista, key="servicios_body_filter")
-with f2:
-    estados_ini_sel = st.multiselect("Estado iniciativa", options=estados_ini, default=estados_ini, key="estado_body_filter")
+filter_left, filter_right = st.columns([4.2, 1.2])
+with filter_right:
+    popover_context = st.popover if hasattr(st, "popover") else st.expander
+    popover_label = "Filtros"
+    popover_kwargs = {"expanded": False} if popover_context is st.expander else {}
+    with popover_context(popover_label, **popover_kwargs):
+        servicios_sel = st.multiselect(
+            "Servicio",
+            options=servicios_lista,
+            default=servicios_lista,
+            key="servicios_body_filter",
+        )
+        estados_ini_sel = st.multiselect(
+            "Estado iniciativa",
+            options=estados_ini,
+            default=estados_ini,
+            key="estado_body_filter",
+        )
+        prioridades_sel = st.multiselect(
+            "Prioridad",
+            options=prioridades,
+            default=prioridades,
+            key="prioridad_body_filter",
+        )
+        responsables_sel = st.multiselect(
+            "Responsable",
+            options=responsables,
+            default=responsables,
+            key="responsable_body_filter",
+        )
+        if st.button("Restablecer filtros", key="reset_filters_btn", use_container_width=True):
+            st.session_state["servicios_body_filter"] = servicios_lista
+            st.session_state["estado_body_filter"] = estados_ini
+            st.session_state["prioridad_body_filter"] = prioridades
+            st.session_state["responsable_body_filter"] = responsables
+            st.rerun()
+        st.caption(f"Origen de datos: {data_path}")
 
-f3, f4 = st.columns(2)
-with f3:
-    prioridades_sel = st.multiselect("Prioridad", options=prioridades, default=prioridades, key="prioridad_body_filter")
-with f4:
-    responsables_sel = st.multiselect("Responsable", options=responsables, default=responsables, key="responsable_body_filter")
+servicios_sel = servicios_sel or servicios_lista
+estados_ini_sel = estados_ini_sel or estados_ini
+prioridades_sel = prioridades_sel or prioridades
+responsables_sel = responsables_sel or responsables
 
-st.markdown(f"<div class='small-note'>Lectura de archivos desde: <b>{data_path}</b></div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='chrome-note'>"
-    "La limpieza visual superior se refuerza ocultando el header propio de Streamlit desde CSS. "
-    "En despliegues de Community Cloud, la reducción del menú externo se complementa con toolbarMode='minimal' en .streamlit/config.toml."
-    "</div>",
-    unsafe_allow_html=True,
+active_filter_summary = summarize_active_filters(
+    servicios_sel,
+    servicios_lista,
+    estados_ini_sel,
+    estados_ini,
+    prioridades_sel,
+    prioridades,
+    responsables_sel,
+    responsables,
 )
-st.markdown("</div>", unsafe_allow_html=True)
+
+with filter_left:
+    st.markdown("<div class='toolbar-panel'>", unsafe_allow_html=True)
+    st.markdown("<div class='toolbar-label'>Filtros activos</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='filters-summary'><strong>Filtros activos:</strong> {active_filter_summary}</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================================================
 # FILTRADO
