@@ -85,8 +85,8 @@ footer {
 }
 
 .block-container {
-    padding-top: 0.55rem;
-    padding-bottom: 1rem;
+    padding-top: 0.35rem;
+    padding-bottom: 0.8rem;
     padding-left: 1.4rem;
     padding-right: 1.4rem;
 }
@@ -95,9 +95,9 @@ footer {
     background: linear-gradient(135deg, rgba(255,255,255,0.97) 0%, rgba(245,249,253,0.97) 100%);
     border: 1px solid #DDE6EF;
     border-radius: 28px;
-    padding: 1.2rem 1.25rem 1.05rem 1.25rem;
+    padding: 0.95rem 1.1rem 0.9rem 1.1rem;
     box-shadow: 0 18px 44px rgba(0, 40, 87, 0.08);
-    margin-bottom: 0.9rem;
+    margin-bottom: 0.5rem;
 }
 
 .hero-kicker {
@@ -111,7 +111,7 @@ footer {
     letter-spacing: 0.08em;
     padding: 0.35rem 0.65rem;
     border-radius: 999px;
-    margin-bottom: 0.7rem;
+    margin-bottom: 0.5rem;
 }
 
 .hero-side-note {
@@ -130,7 +130,7 @@ footer {
 }
 
 .subtitle {
-    font-size: 0.98rem;
+    font-size: 0.94rem;
     color: __TEXT_MUTED__;
     margin-top: 0.25rem;
     margin-bottom: 0.05rem;
@@ -144,33 +144,33 @@ footer {
     background: rgba(255,255,255,0.96);
     border: 1px solid #DFE7EF;
     border-radius: 24px;
-    padding: 1.05rem 1.05rem 0.95rem 1.05rem;
+    padding: 0.9rem 0.95rem 0.85rem 0.95rem;
     box-shadow: 0 10px 26px rgba(0, 40, 87, 0.06);
-    margin: 0.35rem 0 1rem 0;
+    margin: 0.25rem 0 0.8rem 0;
 }
 
 .section-title {
-    font-size: 1.12rem;
+    font-size: 1.06rem;
     font-weight: 800;
     color: __EFE_BLUE__;
     margin-top: 0rem;
-    margin-bottom: 0.65rem;
+    margin-bottom: 0.5rem;
 }
 
 .section-subtitle {
     font-size: 0.86rem;
     color: __TEXT_MUTED__;
     margin-top: -0.3rem;
-    margin-bottom: 0.7rem;
+    margin-bottom: 0.5rem;
 }
 
 .efe-card {
     background: linear-gradient(180deg, #FFFFFF 0%, #FCFDFE 100%);
     border: 1px solid #DCE5EE;
     border-radius: 20px;
-    padding: 1rem 1rem 0.85rem 1rem;
+    padding: 0.9rem 0.95rem 0.8rem 0.95rem;
     box-shadow: 0 12px 28px rgba(0, 40, 87, 0.06);
-    min-height: 148px;
+    min-height: 136px;
     transition: transform 0.16s ease, box-shadow 0.16s ease;
     margin-bottom: 0.45rem;
 }
@@ -192,7 +192,7 @@ footer {
     font-weight: 850;
     color: __EFE_BLUE__;
     line-height: 1.05;
-    margin-bottom: 0.35rem;
+    margin-bottom: 0.18rem;
 }
 
 .efe-card-meta {
@@ -259,7 +259,7 @@ footer {
     padding: 0.78rem 0.95rem;
     font-size: 0.85rem;
     color: __TEXT_MAIN__;
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.55rem;
     line-height: 1.4;
 }
 
@@ -267,8 +267,8 @@ footer {
     background: rgba(255,255,255,0.96);
     border: 1px solid #DFE7EF;
     border-radius: 22px;
-    padding: 0.9rem 1rem;
-    margin: 0.1rem 0 0.8rem 0;
+    padding: 0.7rem 0.9rem;
+    margin: 0.08rem 0 0.55rem 0;
     box-shadow: 0 10px 24px rgba(0, 40, 87, 0.06);
 }
 
@@ -296,7 +296,7 @@ footer {
     display: flex;
     flex-wrap: wrap;
     gap: 0.45rem;
-    margin-top: 0.55rem;
+    margin-top: 0.4rem;
 }
 
 .filter-chip {
@@ -316,42 +316,14 @@ footer {
     background: #EEF4FB;
 }
 
-.executive-stat {
-    background: rgba(255,255,255,0.96);
-    border: 1px solid #DFE7EF;
-    border-radius: 20px;
-    padding: 0.9rem 0.95rem;
-    box-shadow: 0 10px 24px rgba(0, 40, 87, 0.05);
-    min-height: 108px;
-}
 
-.executive-stat-label {
-    font-size: 0.8rem;
-    color: __TEXT_MUTED__;
-    font-weight: 700;
-    margin-bottom: 0.35rem;
-}
-
-.executive-stat-value {
-    font-size: 1.55rem;
-    font-weight: 850;
-    color: __EFE_BLUE__;
-    line-height: 1.05;
-    margin-bottom: 0.25rem;
-}
-
-.executive-stat-caption {
-    font-size: 0.82rem;
-    color: __TEXT_MUTED__;
-    line-height: 1.3;
-}
 
 .nav-panel {
     background: rgba(255,255,255,0.97);
     border: 1px solid #DFE7EF;
     border-radius: 22px;
-    padding: 0.9rem 1rem 0.4rem 1rem;
-    margin: 0.15rem 0 0.9rem 0;
+    padding: 0.65rem 0.85rem 0.2rem 0.85rem;
+    margin: 0.08rem 0 0.6rem 0;
     box-shadow: 0 12px 26px rgba(0, 40, 87, 0.08);
     backdrop-filter: blur(10px);
 }
@@ -365,11 +337,11 @@ footer {
 
 div[data-testid="stVerticalBlock"]:has(.sticky-nav-anchor) {
     position: sticky;
-    top: 0.5rem;
+    top: 0.35rem;
     z-index: 999;
     background: linear-gradient(180deg, rgba(247,249,252,0.99) 0%, rgba(247,249,252,0.96) 85%, rgba(247,249,252,0.0) 100%);
     padding-top: 0.2rem;
-    padding-bottom: 0.25rem;
+    padding-bottom: 0.15rem;
 }
 
 .content-panel {
@@ -415,7 +387,7 @@ div[data-testid="stPlotlyChart"] {
     border-radius: 22px;
     padding: 0.3rem;
     box-shadow: 0 10px 24px rgba(0, 40, 87, 0.05);
-    margin-bottom: 0.35rem;
+    margin-bottom: 0.18rem;
 }
 
 div[data-testid="stAlert"] {
@@ -603,16 +575,6 @@ def render_observation_box(observacion):
 
 
 
-
-def render_exec_metric(label, value, caption="", accent=EFE_BLUE):
-    html = f"""
-    <div class="executive-stat" style="border-top: 4px solid {accent};">
-        <div class="executive-stat-label">{label}</div>
-        <div class="executive-stat-value">{value}</div>
-        <div class="executive-stat-caption">{caption}</div>
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
 
 
 def build_filter_chip_row(servicios_sel, servicios_lista, estados_ini_sel, estados_ini, prioridades_sel, prioridades, responsables_sel, responsables):
@@ -860,7 +822,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
 
     if plot_df.empty:
         fig = go.Figure()
-        fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=760)
+        fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=700)
         return fig
 
     # Coordenadas robustas
@@ -870,7 +832,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
 
     if plot_df.empty:
         fig = go.Figure()
-        fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=760)
+        fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=700)
         return fig
 
     # Nombre visible en mapa
@@ -958,7 +920,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
             bounds=bounds
         ),
         margin=dict(l=0, r=0, t=0, b=0),
-        height=760,
+        height=700,
         showlegend=False
     )
 
@@ -1113,7 +1075,7 @@ with hero_left:
 with hero_right:
     st.markdown("<div class='top-period-wrapper'></div>", unsafe_allow_html=True)
     periodo_sel = st.selectbox("Período de análisis", options=periodos, index=default_period_index, key="periodo_top")
-    st.markdown("<div class='hero-side-note'>Vista ejecutiva optimizada para seguimiento y revisión rápida.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='hero-side-note'>Vista ejecutiva compacta para seguimiento y lectura rápida.</div>", unsafe_allow_html=True)
 
 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1129,13 +1091,12 @@ estados_ini_sel = estados_ini
 prioridades_sel = prioridades
 responsables_sel = responsables
 
-toolbar_left, toolbar_right = st.columns([4.3, 1.15])
+toolbar_left, toolbar_right = st.columns([4.6, 1.0])
 with toolbar_right:
     popover_context = st.popover if hasattr(st, "popover") else st.expander
     popover_label = "Filtros"
     popover_kwargs = {"expanded": False} if popover_context is st.expander else {}
     with popover_context(popover_label, **popover_kwargs):
-        st.markdown("<div class='toolbar-label'>Ajustes de visualización</div>", unsafe_allow_html=True)
         servicios_sel = st.multiselect(
             "Servicio",
             options=servicios_lista,
@@ -1196,8 +1157,7 @@ active_filter_chips = build_filter_chip_row(
 
 with toolbar_left:
     st.markdown("<div class='toolbar-panel'>", unsafe_allow_html=True)
-    st.markdown("<div class='toolbar-label'>Vista aplicada</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='filters-summary'><strong>Resumen:</strong> {active_filter_summary}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='filters-summary'><strong>Filtros activos:</strong> {active_filter_summary}</div>", unsafe_allow_html=True)
     st.markdown(active_filter_chips, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1212,20 +1172,6 @@ if "orden" in kpis_f.columns:
     kpis_f = kpis_f.sort_values(["orden", "servicio", "nombre"])
 else:
     kpis_f = kpis_f.sort_values(["nombre", "servicio"])
-
-# =========================================================
-# RESUMEN SUPERIOR
-# =========================================================
-summary_cols = st.columns(4)
-with summary_cols[0]:
-    render_exec_metric("Servicios visibles", str(len(servicios_sel)), f"Período {periodo_sel}", EFE_BLUE)
-with summary_cols[1]:
-    render_exec_metric("KPIs mostrados", fmt_pax(len(kpis_f)), "Registros según filtros", WARNING)
-with summary_cols[2]:
-    render_exec_metric("Iniciativas visibles", fmt_pax(len(iniciativas_f)), "Seguimiento por responsable", SUCCESS)
-with summary_cols[3]:
-    iniciativas_atrasadas = int((iniciativas_f["estado"] == "Atrasada").sum()) if not iniciativas_f.empty else 0
-    render_exec_metric("Iniciativas atrasadas", fmt_pax(iniciativas_atrasadas), "Riesgos de ejecución", DANGER if iniciativas_atrasadas > 0 else SUCCESS)
 
 # =========================================================
 # NAVEGACIÓN PRINCIPAL
@@ -1257,25 +1203,28 @@ def render_resumen_ejecutivo():
     elif not servicios_con_datos:
         st.warning("No existen servicios con KPI para el período y filtros seleccionados.")
     else:
-        cols = st.columns(len(servicios_con_datos))
-        for idx, servicio in enumerate(servicios_con_datos):
-            servicio_df = kpis_f[kpis_f["servicio"].astype(str) == str(servicio)].copy()
-            if "orden" in servicio_df.columns:
-                servicio_df = servicio_df.sort_values(["orden", "nombre", "categoria"])
-            else:
-                servicio_df = servicio_df.sort_values(["nombre", "categoria"])
+        cols_por_fila = 2 if len(servicios_con_datos) > 1 else 1
+        for i in range(0, len(servicios_con_datos), cols_por_fila):
+            row_services = servicios_con_datos[i:i + cols_por_fila]
+            row_cols = st.columns(cols_por_fila)
+            for idx, servicio in enumerate(row_services):
+                servicio_df = kpis_f[kpis_f["servicio"].astype(str) == str(servicio)].copy()
+                if "orden" in servicio_df.columns:
+                    servicio_df = servicio_df.sort_values(["orden", "nombre", "categoria"])
+                else:
+                    servicio_df = servicio_df.sort_values(["nombre", "categoria"])
 
-            with cols[idx]:
-                st.markdown(f"<div class='service-title'>{servicio}</div>", unsafe_allow_html=True)
-                for _, row in servicio_df.iterrows():
-                    render_kpi_card(
-                        str(row["nombre"]),
-                        fmt_number(row["valor"], row["unidad"], row["nombre"]),
-                        f"Meta: {fmt_number(row['meta'], row['unidad'], row['nombre'])}",
-                        f"Desviación: {fmt_pct(row['variacion_pct'])}",
-                        row["estado"],
-                    )
-                    render_observation_box(row.get("observacion", None))
+                with row_cols[idx]:
+                    st.markdown(f"<div class='service-title'>{servicio}</div>", unsafe_allow_html=True)
+                    for _, row in servicio_df.iterrows():
+                        render_kpi_card(
+                            str(row["nombre"]),
+                            fmt_number(row["valor"], row["unidad"], row["nombre"]),
+                            f"Meta: {fmt_number(row['meta'], row['unidad'], row['nombre'])}",
+                            f"Desviación: {fmt_pct(row['variacion_pct'])}",
+                            row["estado"],
+                        )
+                        render_observation_box(row.get("observacion", None))
 
     st.markdown("<div class='section-title'>Evolución por servicio</div>", unsafe_allow_html=True)
     nombres_kpi = sorted(kpis_hist["nombre"].dropna().astype(str).unique().tolist())
@@ -1306,7 +1255,7 @@ def render_resumen_ejecutivo():
                 fig_svc = build_line_chart(
                     svc_hist,
                     f"{resumen_kpi_sel} - {servicio}",
-                    height=380,
+                    height=350,
                     unit=unit_hist,
                     kpi_name=resumen_kpi_sel,
                     boxed_values=True,
@@ -1335,7 +1284,7 @@ def render_kpis():
             st.info("No hay datos de Biotren para el KPI seleccionado.")
         else:
             bt_hist = bt_hist.groupby("periodo", as_index=False)["valor"].sum()
-            fig_bt = build_line_chart(bt_hist, f"{kpi_sel} - Biotren", height=360, unit=hist_kpi["unidad"].dropna().astype(str).iloc[0] if not hist_kpi.empty and "unidad" in hist_kpi.columns and not hist_kpi["unidad"].dropna().empty else None, kpi_name=kpi_sel)
+            fig_bt = build_line_chart(bt_hist, f"{kpi_sel} - Biotren", height=340, unit=hist_kpi["unidad"].dropna().astype(str).iloc[0] if not hist_kpi.empty and "unidad" in hist_kpi.columns and not hist_kpi["unidad"].dropna().empty else None, kpi_name=kpi_sel)
             fig_bt.update_traces(line_color=EFE_BLUE)
             st.plotly_chart(fig_bt, use_container_width=True)
     with col_b:
@@ -1344,7 +1293,7 @@ def render_kpis():
             st.info("No hay datos de otros servicios para el KPI seleccionado.")
         else:
             otros_hist = otros_hist.groupby(["periodo", "servicio"], as_index=False)["valor"].sum()
-            fig_ot = build_line_chart(otros_hist, f"{kpi_sel} - Otros servicios", color="servicio", height=360, unit=hist_kpi["unidad"].dropna().astype(str).iloc[0] if not hist_kpi.empty and "unidad" in hist_kpi.columns and not hist_kpi["unidad"].dropna().empty else None, kpi_name=kpi_sel)
+            fig_ot = build_line_chart(otros_hist, f"{kpi_sel} - Otros servicios", color="servicio", height=340, unit=hist_kpi["unidad"].dropna().astype(str).iloc[0] if not hist_kpi.empty and "unidad" in hist_kpi.columns and not hist_kpi["unidad"].dropna().empty else None, kpi_name=kpi_sel)
             st.plotly_chart(fig_ot, use_container_width=True)
 
     st.markdown("<div class='section-title'>Valor vs meta por servicio</div>", unsafe_allow_html=True)
@@ -1380,7 +1329,7 @@ def render_kpis():
                             plot_bgcolor=EFE_WHITE,
                             paper_bgcolor=EFE_WHITE,
                             margin=dict(l=20, r=20, t=50, b=20),
-                            height=360,
+                            height=340,
                             xaxis_title="",
                             yaxis_title="",
                             font=dict(color=TEXT_MAIN),
@@ -1435,7 +1384,7 @@ def render_personas():
         else:
             fig = px.bar(por_responsable, x="responsable", y="cantidad", title="Carga de iniciativas por responsable", text="cantidad")
             fig.update_traces(marker_color=EFE_BLUE)
-            fig.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=360, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16))
+            fig.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=340, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16))
             fig.update_xaxes(title="")
             fig.update_yaxes(title="Cantidad")
             st.plotly_chart(fig, use_container_width=True)
@@ -1446,7 +1395,7 @@ def render_personas():
             st.info("No hay prioridades para mostrar.")
         else:
             fig2 = px.pie(por_prioridad, names="prioridad", values="cantidad", title="Distribución por prioridad", color="prioridad", color_discrete_map={"Alta": EFE_RED, "Media": WARNING, "Baja": EFE_BLUE})
-            fig2.update_layout(paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=360, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16))
+            fig2.update_layout(paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=340, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16))
             st.plotly_chart(fig2, use_container_width=True)
 
     personas_opts = sorted(iniciativas_f["responsable"].dropna().astype(str).unique().tolist())
@@ -1471,7 +1420,7 @@ def render_personas():
             else:
                 fig = px.bar(per_df.sort_values("avance_pct"), x="avance_pct", y="nombre_iniciativa", orientation="h", title=f"Avance por iniciativa - {persona_sel}", text="avance_pct")
                 fig.update_traces(marker_color=EFE_BLUE)
-                fig.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=420, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16))
+                fig.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=390, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16))
                 fig.update_xaxes(title="Avance %")
                 fig.update_yaxes(title="")
                 st.plotly_chart(fig, use_container_width=True)
@@ -1482,7 +1431,7 @@ def render_personas():
                 st.info("No hay estados para mostrar.")
             else:
                 fig2 = px.bar(estado_persona, x="estado", y="cantidad", title="Distribución por estado", color="estado", color_discrete_map={"Planificada": TEXT_MUTED, "En curso": EFE_BLUE, "Atrasada": EFE_RED, "Finalizada": SUCCESS, "Pausada": WARNING})
-                fig2.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=420, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16), showlegend=False)
+                fig2.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=390, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16), showlegend=False)
                 st.plotly_chart(fig2, use_container_width=True)
 
         st.markdown("<div class='section-title'>Detalle por responsable</div>", unsafe_allow_html=True)
@@ -1532,14 +1481,17 @@ def render_detalle_servicio():
             default_detalle_servicio = servicios_detalle[0]
             if len(servicios_sel) == 1 and servicios_sel[0] in servicios_detalle:
                 default_detalle_servicio = servicios_sel[0]
-            detalle_servicio_sel = option_selector("Servicio para análisis georreferenciado", servicios_detalle, key="detalle_servicio_selector", default=default_detalle_servicio, horizontal=True)
+            sel_col1, sel_col2 = st.columns([1.3, 1])
+            with sel_col1:
+                detalle_servicio_sel = option_selector("Servicio para análisis georreferenciado", servicios_detalle, key="detalle_servicio_selector", default=default_detalle_servicio, horizontal=True)
 
             periodos_detalle = sorted(afluencia_estacion[afluencia_estacion["servicio"].astype(str) == str(detalle_servicio_sel)]["periodo"].dropna().astype(str).unique().tolist())
             if not periodos_detalle:
                 st.warning("No existen períodos disponibles para el servicio seleccionado.")
             else:
                 default_detalle_periodo = str(periodo_sel) if str(periodo_sel) in periodos_detalle else periodos_detalle[-1]
-                detalle_periodo_sel = option_selector("Período de detalle", periodos_detalle, key="detalle_periodo_selector", default=default_detalle_periodo, horizontal=True)
+                with sel_col2:
+                    detalle_periodo_sel = option_selector("Período de detalle", periodos_detalle, key="detalle_periodo_selector", default=default_detalle_periodo, horizontal=True)
 
                 estaciones_srv = estaciones_activas[estaciones_activas["servicio"].astype(str) == str(detalle_servicio_sel)].copy()
                 if "orden_trazado" in estaciones_srv.columns:
@@ -1612,7 +1564,7 @@ def render_detalle_servicio():
                         plot_bgcolor=EFE_WHITE,
                         paper_bgcolor=EFE_WHITE,
                         margin=dict(l=20, r=20, t=50, b=20),
-                        height=440,
+                        height=400,
                         barmode="group",
                         font=dict(color=TEXT_MAIN),
                         title_font=dict(color=EFE_BLUE, size=16),
