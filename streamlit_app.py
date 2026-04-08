@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -41,258 +42,416 @@ RURAL_SERVICES = ["Laja Talcahuano", "Tren Araucanía", "Llanquihue Puerto Montt
 # =========================================================
 # ESTILOS CSS
 # =========================================================
+_css = """
+<style>
+.stApp {
+    background:
+        radial-gradient(circle at top left, rgba(0, 40, 87, 0.05) 0%, rgba(0, 40, 87, 0.00) 22%),
+        linear-gradient(180deg, #F7F9FC 0%, #EEF3F8 100%);
+    color: __TEXT_MAIN__;
+}
+
+header[data-testid="stHeader"] {
+    display: none !important;
+}
+
+div[data-testid="stToolbar"] {
+    display: none !important;
+}
+
+div[data-testid="stDecoration"] {
+    display: none !important;
+}
+
+div[data-testid="stStatusWidget"] {
+    display: none !important;
+}
+
+div[data-testid="collapsedControl"] {
+    display: none !important;
+}
+
+section[data-testid="stSidebar"] {
+    display: none !important;
+}
+
+#MainMenu {
+    visibility: hidden;
+}
+
+footer {
+    visibility: hidden;
+    height: 0;
+}
+
+.block-container {
+    padding-top: 0.55rem;
+    padding-bottom: 1rem;
+    padding-left: 1.4rem;
+    padding-right: 1.4rem;
+}
+
+.hero-shell {
+    background: linear-gradient(135deg, rgba(255,255,255,0.97) 0%, rgba(245,249,253,0.97) 100%);
+    border: 1px solid #DDE6EF;
+    border-radius: 28px;
+    padding: 1.2rem 1.25rem 1.05rem 1.25rem;
+    box-shadow: 0 18px 44px rgba(0, 40, 87, 0.08);
+    margin-bottom: 0.9rem;
+}
+
+.hero-kicker {
+    display: inline-block;
+    background: rgba(0, 40, 87, 0.08);
+    color: __EFE_BLUE__;
+    border: 1px solid rgba(0, 40, 87, 0.10);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.35rem 0.65rem;
+    border-radius: 999px;
+    margin-bottom: 0.7rem;
+}
+
+.hero-side-note {
+    color: __TEXT_MUTED__;
+    font-size: 0.82rem;
+    margin-top: 0.35rem;
+}
+
+.main-title {
+    font-size: 2.35rem;
+    font-weight: 850;
+    color: __EFE_BLUE__;
+    margin-top: 0.05rem;
+    margin-bottom: 0.18rem;
+    line-height: 1.08;
+}
+
+.subtitle {
+    font-size: 0.98rem;
+    color: __TEXT_MUTED__;
+    margin-top: 0.25rem;
+    margin-bottom: 0.05rem;
+}
+
+.top-period-wrapper {
+    margin-top: 0.2rem;
+}
+
+.section-shell {
+    background: rgba(255,255,255,0.96);
+    border: 1px solid #DFE7EF;
+    border-radius: 24px;
+    padding: 1.05rem 1.05rem 0.95rem 1.05rem;
+    box-shadow: 0 10px 26px rgba(0, 40, 87, 0.06);
+    margin: 0.35rem 0 1rem 0;
+}
+
+.section-title {
+    font-size: 1.12rem;
+    font-weight: 800;
+    color: __EFE_BLUE__;
+    margin-top: 0rem;
+    margin-bottom: 0.65rem;
+}
+
+.section-subtitle {
+    font-size: 0.86rem;
+    color: __TEXT_MUTED__;
+    margin-top: -0.3rem;
+    margin-bottom: 0.7rem;
+}
+
+.efe-card {
+    background: linear-gradient(180deg, #FFFFFF 0%, #FCFDFE 100%);
+    border: 1px solid #DCE5EE;
+    border-radius: 20px;
+    padding: 1rem 1rem 0.85rem 1rem;
+    box-shadow: 0 12px 28px rgba(0, 40, 87, 0.06);
+    min-height: 148px;
+    transition: transform 0.16s ease, box-shadow 0.16s ease;
+    margin-bottom: 0.45rem;
+}
+
+.efe-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 34px rgba(0, 40, 87, 0.10);
+}
+
+.efe-card-title {
+    font-size: 0.88rem;
+    color: __TEXT_MUTED__;
+    margin-bottom: 0.45rem;
+    font-weight: 600;
+}
+
+.efe-card-value {
+    font-size: 2.0rem;
+    font-weight: 850;
+    color: __EFE_BLUE__;
+    line-height: 1.05;
+    margin-bottom: 0.35rem;
+}
+
+.efe-card-meta {
+    font-size: 0.92rem;
+    color: __TEXT_MAIN__;
+    margin-bottom: 0.22rem;
+}
+
+.efe-card-delta {
+    font-size: 0.92rem;
+    font-weight: 700;
+}
+
+.efe-observation {
+    background: #FFF7ED;
+    border: 1px solid #FED7AA;
+    border-radius: 14px;
+    padding: 0.72rem 0.88rem;
+    font-size: 0.84rem;
+    color: __TEXT_MAIN__;
+    margin-top: 0.25rem;
+    margin-bottom: 0.1rem;
+    line-height: 1.38;
+}
+
+.efe-observation strong {
+    color: __WARNING__;
+}
+
+.efe-observation-empty {
+    background: #ECFDF5;
+    border: 1px solid #A7F3D0;
+    border-radius: 14px;
+    padding: 0.72rem 0.88rem;
+    font-size: 0.84rem;
+    color: __TEXT_MAIN__;
+    margin-top: 0.25rem;
+    margin-bottom: 0.1rem;
+    line-height: 1.38;
+}
+
+.efe-observation-empty strong {
+    color: __SUCCESS__;
+}
+
+.service-title {
+    font-size: 1.05rem;
+    font-weight: 850;
+    color: __EFE_BLUE__;
+    margin: 0.15rem 0 0.75rem 0;
+    padding-bottom: 0.45rem;
+    border-bottom: 2px solid #E6EDF5;
+}
+
+.small-note {
+    color: __TEXT_MUTED__;
+    font-size: 0.8rem;
+}
+
+.map-note {
+    background: #EFF6FF;
+    border: 1px solid #BFDBFE;
+    border-radius: 16px;
+    padding: 0.78rem 0.95rem;
+    font-size: 0.85rem;
+    color: __TEXT_MAIN__;
+    margin-bottom: 0.75rem;
+    line-height: 1.4;
+}
+
+.toolbar-panel {
+    background: rgba(255,255,255,0.96);
+    border: 1px solid #DFE7EF;
+    border-radius: 22px;
+    padding: 0.9rem 1rem;
+    margin: 0.1rem 0 0.8rem 0;
+    box-shadow: 0 10px 24px rgba(0, 40, 87, 0.06);
+}
+
+.toolbar-label {
+    font-size: 0.74rem;
+    font-weight: 800;
+    color: __TEXT_MUTED__;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.3rem;
+}
+
+.filters-summary {
+    color: __TEXT_MAIN__;
+    font-size: 0.93rem;
+    margin-top: 0.1rem;
+    line-height: 1.4;
+}
+
+.filters-summary strong {
+    color: __EFE_BLUE__;
+}
+
+.filter-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin-top: 0.55rem;
+}
+
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.38rem 0.7rem;
+    border-radius: 999px;
+    background: #F1F5F9;
+    border: 1px solid #D8E2EC;
+    color: __EFE_BLUE__;
+    font-size: 0.8rem;
+    font-weight: 700;
+}
+
+.filter-chip.soft {
+    background: #EEF4FB;
+}
+
+.executive-stat {
+    background: rgba(255,255,255,0.96);
+    border: 1px solid #DFE7EF;
+    border-radius: 20px;
+    padding: 0.9rem 0.95rem;
+    box-shadow: 0 10px 24px rgba(0, 40, 87, 0.05);
+    min-height: 108px;
+}
+
+.executive-stat-label {
+    font-size: 0.8rem;
+    color: __TEXT_MUTED__;
+    font-weight: 700;
+    margin-bottom: 0.35rem;
+}
+
+.executive-stat-value {
+    font-size: 1.55rem;
+    font-weight: 850;
+    color: __EFE_BLUE__;
+    line-height: 1.05;
+    margin-bottom: 0.25rem;
+}
+
+.executive-stat-caption {
+    font-size: 0.82rem;
+    color: __TEXT_MUTED__;
+    line-height: 1.3;
+}
+
+.nav-panel {
+    background: rgba(255,255,255,0.97);
+    border: 1px solid #DFE7EF;
+    border-radius: 22px;
+    padding: 0.9rem 1rem 0.4rem 1rem;
+    margin: 0.15rem 0 0.9rem 0;
+    box-shadow: 0 12px 26px rgba(0, 40, 87, 0.08);
+    backdrop-filter: blur(10px);
+}
+
+.sticky-nav-anchor {
+    display: block;
+    height: 0;
+    margin: 0;
+    padding: 0;
+}
+
+div[data-testid="stVerticalBlock"]:has(.sticky-nav-anchor) {
+    position: sticky;
+    top: 0.5rem;
+    z-index: 999;
+    background: linear-gradient(180deg, rgba(247,249,252,0.99) 0%, rgba(247,249,252,0.96) 85%, rgba(247,249,252,0.0) 100%);
+    padding-top: 0.2rem;
+    padding-bottom: 0.25rem;
+}
+
+.content-panel {
+    background: transparent;
+    animation: fadeSlideIn 0.22s ease-out;
+}
+
+@keyframes fadeSlideIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+div[data-baseweb="select"] > div {
+    border-radius: 16px !important;
+    border-color: #D7E0EA !important;
+    background: rgba(255,255,255,0.98) !important;
+    min-height: 48px !important;
+    box-shadow: none !important;
+}
+
+div[data-baseweb="tag"] {
+    border-radius: 999px !important;
+}
+
+div[data-testid="stMetric"] {
+    background: linear-gradient(180deg, #FFFFFF 0%, #FCFDFE 100%);
+    border: 1px solid #DFE7EF;
+    padding: 0.7rem 0.85rem;
+    border-radius: 18px;
+    box-shadow: 0 10px 24px rgba(0, 40, 87, 0.05);
+}
+
+div[data-testid="stDataFrame"] {
+    border: 1px solid #DFE7EF;
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 10px 24px rgba(0, 40, 87, 0.05);
+}
+
+div[data-testid="stPlotlyChart"] {
+    background: rgba(255,255,255,0.98);
+    border: 1px solid #DFE7EF;
+    border-radius: 22px;
+    padding: 0.3rem;
+    box-shadow: 0 10px 24px rgba(0, 40, 87, 0.05);
+    margin-bottom: 0.35rem;
+}
+
+div[data-testid="stAlert"] {
+    border-radius: 16px;
+    border: 1px solid #D7E0EA;
+}
+
+.stButton > button,
+.stDownloadButton > button {
+    border-radius: 999px !important;
+    border: 1px solid #D7E0EA !important;
+    background: #FFFFFF !important;
+    color: __EFE_BLUE__ !important;
+    font-weight: 700 !important;
+}
+
+.stButton > button:hover,
+.stDownloadButton > button:hover {
+    border-color: __EFE_BLUE__ !important;
+    color: __EFE_BLUE__ !important;
+    box-shadow: 0 8px 18px rgba(0, 40, 87, 0.08);
+}
+</style>
+"""
+
 st.markdown(
-    f"""
-    <style>
-    .stApp {{
-        background-color: {BG_LIGHT};
-        color: {TEXT_MAIN};
-    }}
-
-    header[data-testid="stHeader"] {{
-        display: none !important;
-    }}
-
-    div[data-testid="stToolbar"] {{
-        display: none !important;
-    }}
-
-    div[data-testid="stDecoration"] {{
-        display: none !important;
-    }}
-
-    div[data-testid="stStatusWidget"] {{
-        display: none !important;
-    }}
-
-    div[data-testid="collapsedControl"] {{
-        display: none !important;
-    }}
-
-    section[data-testid="stSidebar"] {{
-        display: none !important;
-    }}
-
-    #MainMenu {{
-        visibility: hidden;
-    }}
-
-    footer {{
-        visibility: hidden;
-        height: 0;
-    }}
-
-    .main-title {{
-        font-size: 2.2rem;
-        font-weight: 800;
-        color: {EFE_BLUE};
-        margin-top: 1.15rem;
-        margin-bottom: 0.15rem;
-    }}
-
-    .subtitle {{
-        font-size: 0.95rem;
-        color: {TEXT_MUTED};
-        margin-top: 0.45rem;
-        margin-bottom: 0.35rem;
-    }}
-
-    .top-period-wrapper {{
-        margin-top: 1.25rem;
-    }}
-
-    .section-title {{
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: {EFE_BLUE};
-        margin-top: 0.5rem;
-        margin-bottom: 0.6rem;
-    }}
-
-    .efe-card {{
-        background: {EFE_WHITE};
-        border: 1px solid {BORDER};
-        border-radius: 16px;
-        padding: 18px 18px 14px 18px;
-        box-shadow: 0 8px 20px rgba(0, 40, 87, 0.06);
-        min-height: 145px;
-        transition: transform 0.16s ease, box-shadow 0.16s ease;
-    }}
-
-    .efe-card:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 12px 28px rgba(0, 40, 87, 0.12);
-    }}
-
-    .efe-card-title {{
-        font-size: 0.9rem;
-        color: {TEXT_MUTED};
-        margin-bottom: 0.4rem;
-    }}
-
-    .efe-card-value {{
-        font-size: 1.8rem;
-        font-weight: 800;
-        color: {EFE_BLUE};
-        line-height: 1.1;
-        margin-bottom: 0.2rem;
-    }}
-
-    .efe-card-meta {{
-        font-size: 0.9rem;
-        color: {TEXT_MAIN};
-        margin-bottom: 0.2rem;
-    }}
-
-    .efe-card-delta {{
-        font-size: 0.88rem;
-        font-weight: 600;
-    }}
-
-    .efe-observation {{
-        background: #FFF7ED;
-        border: 1px solid #FED7AA;
-        border-radius: 12px;
-        padding: 0.7rem 0.85rem;
-        font-size: 0.84rem;
-        color: {TEXT_MAIN};
-        margin-top: 0.45rem;
-        margin-bottom: 0.1rem;
-        line-height: 1.35;
-    }}
-
-    .efe-observation strong {{
-        color: {WARNING};
-    }}
-
-    .efe-observation-empty {{
-        background: #ECFDF5;
-        border: 1px solid #A7F3D0;
-        border-radius: 12px;
-        padding: 0.7rem 0.85rem;
-        font-size: 0.84rem;
-        color: {TEXT_MAIN};
-        margin-top: 0.45rem;
-        margin-bottom: 0.1rem;
-        line-height: 1.35;
-    }}
-
-    .efe-observation-empty strong {{
-        color: {SUCCESS};
-    }}
-
-    .small-note {{
-        color: {TEXT_MUTED};
-        font-size: 0.82rem;
-    }}
-
-    .block-container {{
-        padding-top: 0.8rem;
-        padding-bottom: 1rem;
-    }}
-
-    .service-title {{
-        font-size: 1.05rem;
-        font-weight: 800;
-        color: {EFE_BLUE};
-        margin: 0.2rem 0 0.8rem 0;
-        padding-bottom: 0.35rem;
-        border-bottom: 2px solid {BORDER};
-    }}
-
-    .map-note {{
-        background: #EFF6FF;
-        border: 1px solid #BFDBFE;
-        border-radius: 12px;
-        padding: 0.75rem 0.9rem;
-        font-size: 0.85rem;
-        color: {TEXT_MAIN};
-        margin-bottom: 0.75rem;
-    }}
-
-    .nav-panel {{
-        background: rgba(255,255,255,0.94);
-        border: 1px solid #E2E8F0;
-        border-radius: 18px;
-        padding: 0.8rem 1rem 0.35rem 1rem;
-        margin: 0.35rem 0 1rem 0;
-        box-shadow: 0 10px 22px rgba(0, 40, 87, 0.08);
-        backdrop-filter: blur(8px);
-    }}
-
-    .toolbar-panel {{
-        background: rgba(255,255,255,0.88);
-        border: 1px solid #E2E8F0;
-        border-radius: 16px;
-        padding: 0.75rem 0.95rem;
-        margin: 0.55rem 0 0.85rem 0;
-        box-shadow: 0 8px 18px rgba(0, 40, 87, 0.05);
-    }}
-
-    .toolbar-label {{
-        font-size: 0.82rem;
-        font-weight: 700;
-        color: {TEXT_MUTED};
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
-        margin-bottom: 0.2rem;
-    }}
-
-    .filters-summary {{
-        color: {TEXT_MUTED};
-        font-size: 0.84rem;
-        margin-top: 0.1rem;
-        line-height: 1.35;
-    }}
-
-    .filters-summary strong {{
-        color: {EFE_BLUE};
-    }}
-
-
-    .sticky-nav-anchor {{
-        display: block;
-        height: 0;
-        margin: 0;
-        padding: 0;
-    }}
-
-    div[data-testid="stVerticalBlock"]:has(.sticky-nav-anchor) {{
-        position: sticky;
-        top: 0.65rem;
-        z-index: 999;
-        background: linear-gradient(180deg, rgba(244,246,248,0.99) 0%, rgba(244,246,248,0.97) 86%, rgba(244,246,248,0.0) 100%);
-        padding-top: 0.25rem;
-        padding-bottom: 0.35rem;
-    }}
-
-    .content-panel {{
-        background: transparent;
-        animation: fadeSlideIn 0.22s ease-out;
-    }}
-
-    @keyframes fadeSlideIn {{
-        from {{ opacity: 0; transform: translateY(6px); }}
-        to {{ opacity: 1; transform: translateY(0); }}
-    }}
-
-
-    div[data-testid="stMetric"] {{
-        background: {EFE_WHITE};
-        border: 1px solid {BORDER};
-        padding: 10px 12px;
-        border-radius: 14px;
-    }}
-
-    div[data-testid="stDataFrame"] {{
-        border: 1px solid {BORDER};
-        border-radius: 14px;
-        overflow: hidden;
-    }}
-    </style>
-    """,
+    _css
+    .replace("__TEXT_MAIN__", TEXT_MAIN)
+    .replace("__TEXT_MUTED__", TEXT_MUTED)
+    .replace("__EFE_BLUE__", EFE_BLUE)
+    .replace("__SUCCESS__", SUCCESS)
+    .replace("__WARNING__", WARNING),
     unsafe_allow_html=True,
 )
+
+
 
 # =========================================================
 # UTILIDADES
@@ -443,6 +602,34 @@ def render_observation_box(observacion):
     st.markdown(f"<div class='efe-observation'><strong>Observación:</strong> {txt}</div>", unsafe_allow_html=True)
 
 
+
+
+def render_exec_metric(label, value, caption="", accent=EFE_BLUE):
+    html = f"""
+    <div class="executive-stat" style="border-top: 4px solid {accent};">
+        <div class="executive-stat-label">{label}</div>
+        <div class="executive-stat-value">{value}</div>
+        <div class="executive-stat-caption">{caption}</div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def build_filter_chip_row(servicios_sel, servicios_lista, estados_ini_sel, estados_ini, prioridades_sel, prioridades, responsables_sel, responsables):
+    chips = []
+    if len(servicios_sel) != len(servicios_lista):
+        chips.append(f"<span class='filter-chip'>Servicios: {len(servicios_sel)}</span>")
+    if len(estados_ini_sel) != len(estados_ini):
+        chips.append(f"<span class='filter-chip soft'>Estados: {len(estados_ini_sel)}</span>")
+    if len(prioridades_sel) != len(prioridades):
+        chips.append(f"<span class='filter-chip'>Prioridades: {len(prioridades_sel)}</span>")
+    if len(responsables_sel) != len(responsables):
+        chips.append(f"<span class='filter-chip soft'>Responsables: {len(responsables_sel)}</span>")
+    if not chips:
+        chips.append("<span class='filter-chip soft'>Sin filtros adicionales</span>")
+    return "<div class='filter-chip-row'>" + "".join(chips) + "</div>"
+
+
 def option_selector(label, options, key, default=None, horizontal=True):
     if not options:
         return None
@@ -545,9 +732,12 @@ def build_line_chart(df, title, color=None, line_dash=None, height=340, unit=Non
         margin=dict(l=20, r=20, t=55, b=20),
         height=height,
         legend_title_text="",
+        font=dict(color=TEXT_MAIN),
+        title_font=dict(size=16, color=EFE_BLUE),
+        hovermode="x unified",
     )
-    fig.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=category_order)
-    fig.update_yaxes(title="")
+    fig.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=category_order, showgrid=False)
+    fig.update_yaxes(title="", gridcolor="#E8EEF4", zeroline=False)
 
     if boxed_values and not plot_df.empty:
         annotation_cols = ["periodo_label", "valor", "valor_label"]
@@ -901,28 +1091,31 @@ else:
 periodos = sorted(kpis["periodo"].dropna().astype(str).unique().tolist())
 default_period_index = len(periodos) - 1 if periodos else 0
 
-# Los filtros se muestran dentro del cuerpo principal para evitar depender del sidebar
-# y limpiar la franja superior de la aplicación.
-
 # =========================================================
 # ENCABEZADO Y PERÍODO VISIBLE
 # =========================================================
-col_logo, col_title, col_periodo = st.columns([1, 4.4, 1.6])
+st.markdown("<div class='hero-shell'>", unsafe_allow_html=True)
+hero_left, hero_right = st.columns([4.8, 1.55])
 
-with col_logo:
-    logo_candidates = [Path(__file__).resolve().parent / "assets" / "logoefe-azul.png", Path(__file__).resolve().parent / "logoefe-azul.png"]
-    for logo_path in logo_candidates:
-        if logo_path.exists():
-            st.image(str(logo_path), use_container_width=True)
-            break
+with hero_left:
+    logo_col, title_col = st.columns([0.9, 4.6])
+    with logo_col:
+        logo_candidates = [Path(__file__).resolve().parent / "assets" / "logoefe-azul.png", Path(__file__).resolve().parent / "logoefe-azul.png"]
+        for logo_path in logo_candidates:
+            if logo_path.exists():
+                st.image(str(logo_path), use_container_width=True)
+                break
+    with title_col:
+        st.markdown("<div class='hero-kicker'>Seguimiento ejecutivo</div>", unsafe_allow_html=True)
+        st.markdown("<div class='main-title'>KPIs e Iniciativas - Gerencia de Pasajeros</div>", unsafe_allow_html=True)
+        st.markdown("<div class='subtitle'>Panel ejecutivo para monitorear desempeño, gestión de iniciativas y focos de intervención por servicio.</div>", unsafe_allow_html=True)
 
-with col_title:
-    st.markdown("<div class='main-title'>KPIs e Iniciativas - Gerencia de Pasajeros</div>", unsafe_allow_html=True)
-    st.markdown("<div class='subtitle'>Panel de seguimiento ejecutivo de desempeño e iniciativas.</div>", unsafe_allow_html=True)
-
-with col_periodo:
+with hero_right:
     st.markdown("<div class='top-period-wrapper'></div>", unsafe_allow_html=True)
     periodo_sel = st.selectbox("Período de análisis", options=periodos, index=default_period_index, key="periodo_top")
+    st.markdown("<div class='hero-side-note'>Vista ejecutiva optimizada para seguimiento y revisión rápida.</div>", unsafe_allow_html=True)
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================================================
 # FILTROS Y NAVEGACIÓN
@@ -936,12 +1129,13 @@ estados_ini_sel = estados_ini
 prioridades_sel = prioridades
 responsables_sel = responsables
 
-filter_left, filter_right = st.columns([4.2, 1.2])
-with filter_right:
+toolbar_left, toolbar_right = st.columns([4.3, 1.15])
+with toolbar_right:
     popover_context = st.popover if hasattr(st, "popover") else st.expander
     popover_label = "Filtros"
     popover_kwargs = {"expanded": False} if popover_context is st.expander else {}
     with popover_context(popover_label, **popover_kwargs):
+        st.markdown("<div class='toolbar-label'>Ajustes de visualización</div>", unsafe_allow_html=True)
         servicios_sel = st.multiselect(
             "Servicio",
             options=servicios_lista,
@@ -989,11 +1183,22 @@ active_filter_summary = summarize_active_filters(
     responsables_sel,
     responsables,
 )
+active_filter_chips = build_filter_chip_row(
+    servicios_sel,
+    servicios_lista,
+    estados_ini_sel,
+    estados_ini,
+    prioridades_sel,
+    prioridades,
+    responsables_sel,
+    responsables,
+)
 
-with filter_left:
+with toolbar_left:
     st.markdown("<div class='toolbar-panel'>", unsafe_allow_html=True)
-    st.markdown("<div class='toolbar-label'>Filtros activos</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='filters-summary'><strong>Filtros activos:</strong> {active_filter_summary}</div>", unsafe_allow_html=True)
+    st.markdown("<div class='toolbar-label'>Vista aplicada</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='filters-summary'><strong>Resumen:</strong> {active_filter_summary}</div>", unsafe_allow_html=True)
+    st.markdown(active_filter_chips, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================================================
@@ -1008,6 +1213,19 @@ if "orden" in kpis_f.columns:
 else:
     kpis_f = kpis_f.sort_values(["nombre", "servicio"])
 
+# =========================================================
+# RESUMEN SUPERIOR
+# =========================================================
+summary_cols = st.columns(4)
+with summary_cols[0]:
+    render_exec_metric("Servicios visibles", str(len(servicios_sel)), f"Período {periodo_sel}", EFE_BLUE)
+with summary_cols[1]:
+    render_exec_metric("KPIs mostrados", fmt_pax(len(kpis_f)), "Registros según filtros", WARNING)
+with summary_cols[2]:
+    render_exec_metric("Iniciativas visibles", fmt_pax(len(iniciativas_f)), "Seguimiento por responsable", SUCCESS)
+with summary_cols[3]:
+    iniciativas_atrasadas = int((iniciativas_f["estado"] == "Atrasada").sum()) if not iniciativas_f.empty else 0
+    render_exec_metric("Iniciativas atrasadas", fmt_pax(iniciativas_atrasadas), "Riesgos de ejecución", DANGER if iniciativas_atrasadas > 0 else SUCCESS)
 
 # =========================================================
 # NAVEGACIÓN PRINCIPAL
@@ -1029,8 +1247,9 @@ with st.container():
 # RENDER DE SECCIONES
 # =========================================================
 def render_resumen_ejecutivo():
-    st.markdown("<div class='content-panel'>", unsafe_allow_html=True)
+    st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Resumen ejecutivo</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-subtitle'>Síntesis de KPIs del período seleccionado y evolución por servicio.</div>", unsafe_allow_html=True)
 
     servicios_con_datos = [svc for svc in servicios_sel if svc in kpis_f["servicio"].astype(str).unique().tolist()]
     if kpis_f.empty:
@@ -1096,12 +1315,13 @@ def render_resumen_ejecutivo():
                 st.plotly_chart(fig_svc, use_container_width=True)
                 st.markdown("<div style='height:0.55rem'></div>", unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
 
 def render_kpis():
-    st.markdown("<div class='content-panel'>", unsafe_allow_html=True)
+    st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Análisis de KPIs</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-subtitle'>Evolución, contraste con meta y detalle del indicador seleccionado.</div>", unsafe_allow_html=True)
     nombres_kpi = sorted(kpis["nombre"].dropna().astype(str).unique().tolist())
     kpi_sel = option_selector("Seleccione KPI", nombres_kpi, key="kpi_analisis", default=nombres_kpi[0] if nombres_kpi else None, horizontal=True)
     hist_kpi = kpis_hist[kpis_hist["nombre"] == kpi_sel].copy()
@@ -1163,6 +1383,8 @@ def render_kpis():
                             height=360,
                             xaxis_title="",
                             yaxis_title="",
+                            font=dict(color=TEXT_MAIN),
+                            title_font=dict(color=EFE_BLUE, size=16),
                         )
                         st.plotly_chart(fig_meta, use_container_width=True)
         st.caption("Cada gráfico compara el valor observado y la meta del KPI seleccionado por servicio.")
@@ -1187,12 +1409,13 @@ def render_kpis():
         st.dataframe(detalle_show, use_container_width=True, hide_index=True)
     else:
         st.info("No existe detalle para el KPI seleccionado.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
 
 def render_personas():
-    st.markdown("<div class='content-panel'>", unsafe_allow_html=True)
+    st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Vista por persona</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-subtitle'>Carga de trabajo, avance y distribución de iniciativas por responsable.</div>", unsafe_allow_html=True)
     total_ini = len(iniciativas_f)
     en_curso = int((iniciativas_f["estado"] == "En curso").sum())
     atrasadas = int((iniciativas_f["estado"] == "Atrasada").sum())
@@ -1212,7 +1435,7 @@ def render_personas():
         else:
             fig = px.bar(por_responsable, x="responsable", y="cantidad", title="Carga de iniciativas por responsable", text="cantidad")
             fig.update_traces(marker_color=EFE_BLUE)
-            fig.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=360)
+            fig.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=360, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16))
             fig.update_xaxes(title="")
             fig.update_yaxes(title="Cantidad")
             st.plotly_chart(fig, use_container_width=True)
@@ -1223,7 +1446,7 @@ def render_personas():
             st.info("No hay prioridades para mostrar.")
         else:
             fig2 = px.pie(por_prioridad, names="prioridad", values="cantidad", title="Distribución por prioridad", color="prioridad", color_discrete_map={"Alta": EFE_RED, "Media": WARNING, "Baja": EFE_BLUE})
-            fig2.update_layout(paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=360)
+            fig2.update_layout(paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=360, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16))
             st.plotly_chart(fig2, use_container_width=True)
 
     personas_opts = sorted(iniciativas_f["responsable"].dropna().astype(str).unique().tolist())
@@ -1248,7 +1471,7 @@ def render_personas():
             else:
                 fig = px.bar(per_df.sort_values("avance_pct"), x="avance_pct", y="nombre_iniciativa", orientation="h", title=f"Avance por iniciativa - {persona_sel}", text="avance_pct")
                 fig.update_traces(marker_color=EFE_BLUE)
-                fig.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=420)
+                fig.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=420, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16))
                 fig.update_xaxes(title="Avance %")
                 fig.update_yaxes(title="")
                 st.plotly_chart(fig, use_container_width=True)
@@ -1259,7 +1482,7 @@ def render_personas():
                 st.info("No hay estados para mostrar.")
             else:
                 fig2 = px.bar(estado_persona, x="estado", y="cantidad", title="Distribución por estado", color="estado", color_discrete_map={"Planificada": TEXT_MUTED, "En curso": EFE_BLUE, "Atrasada": EFE_RED, "Finalizada": SUCCESS, "Pausada": WARNING})
-                fig2.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=420, showlegend=False)
+                fig2.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, margin=dict(l=20, r=20, t=50, b=20), height=420, font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16), showlegend=False)
                 st.plotly_chart(fig2, use_container_width=True)
 
         st.markdown("<div class='section-title'>Detalle por responsable</div>", unsafe_allow_html=True)
@@ -1283,12 +1506,13 @@ def render_personas():
         st.dataframe(detalle_persona, use_container_width=True, hide_index=True)
     else:
         st.warning("No hay responsables disponibles con los filtros actuales.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
 
 def render_detalle_servicio():
-    st.markdown("<div class='content-panel'>", unsafe_allow_html=True)
+    st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Detalle Servicio</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-subtitle'>Afluencia por estación, focos de intervención y lectura territorial del servicio.</div>", unsafe_allow_html=True)
     st.markdown(
         "<div class='map-note'>"
         "Esta sección muestra la afluencia registrada por estación de forma georreferenciada, con encuadre automático del mapa para el servicio seleccionado y un análisis comparativo por estación."
@@ -1390,6 +1614,8 @@ def render_detalle_servicio():
                         margin=dict(l=20, r=20, t=50, b=20),
                         height=440,
                         barmode="group",
+                        font=dict(color=TEXT_MAIN),
+                        title_font=dict(color=EFE_BLUE, size=16),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     )
                     fig_bar.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=station_order)
@@ -1404,7 +1630,7 @@ def render_detalle_servicio():
                 detail_table["Fuga %"] = detail_table["fuga_pct_display"].apply(fmt_fuga_pct)
                 detail_table = detail_table[["estacion", "comuna", "region", "Afluencia", "Meta afluencia", "Pérdida pax", "Fuga %", "observacion_afluencia", "observacion_estacion"]].rename(columns={"estacion": "Estación", "comuna": "Comuna", "region": "Región", "observacion_afluencia": "Obs. afluencia", "observacion_estacion": "Obs. estación"})
                 st.dataframe(detail_table, use_container_width=True, hide_index=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
 
 if section_sel == "Resumen ejecutivo":
