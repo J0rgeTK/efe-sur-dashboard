@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -644,6 +643,70 @@ def build_perfil_carga_chart(service_df, titulo):
     )
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=station_order if station_order else None)
     fig.update_yaxes(title="Pasajeros")
+    return fig
+
+
+def build_perfil_abordo_comparativo_chart(day_df, titulo):
+    plot_df = day_df.copy()
+    if plot_df.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title=titulo,
+            plot_bgcolor=EFE_WHITE,
+            paper_bgcolor=EFE_WHITE,
+            margin=dict(l=20, r=20, t=55, b=20),
+            height=520,
+        )
+        return fig
+
+    plot_df["event_time"] = plot_df["t_arr_est"].fillna(plot_df["t_dep_est"])
+    station_order = get_station_order_from_profile(plot_df)
+    if station_order:
+        plot_df["estacion"] = pd.Categorical(plot_df["estacion"], categories=station_order, ordered=True)
+
+    servicio_order = (
+        plot_df.groupby("servicio_label", as_index=False)["event_time"]
+        .min()
+        .sort_values(["event_time", "servicio_label"])["servicio_label"]
+        .astype(str)
+        .tolist()
+    )
+    if servicio_order:
+        plot_df["servicio_label"] = pd.Categorical(plot_df["servicio_label"], categories=servicio_order, ordered=True)
+
+    plot_df = plot_df.sort_values(["servicio_label", "estacion", "event_time"])
+
+    fig = px.line(
+        plot_df,
+        x="estacion",
+        y="L_out_abordo",
+        color="servicio_label",
+        markers=True,
+        category_orders={
+            "estacion": station_order,
+            "servicio_label": servicio_order,
+        },
+        title=titulo,
+    )
+    fig.update_traces(
+        mode="lines+markers",
+        line=dict(width=2),
+        marker=dict(size=6),
+        hovertemplate="<b>%{x}</b><br>Servicio: %{fullData.name}<br>A bordo: %{y:,.0f}<extra></extra>",
+    )
+    fig.update_layout(
+        plot_bgcolor=EFE_WHITE,
+        paper_bgcolor=EFE_WHITE,
+        margin=dict(l=20, r=20, t=55, b=20),
+        height=560,
+        font=dict(color=TEXT_MAIN),
+        title_font=dict(color=EFE_BLUE, size=16),
+        legend_title_text="Servicio",
+        legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.01),
+        hovermode="x unified",
+    )
+    fig.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=station_order if station_order else None)
+    fig.update_yaxes(title="Pasajeros a bordo")
     return fig
 
 
@@ -1757,7 +1820,7 @@ def render_detalle_servicio():
 def render_perfil_carga_biotren():
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Perfil de Carga - Biotren</div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-subtitle'>Lectura diaria por línea, dirección y servicio del comportamiento de pasajeros a bordo, embarques y bajadas por estación.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-subtitle'>Lectura diaria por línea, dirección y servicio del comportamiento de pasajeros a bordo, embarques y bajadas por estación, incluyendo una vista comparativa de todos los servicios del día.</div>", unsafe_allow_html=True)
     st.markdown(
         "<div class='map-note'>"
         "Cargue archivos CSV diarios en una carpeta del repositorio. Se recomienda <b>perfil_bt</b>; la aplicación también busca automáticamente variantes como <b>.perfil-bt</b> o ubicaciones equivalentes dentro de la carpeta de datos."
@@ -1869,6 +1932,14 @@ def render_perfil_carga_biotren():
         st.caption(f"Capacidad tren: {fmt_pax(capacidad)} pasajeros. Ocupación máxima observada: {fmt_pct(ocupacion_max)}.")
     elif perfil_bt_files:
         st.caption(f"Archivos cargados: {len(perfil_bt_files)} | carpeta origen: {perfil_bt_path}")
+
+    st.markdown("<div class='section-title'>Comparativo diario de pasajeros a bordo</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-subtitle'>Se muestra la evolución de <b>L_out_abordo</b> para todos los servicios de la fecha, línea y dirección seleccionadas.</div>", unsafe_allow_html=True)
+    fig_comp = build_perfil_abordo_comparativo_chart(
+        perfil_dir,
+        f"{linea_sel} | {direccion_sel} | Todos los servicios del día"
+    )
+    st.plotly_chart(fig_comp, use_container_width=True)
 
     st.markdown("<div class='section-title'>Detalle por estación</div>", unsafe_allow_html=True)
     detalle_cols = [
