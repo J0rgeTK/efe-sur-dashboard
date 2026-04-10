@@ -2296,6 +2296,89 @@ def build_station_flow_chart(flow_df, bucket_order, station_name, granularity):
     return fig
 
 
+def build_station_hourly_overview_chart(day_df, station_order=None):
+    temp = day_df.copy()
+    temp["entry_hour"] = get_time_bucket_series(temp["t_entrada_viaje"], "Bloques de 1 hora")
+    temp["exit_hour"] = get_time_bucket_series(temp["t_salida_viaje"], "Bloques de 1 hora")
+
+    entries = (
+        temp.dropna(subset=["entry_hour"])
+        .groupby(["entry_hour", "origen"], as_index=False)
+        .size()
+        .rename(columns={"entry_hour": "hora", "origen": "estacion", "size": "entradas"})
+    )
+    exits = (
+        temp.dropna(subset=["exit_hour"])
+        .groupby(["exit_hour", "destino"], as_index=False)
+        .size()
+        .rename(columns={"exit_hour": "hora", "destino": "estacion", "size": "salidas"})
+    )
+
+    hourly = entries.merge(exits, how="outer", on=["hora", "estacion"])
+    if hourly.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            plot_bgcolor=EFE_WHITE,
+            paper_bgcolor=EFE_WHITE,
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=420,
+        )
+        return fig
+
+    hourly["entradas"] = pd.to_numeric(hourly["entradas"], errors="coerce").fillna(0)
+    hourly["salidas"] = pd.to_numeric(hourly["salidas"], errors="coerce").fillna(0)
+    hourly["total"] = hourly["entradas"] + hourly["salidas"]
+    hourly["estacion"] = hourly["estacion"].fillna("").astype(str).str.strip()
+    hourly = hourly[hourly["estacion"] != ""].copy()
+
+    hour_order = get_bucket_order(hourly["hora"].dropna().tolist(), "Bloques de 1 hora")
+    if station_order:
+        keep = [s for s in station_order if s in set(hourly["estacion"].astype(str))]
+        extras = [s for s in sorted(hourly["estacion"].astype(str).unique().tolist()) if s not in keep]
+        station_order = keep + extras
+    else:
+        station_order = (
+            hourly.groupby("estacion")["total"]
+            .sum()
+            .sort_values(ascending=False)
+            .index.tolist()
+        )
+
+    fig = go.Figure()
+    for estacion in station_order:
+        station_df = hourly[hourly["estacion"].astype(str) == str(estacion)].copy()
+        if station_df.empty:
+            continue
+        if hour_order:
+            station_df["hora"] = pd.Categorical(station_df["hora"], categories=hour_order, ordered=True)
+            station_df = station_df.sort_values("hora")
+        fig.add_trace(
+            go.Scatter(
+                x=station_df["hora"],
+                y=station_df["total"],
+                mode="lines+markers",
+                name=str(estacion),
+                line=dict(width=2),
+                marker=dict(size=6),
+                hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>Movimientos: %{y:,.0f}<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        title="Movimientos por hora y estación",
+        plot_bgcolor=EFE_WHITE,
+        paper_bgcolor=EFE_WHITE,
+        margin=dict(l=20, r=20, t=55, b=20),
+        height=440,
+        font=dict(color=TEXT_MAIN),
+        title_font=dict(color=EFE_BLUE, size=16),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    fig.update_xaxes(title="Hora", tickangle=-90, categoryorder="array", categoryarray=hour_order if hour_order else None)
+    fig.update_yaxes(title="Movimientos")
+    return fig
+
+
 def build_od_heatmap(events_df, bucket_order, heatmap_mode):
     if events_df.empty:
         fig = go.Figure()
@@ -2517,39 +2600,73 @@ def build_station_activity_map(activity_df, station_ref, selected_station, bucke
     lon_pad = max((lon_max - lon_min) * 0.65, 0.04)
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=map_df["latitud"].astype(float),
-            lon=map_df["longitud"].astype(float),
-            mode="markers+text",
-            text=map_df["label_mapa"],
-            textposition="top right",
-            textfont=dict(size=11, color=EFE_BLUE, family="Arial, sans-serif"),
-            marker=dict(
-                size=map_df["marker_size"],
-                color=map_df["balance"],
-                colorscale="RdBu",
-                cmin=float(map_df["balance"].min()),
-                cmax=float(map_df["balance"].max()) if float(map_df["balance"].max()) != float(map_df["balance"].min()) else float(map_df["balance"].min()) + 1,
-                opacity=0.9,
-                sizemode="diameter",
-                symbol=["star" if x else "circle" for x in map_df["is_selected"].tolist()],
-                line=dict(width=[2.2 if x else 0.8 for x in map_df["is_selected"].tolist()],
-                          color=[WARNING if x else EFE_WHITE for x in map_df["is_selected"].tolist()]),
-                colorbar=dict(title="Balance<br>Entradas - Salidas"),
-            ),
-            customdata=map_df[["estacion", "entradas", "salidas", "total", "balance_label"]].values,
-            hovertemplate=(
-                "<b>%{customdata[0]}</b><br>"
-                "Entradas: %{customdata[1]:,.0f}<br>"
-                "Salidas: %{customdata[2]:,.0f}<br>"
-                "Movimientos: %{customdata[3]:,.0f}<br>"
-                "Balance: %{customdata[4]}"
-                "<extra></extra>"
-            ),
-            showlegend=False,
+
+    base_df = map_df[~map_df["is_selected"]].copy()
+    if not base_df.empty:
+        cmin = float(map_df["balance"].min())
+        cmax = float(map_df["balance"].max())
+        if cmax == cmin:
+            cmax = cmin + 1
+        fig.add_trace(
+            go.Scattermapbox(
+                lat=base_df["latitud"].astype(float),
+                lon=base_df["longitud"].astype(float),
+                mode="markers+text",
+                text=base_df["label_mapa"],
+                textposition="top right",
+                textfont=dict(size=11, color=EFE_BLUE, family="Arial, sans-serif"),
+                marker=dict(
+                    size=base_df["marker_size"],
+                    color=base_df["balance"],
+                    colorscale="RdBu",
+                    cmin=cmin,
+                    cmax=cmax,
+                    opacity=0.9,
+                    sizemode="diameter",
+                    colorbar=dict(title="Balance<br>Entradas - Salidas"),
+                ),
+                customdata=base_df[["estacion", "entradas", "salidas", "total", "balance_label"]].values,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Entradas: %{customdata[1]:,.0f}<br>"
+                    "Salidas: %{customdata[2]:,.0f}<br>"
+                    "Movimientos: %{customdata[3]:,.0f}<br>"
+                    "Balance: %{customdata[4]}"
+                    "<extra></extra>"
+                ),
+                showlegend=False,
+            )
         )
-    )
+
+    selected_df = map_df[map_df["is_selected"]].copy()
+    if not selected_df.empty:
+        fig.add_trace(
+            go.Scattermapbox(
+                lat=selected_df["latitud"].astype(float),
+                lon=selected_df["longitud"].astype(float),
+                mode="markers+text",
+                text=selected_df["label_mapa"],
+                textposition="top right",
+                textfont=dict(size=12, color=EFE_BLUE, family="Arial, sans-serif"),
+                marker=dict(
+                    size=(selected_df["marker_size"] + 5).tolist(),
+                    color=WARNING,
+                    opacity=0.95,
+                    sizemode="diameter",
+                ),
+                customdata=selected_df[["estacion", "entradas", "salidas", "total", "balance_label"]].values,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Entradas: %{customdata[1]:,.0f}<br>"
+                    "Salidas: %{customdata[2]:,.0f}<br>"
+                    "Movimientos: %{customdata[3]:,.0f}<br>"
+                    "Balance: %{customdata[4]}"
+                    "<extra></extra>"
+                ),
+                showlegend=False,
+            )
+        )
+
     fig.update_layout(
         title=f"Actividad georreferenciada | {bucket_label}",
         mapbox=dict(
@@ -2833,18 +2950,30 @@ def render_od_estaciones():
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    bucket_values = (
-        get_time_bucket_series(od_linea["t_entrada_viaje"], granularity_sel).dropna().tolist() +
-        get_time_bucket_series(od_linea["t_salida_viaje"], granularity_sel).dropna().tolist()
-    )
-    bucket_order = get_bucket_order(bucket_values, granularity_sel)
+    station_ref = prepare_od_station_reference(od_service_sel, od_linea, estaciones)
 
+    # Vista completa del día por hora
     station_candidates = sorted(list(set(od_linea["origen"].dropna().astype(str).tolist()) | set(od_linea["destino"].dropna().astype(str).tolist())))
     default_station = station_candidates[0] if station_candidates else None
     if station_candidates:
         prev_station = st.session_state.get("od_station_selector")
         if prev_station in station_candidates:
             default_station = prev_station
+
+    station_order_full = resolve_station_order_from_reference(
+        pd.DataFrame({"estacion": station_candidates, "total": 1}) if station_candidates else pd.DataFrame(),
+        station_ref,
+    )
+
+    st.markdown("<div class='section-title'>Comportamiento completo del día por hora</div>", unsafe_allow_html=True)
+    fig_hourly_overview = build_station_hourly_overview_chart(od_linea, station_order_full)
+    st.plotly_chart(fig_hourly_overview, use_container_width=True)
+
+    bucket_values = (
+        get_time_bucket_series(od_linea["t_entrada_viaje"], granularity_sel).dropna().tolist() +
+        get_time_bucket_series(od_linea["t_salida_viaje"], granularity_sel).dropna().tolist()
+    )
+    bucket_order = get_bucket_order(bucket_values, granularity_sel)
 
     row_filters_2a, row_filters_2b = st.columns([1.2, 1.8])
     with row_filters_2a:
@@ -2876,7 +3005,6 @@ def render_od_estaciones():
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    station_ref = prepare_od_station_reference(od_service_sel, od_linea, estaciones)
     station_order = resolve_station_order_from_reference(activity_df, station_ref)
 
     peak_entry_row = activity_df.sort_values(["entradas", "estacion"], ascending=[False, True]).head(1)
@@ -2899,6 +3027,7 @@ def render_od_estaciones():
     m3.metric("Mayor entrada", peak_entry_label)
     m4.metric("Mayor salida", peak_exit_label)
 
+    st.markdown("<div class='section-title'>Actividad por estación en el periodo seleccionado</div>", unsafe_allow_html=True)
     top_left, top_right = st.columns([1.15, 1.0])
     with top_left:
         fig_station_activity = build_station_activity_bar_chart(activity_df, station_order, bucket_sel)
