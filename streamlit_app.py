@@ -2406,14 +2406,14 @@ def render_od_estaciones():
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>OD Estaciones — Biotren</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='section-subtitle'>Análisis centrado en la estación seleccionada: comportamiento horario, entradas, salidas y relaciones origen-destino por bloque de 1 hora. Carpeta: <b>od_bt</b>.</div>",
+        "<div class='section-subtitle'>Análisis centrado en la estación seleccionada: comportamiento horario, entradas, salidas y relaciones origen-destino por bloques de 1 hora. Carpeta: <b>od_bt</b>.</div>",
         unsafe_allow_html=True)
 
     od_df, od_path, od_missing, od_files, od_status = load_od_service_data("Biotren", str(data_path))
     folder_name = OD_SERVICE_CONFIG["Biotren"]["folder_candidates"][0]
 
     st.markdown(
-        "<div class='map-note'><b>Enfoque:</b> lectura detallada estación por estación. Primero se define la fecha, línea y bloque horario; luego se revisa la estación específica y sus relaciones OD para ese periodo.</div>",
+        "<div class='map-note'><b>Enfoque:</b> primero se define la fecha, línea y uno o más bloques horarios; luego se revisa la estación específica y sus relaciones OD para el periodo agregado seleccionado.</div>",
         unsafe_allow_html=True)
 
     if od_status == "no_data" or od_df.empty:
@@ -2481,27 +2481,37 @@ def render_od_estaciones():
         return
 
     bucket_display_map = {b: b.replace('-', ' a ') for b in bucket_order}
-    row_f2a, row_f2b = st.columns([1.0, 1.2])
-    with row_f2a:
-        default_bucket = st.session_state.get("od_bucket_selector_selectbox")
-        if default_bucket not in bucket_order:
-            default_bucket = bucket_order[0]
-        bucket_sel = st.selectbox(
-            "Bloque horario de análisis",
-            options=bucket_order,
-            index=bucket_order.index(default_bucket) if default_bucket in bucket_order else 0,
-            format_func=lambda x: bucket_display_map.get(x, x),
-            key="od_bucket_selector_selectbox",
-        )
+    default_blocks = st.session_state.get("od_bloques_selector_multi")
+    if not isinstance(default_blocks, list) or not default_blocks:
+        default_blocks = [bucket_order[0]]
+    default_blocks = [b for b in default_blocks if b in bucket_order]
+    if not default_blocks:
+        default_blocks = [bucket_order[0]]
+
+    st.markdown("<div class='section-title'>Selección de periodo horario</div>", unsafe_allow_html=True)
+    bloques_sel = st.multiselect(
+        "Bloques horarios de análisis",
+        options=bucket_order,
+        default=default_blocks,
+        format_func=lambda x: bucket_display_map.get(x, x),
+        key="od_bloques_selector_multi",
+    )
+    if not bloques_sel:
+        st.warning("Seleccione al menos un bloque horario para continuar.")
+        st.markdown("</div></div>", unsafe_allow_html=True)
+        return
+
+    bloques_sel = [b for b in bucket_order if b in bloques_sel]
+    bloques_label = ", ".join(bucket_display_map.get(b, b) for b in bloques_sel)
 
     bucket_entry_summary = (
-        od_linea[od_linea["entry_bucket"] == bucket_sel]
+        od_linea[od_linea["entry_bucket"].isin(bloques_sel)]
         .groupby("origen", as_index=False).size()
         .rename(columns={"origen": "estacion", "size": "entradas"})
         .sort_values(["entradas", "estacion"], ascending=[False, True])
     )
     bucket_exit_summary = (
-        od_linea[od_linea["exit_bucket"] == bucket_sel]
+        od_linea[od_linea["exit_bucket"].isin(bloques_sel)]
         .groupby("destino", as_index=False).size()
         .rename(columns={"destino": "estacion", "size": "salidas"})
         .sort_values(["salidas", "estacion"], ascending=[False, True])
@@ -2518,16 +2528,15 @@ def render_od_estaciones():
     total_entries_block = int(bucket_entry_summary["entradas"].sum()) if not bucket_entry_summary.empty else 0
     total_exits_block = int(bucket_exit_summary["salidas"].sum()) if not bucket_exit_summary.empty else 0
 
-    with row_f2b:
-        st.markdown(
-            f"<div class='filters-summary'><strong>Resumen del bloque {bucket_display_map.get(bucket_sel, bucket_sel)}</strong> · Línea {linea_sel}</div>",
-            unsafe_allow_html=True,
-        )
-        rm1, rm2, rm3, rm4 = st.columns(4)
-        rm1.metric("Entradas bloque", fmt_pax(total_entries_block))
-        rm2.metric("Salidas bloque", fmt_pax(total_exits_block))
-        rm3.metric("Mayor entrada", top_entry_station)
-        rm4.metric("Mayor salida", top_exit_station)
+    st.markdown(
+        f"<div class='filters-summary'><strong>Bloques seleccionados:</strong> {bloques_label}</div>",
+        unsafe_allow_html=True,
+    )
+    rm1, rm2, rm3, rm4 = st.columns(4)
+    rm1.metric("Entradas período", fmt_pax(total_entries_block))
+    rm2.metric("Salidas período", fmt_pax(total_exits_block))
+    rm3.metric("Mayor entrada", top_entry_station)
+    rm4.metric("Mayor salida", top_exit_station)
 
     station_ref = prepare_od_station_reference("Biotren", od_linea, estaciones)
     station_candidates = sorted(set(od_linea["origen"].dropna().astype(str)) | set(od_linea["destino"].dropna().astype(str)))
@@ -2587,13 +2596,13 @@ def render_od_estaciones():
     m4.metric("Hora punta salidas", peak_exit_label)
 
     destinos_df = (
-        od_linea[(od_linea["origen"].astype(str) == str(station_sel)) & (od_linea["entry_bucket"] == bucket_sel)]
+        od_linea[(od_linea["origen"].astype(str) == str(station_sel)) & (od_linea["entry_bucket"].isin(bloques_sel))]
         .groupby("destino", as_index=False).size()
         .rename(columns={"size": "viajes"})
         .sort_values(["viajes", "destino"], ascending=[False, True]).head(10)
     )
     origenes_df = (
-        od_linea[(od_linea["destino"].astype(str) == str(station_sel)) & (od_linea["exit_bucket"] == bucket_sel)]
+        od_linea[(od_linea["destino"].astype(str) == str(station_sel)) & (od_linea["exit_bucket"].isin(bloques_sel))]
         .groupby("origen", as_index=False).size()
         .rename(columns={"size": "viajes"})
         .sort_values(["viajes", "origen"], ascending=[False, True]).head(10)
@@ -2603,16 +2612,16 @@ def render_od_estaciones():
     selected_exits = int(origenes_df["viajes"].sum()) if not origenes_df.empty else 0
 
     st.markdown(
-        f"<div class='section-title'>Relaciones OD en el bloque {bucket_display_map.get(bucket_sel, bucket_sel)}</div>",
+        f"<div class='section-title'>Relaciones OD en el periodo seleccionado</div>",
         unsafe_allow_html=True,
     )
     st.markdown(
-        f"<div class='section-subtitle'><b>{station_sel}</b> · Salidas desde estación: {fmt_pax(selected_entries)} · Llegadas hacia estación: {fmt_pax(selected_exits)}</div>",
+        f"<div class='section-subtitle'><b>{station_sel}</b> · Periodo: {bloques_label} · Salidas desde estación: {fmt_pax(selected_entries)} · Llegadas hacia estación: {fmt_pax(selected_exits)}</div>",
         unsafe_allow_html=True,
     )
 
-    map_from_title = f"Viajes desde {station_sel} | {bucket_display_map.get(bucket_sel, bucket_sel)}"
-    map_to_title = f"Viajes hacia {station_sel} | {bucket_display_map.get(bucket_sel, bucket_sel)}"
+    map_from_title = f"Viajes desde {station_sel} | {bloques_label}"
+    map_to_title = f"Viajes hacia {station_sel} | {bloques_label}"
 
     row_map1, row_map2 = st.columns(2)
     with row_map1:
@@ -2621,7 +2630,7 @@ def render_od_estaciones():
             pd.DataFrame(columns=["origen", "viajes"]),
             station_ref,
             station_sel,
-            bucket_sel,
+            bloques_label,
             title_text=map_from_title,
         )
         if from_fig:
@@ -2632,7 +2641,7 @@ def render_od_estaciones():
         if dest_fig:
             st.plotly_chart(dest_fig, use_container_width=True)
         else:
-            st.info("No existen viajes desde la estación en el bloque seleccionado.")
+            st.info("No existen viajes desde la estación en el periodo seleccionado.")
 
     with row_map2:
         to_fig = build_od_connection_map(
@@ -2640,7 +2649,7 @@ def render_od_estaciones():
             origenes_df,
             station_ref,
             station_sel,
-            bucket_sel,
+            bloques_label,
             title_text=map_to_title,
         )
         if to_fig:
@@ -2651,7 +2660,7 @@ def render_od_estaciones():
         if ori_fig:
             st.plotly_chart(ori_fig, use_container_width=True)
         else:
-            st.info("No existen viajes hacia la estación en el bloque seleccionado.")
+            st.info("No existen viajes hacia la estación en el periodo seleccionado.")
 
     if od_files:
         st.caption(f"Archivos OD cargados: {len(od_files)} | carpeta: {od_path}")
