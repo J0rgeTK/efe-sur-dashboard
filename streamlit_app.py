@@ -1574,120 +1574,159 @@ def build_station_activity_map(activity_df: pd.DataFrame, station_ref: pd.DataFr
     return fig
 
 
-def build_od_connection_map(destinos_df: pd.DataFrame, origenes_df: pd.DataFrame,
-                              station_ref: pd.DataFrame, selected_station: str,
-                              bucket_label: str, title_text: str | None = None) -> go.Figure | None:
+def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
+                        station_ref: pd.DataFrame, selected_station: str,
+                        title_text: str, bubble_color: str) -> go.Figure | None:
+    """
+    Mapa de burbujas para mostrar todos los puntos de origen/destino asociados
+    a la estación seleccionada, evitando la sobrecarga visual de líneas OD.
+    """
     if station_ref is None or station_ref.empty:
         return None
+    if flow_df is None:
+        flow_df = pd.DataFrame(columns=[category_col, "viajes"])
 
     ref = station_ref.copy()
     ref["station_key"] = ref["station_key"].astype(str)
-    station_key = normalize_text(selected_station)
-    node_df = ref[ref["station_key"] == station_key].copy()
-    if node_df.empty:
+    selected_key = normalize_text(selected_station)
+    selected_df = ref[ref["station_key"] == selected_key].copy()
+    if selected_df.empty:
         return None
+    selected_row = selected_df.iloc[0]
 
-    node = node_df.iloc[0]
-    all_markers = ref.copy()
-    all_markers["label_mapa"] = all_markers["estacion"].astype(str)
+    plot_df = flow_df.copy()
+    if category_col not in plot_df.columns:
+        plot_df[category_col] = []
+    if "viajes" not in plot_df.columns:
+        plot_df["viajes"] = []
 
-    def scale_width(series, min_w=1.5, max_w=6.0):
-        if len(series) == 0:
-            return []
-        smin, smax = float(series.min()), float(series.max())
-        if smax <= smin:
-            return [3.0] * len(series)
-        return [min_w + ((float(v)-smin)/(smax-smin))*(max_w-min_w) for v in series]
+    plot_df["station_key"] = normalize_series(plot_df[category_col]) if not plot_df.empty else pd.Series(dtype=str)
+    plot_df = plot_df.merge(
+        ref[["station_key", "estacion", "latitud", "longitud"]],
+        how="left", on="station_key", suffixes=("", "_ref")
+    )
+    plot_df = plot_df.dropna(subset=["latitud", "longitud"]).copy()
+
+    if not plot_df.empty and float(plot_df["viajes"].max()) > float(plot_df["viajes"].min()):
+        plot_df["marker_size"] = 12 + ((plot_df["viajes"] - plot_df["viajes"].min()) /
+                                        (plot_df["viajes"].max() - plot_df["viajes"].min())) * 20
+    else:
+        plot_df["marker_size"] = 16 if not plot_df.empty else pd.Series(dtype=float)
+
+    all_points = pd.concat([
+        pd.DataFrame([{
+            "estacion": selected_station,
+            "latitud": float(selected_row["latitud"]),
+            "longitud": float(selected_row["longitud"]),
+        }]),
+        plot_df[["estacion", "latitud", "longitud"]] if not plot_df.empty else pd.DataFrame(columns=["estacion", "latitud", "longitud"]),
+    ], ignore_index=True).drop_duplicates(subset=["estacion"])
+
+    lat_min = float(all_points["latitud"].min()); lat_max = float(all_points["latitud"].max())
+    lon_min = float(all_points["longitud"].min()); lon_max = float(all_points["longitud"].max())
+    lat_pad = max((lat_max - lat_min) * 0.18, 0.015)
+    lon_pad = max((lon_max - lon_min) * 0.65, 0.04)
 
     fig = go.Figure()
 
-    if destinos_df is not None and not destinos_df.empty:
-        dest_plot = destinos_df.copy()
-        dest_plot["station_key"] = normalize_series(dest_plot["destino"])
-        dest_plot = dest_plot.merge(ref[["station_key","latitud","longitud","estacion"]],
-                                    how="left", on="station_key")
-        dest_plot = dest_plot.dropna(subset=["latitud","longitud"]).copy()
-        widths = scale_width(dest_plot["viajes"])
-        for (_, row), w in zip(dest_plot.iterrows(), widths):
-            fig.add_trace(go.Scattermapbox(
-                lat=[float(node["latitud"]), float(row["latitud"])],
-                lon=[float(node["longitud"]), float(row["longitud"])],
-                mode="lines", line=dict(width=w, color=EFE_BLUE), opacity=0.65,
-                hovertemplate=f"<b>{selected_station}</b> → <b>{row['destino']}</b><br>Viajes: {int(row['viajes']):,}".replace(",",".") + "<extra></extra>",
-                showlegend=False,
-            ))
-
-    if origenes_df is not None and not origenes_df.empty:
-        ori_plot = origenes_df.copy()
-        ori_plot["station_key"] = normalize_series(ori_plot["origen"])
-        ori_plot = ori_plot.merge(ref[["station_key","latitud","longitud","estacion"]],
-                                   how="left", on="station_key")
-        ori_plot = ori_plot.dropna(subset=["latitud","longitud"]).copy()
-        widths = scale_width(ori_plot["viajes"])
-        for (_, row), w in zip(ori_plot.iterrows(), widths):
-            fig.add_trace(go.Scattermapbox(
-                lat=[float(row["latitud"]), float(node["latitud"])],
-                lon=[float(row["longitud"]), float(node["longitud"])],
-                mode="lines", line=dict(width=w, color=EFE_RED), opacity=0.6,
-                hovertemplate=f"<b>{row['origen']}</b> → <b>{selected_station}</b><br>Viajes: {int(row['viajes']):,}".replace(",",".") + "<extra></extra>",
-                showlegend=False,
-            ))
-
-    marker_sizes = [15 if est == str(selected_station) else 9
-                    for est in all_markers["estacion"].astype(str).tolist()]
-    marker_colors = [WARNING if est == str(selected_station) else EFE_BLUE
-                     for est in all_markers["estacion"].astype(str).tolist()]
+    if not plot_df.empty:
+        fig.add_trace(go.Scattermapbox(
+            lat=plot_df["latitud"].astype(float),
+            lon=plot_df["longitud"].astype(float),
+            mode="markers+text",
+            text=plot_df["estacion"].astype(str),
+            textposition="top right",
+            textfont=dict(size=11, color=EFE_BLUE),
+            marker=dict(size=plot_df["marker_size"], color=bubble_color, opacity=0.72, sizemode="diameter"),
+            customdata=plot_df[["estacion", "viajes"]].values,
+            hovertemplate="<b>%{customdata[0]}</b><br>Viajes: %{customdata[1]:,.0f}<extra></extra>",
+            showlegend=False,
+        ))
 
     fig.add_trace(go.Scattermapbox(
-        lat=all_markers["latitud"].astype(float), lon=all_markers["longitud"].astype(float),
-        mode="markers+text", text=all_markers["label_mapa"], textposition="top right",
-        textfont=dict(size=11, color=EFE_BLUE),
-        marker=dict(size=marker_sizes, color=marker_colors, opacity=0.88, sizemode="diameter"),
-        hovertemplate="<b>%{text}</b><extra></extra>", showlegend=False,
+        lat=[float(selected_row["latitud"])],
+        lon=[float(selected_row["longitud"])],
+        mode="markers+text",
+        text=[str(selected_station)],
+        textposition="top right",
+        textfont=dict(size=12, color=EFE_BLUE),
+        marker=dict(size=18, color=WARNING, opacity=0.95, sizemode="diameter"),
+        hovertemplate=f"<b>{selected_station}</b><extra></extra>",
+        showlegend=False,
     ))
 
-    lat_min = float(all_markers["latitud"].min()); lat_max = float(all_markers["latitud"].max())
-    lon_min = float(all_markers["longitud"].min()); lon_max = float(all_markers["longitud"].max())
-    lat_pad = max((lat_max-lat_min)*0.18, 0.015)
-    lon_pad = max((lon_max-lon_min)*0.65, 0.04)
-
     fig.update_layout(
-        title=title_text or f"Relaciones OD desde/hacia {selected_station} | {bucket_label}",
+        title=title_text,
         mapbox=dict(
             style="white-bg",
-            layers=[dict(sourcetype="raster",
-                         source=["https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png"],
-                         below="traces")],
-            bounds=dict(west=lon_min-lon_pad, east=lon_max+lon_pad,
-                        south=lat_min-lat_pad, north=lat_max+lat_pad),
+            layers=[dict(
+                sourcetype="raster",
+                source=["https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png"],
+                below="traces",
+            )],
+            bounds=dict(
+                west=lon_min - lon_pad,
+                east=lon_max + lon_pad,
+                south=lat_min - lat_pad,
+                north=lat_max + lat_pad,
+            ),
         ),
-        margin=dict(l=0,r=0,t=45,b=0), height=470,
-        paper_bgcolor=EFE_WHITE, font=dict(color=TEXT_MAIN),
+        margin=dict(l=0, r=0, t=45, b=0),
+        height=460,
+        paper_bgcolor=EFE_WHITE,
+        font=dict(color=TEXT_MAIN),
         title_font=dict(color=EFE_BLUE, size=16),
     )
     return fig
 
 
-def build_top_od_bar_chart(df: pd.DataFrame, category_col: str,
-                             title: str, color: str) -> go.Figure | None:
-    if df is None or df.empty:
+def build_od_station_bar_chart(flow_df: pd.DataFrame, category_col: str,
+                               station_ref: pd.DataFrame, title: str,
+                               bar_color: str) -> go.Figure | None:
+    """
+    Distribución de viajes por estación mostrando todas las estaciones relevantes
+    y usando orden de trazado cuando exista.
+    """
+    if flow_df is None or flow_df.empty:
         return None
-    plot_df = df.copy().head(10).sort_values("viajes", ascending=True)
-    fig = go.Figure(go.Bar(
-        x=plot_df["viajes"], y=plot_df[category_col], orientation="h",
-        marker_color=color,
-        text=plot_df["viajes"].apply(lambda x: f"{int(x):,}".replace(",",".")),
-        textposition="outside",
-        hovertemplate="%{y}<br>Viajes: %{x:,.0f}<extra></extra>",
+
+    plot_df = flow_df.copy()
+    plot_df[category_col] = plot_df[category_col].fillna("").astype(str).str.strip()
+    plot_df = plot_df[plot_df[category_col] != ""].copy()
+    if plot_df.empty:
+        return None
+
+    order_input = plot_df.rename(columns={category_col: "estacion", "viajes": "total"})[["estacion", "total"]].copy()
+    station_order = resolve_station_order_from_reference(order_input, station_ref)
+    if station_order:
+        plot_df[category_col] = pd.Categorical(plot_df[category_col], categories=station_order, ordered=True)
+        plot_df = plot_df.sort_values(category_col)
+
+    total_viajes = float(plot_df["viajes"].sum()) if not plot_df.empty else 0.0
+    plot_df["participacion"] = np.where(total_viajes > 0, plot_df["viajes"] / total_viajes * 100, 0.0)
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=plot_df[category_col],
+        y=plot_df["viajes"],
+        marker_color=bar_color,
+        hovertemplate="<b>%{x}</b><br>Viajes: %{y:,.0f}<br>Participación: %{customdata:.1f}%<extra></extra>",
+        customdata=plot_df["participacion"],
+        name="Viajes",
     ))
     fig.update_layout(
-        title=title, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-        margin=dict(l=20,r=20,t=50,b=20), height=320,
-        font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+        title=title,
+        plot_bgcolor=EFE_WHITE,
+        paper_bgcolor=EFE_WHITE,
+        margin=dict(l=20, r=20, t=50, b=20),
+        height=340,
+        font=dict(color=TEXT_MAIN),
+        title_font=dict(color=EFE_BLUE, size=16),
+        showlegend=False,
     )
-    fig.update_xaxes(title="Viajes")
+    fig.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=station_order or None)
+    fig.update_yaxes(title="Viajes")
     return fig
-
 
 # =========================================================
 # CARGA INICIAL
@@ -2368,15 +2407,16 @@ def render_od_estaciones():
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>OD Estaciones — Biotren</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='section-subtitle'>Análisis centrado en la estación seleccionada: comportamiento horario, entradas, salidas y relaciones origen-destino por bloques de 1 hora. Carpeta: <b>od_bt</b>.</div>",
+        "<div class='section-subtitle'>Análisis centrado en una estación: comportamiento horario, perfil de entradas/salidas y distribución espacial de viajes dentro del periodo seleccionado. Carpeta: <b>od_bt</b>.</div>",
         unsafe_allow_html=True)
 
     od_df, od_path, od_missing, od_files, od_status = load_od_service_data("Biotren", str(data_path))
     folder_name = OD_SERVICE_CONFIG["Biotren"]["folder_candidates"][0]
 
     st.markdown(
-        "<div class='map-note'><b>Enfoque:</b> la nueva base utiliza <b>origen</b>, <b>fecha_entrada</b>, <b>destino</b> y <b>fecha_salida</b>. "
-        "No se aplica filtro por línea para privilegiar la lectura integral del comportamiento por estación dentro de Biotren.</div>",
+        "<div class='map-note'><b>Enfoque:</b> la pestaña prioriza la lectura de la estación seleccionada. "
+        "Se mantienen bloques horarios múltiples, pero la interpretación se apoya en el perfil horario de la estación, "
+        "la distribución de destinos/orígenes por estación y mapas de burbujas completos sin líneas OD.</div>",
         unsafe_allow_html=True)
 
     if od_status == "no_data" or od_df.empty:
@@ -2403,15 +2443,14 @@ def render_od_estaciones():
     if isinstance(fecha_prev, date):
         fecha_default = fecha_prev if fecha_prev in fechas_set else min(fechas_disponibles, key=lambda d: abs((d - fecha_prev).days))
 
-    with st.container():
-        fecha_input = st.date_input(
-            "📅 Fecha",
-            value=fecha_default,
-            min_value=fechas_disponibles[0],
-            max_value=fechas_disponibles[-1],
-            format="DD/MM/YYYY",
-            key=fecha_key,
-        )
+    fecha_input = st.date_input(
+        "📅 Fecha",
+        value=fecha_default,
+        min_value=fechas_disponibles[0],
+        max_value=fechas_disponibles[-1],
+        format="DD/MM/YYYY",
+        key=fecha_key,
+    )
 
     fecha_sel = fecha_input
     if fecha_sel not in fechas_set:
@@ -2440,11 +2479,9 @@ def render_od_estaciones():
     default_blocks = st.session_state.get("od_bloques_selector_multi")
     if not isinstance(default_blocks, list) or not default_blocks:
         default_blocks = [bucket_order[0]]
-    default_blocks = [b for b in default_blocks if b in bucket_order]
-    if not default_blocks:
-        default_blocks = [bucket_order[0]]
+    default_blocks = [b for b in default_blocks if b in bucket_order] or [bucket_order[0]]
 
-    st.markdown("<div class='section-title'>Selección de periodo horario</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Periodo horario de análisis</div>", unsafe_allow_html=True)
     bloques_sel = st.multiselect(
         "Bloques horarios de análisis",
         options=bucket_order,
@@ -2531,11 +2568,9 @@ def render_od_estaciones():
     station_flow = pd.concat([station_entries, station_exits], ignore_index=True)
     station_flow = station_flow.dropna(subset=["bucket"]).copy()
 
-    station_bucket_order = get_bucket_order(station_flow["bucket"].dropna().tolist(), "Bloques de 1 hora")
-    if not station_bucket_order:
-        station_bucket_order = bucket_order
+    station_bucket_order = get_bucket_order(station_flow["bucket"].dropna().tolist(), "Bloques de 1 hora") or bucket_order
 
-    st.markdown("<div class='section-title'>Comportamiento horario de la estación seleccionada</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Perfil horario de la estación seleccionada</div>", unsafe_allow_html=True)
     st.plotly_chart(
         build_station_flow_chart(station_flow, station_bucket_order, station_sel, "Bloques de 1 hora"),
         use_container_width=True,
@@ -2546,86 +2581,96 @@ def render_od_estaciones():
     peak_entry_row = station_entries.sort_values(["cantidad", "bucket"], ascending=[False, True]).head(1)
     peak_exit_row = station_exits.sort_values(["cantidad", "bucket"], ascending=[False, True]).head(1)
     peak_entry_label = (
-        f"{bucket_display_map.get(peak_entry_row.iloc[0]['bucket'], peak_entry_row.iloc[0]['bucket'])} "
-        f"({fmt_pax(peak_entry_row.iloc[0]['cantidad'])})"
+        f"{bucket_display_map.get(peak_entry_row.iloc[0]['bucket'], peak_entry_row.iloc[0]['bucket'])} ({fmt_pax(peak_entry_row.iloc[0]['cantidad'])})"
         if not peak_entry_row.empty else "-"
     )
     peak_exit_label = (
-        f"{bucket_display_map.get(peak_exit_row.iloc[0]['bucket'], peak_exit_row.iloc[0]['bucket'])} "
-        f"({fmt_pax(peak_exit_row.iloc[0]['cantidad'])})"
+        f"{bucket_display_map.get(peak_exit_row.iloc[0]['bucket'], peak_exit_row.iloc[0]['bucket'])} ({fmt_pax(peak_exit_row.iloc[0]['cantidad'])})"
         if not peak_exit_row.empty else "-"
     )
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Entradas día", fmt_pax(total_entries_day))
-    m2.metric("Salidas día", fmt_pax(total_exits_day))
-    m3.metric("Hora punta entradas", peak_entry_label)
-    m4.metric("Hora punta salidas", peak_exit_label)
+    sm1, sm2, sm3, sm4 = st.columns(4)
+    sm1.metric("Entradas día", fmt_pax(total_entries_day))
+    sm2.metric("Salidas día", fmt_pax(total_exits_day))
+    sm3.metric("Hora punta entradas", peak_entry_label)
+    sm4.metric("Hora punta salidas", peak_exit_label)
 
     destinos_df = (
         od_fecha[(od_fecha["origen"].astype(str) == str(station_sel)) & (od_fecha["entry_bucket"].isin(bloques_sel))]
         .groupby("destino", as_index=False).size()
         .rename(columns={"size": "viajes"})
-        .sort_values(["viajes", "destino"], ascending=[False, True]).head(10)
+        .sort_values(["viajes", "destino"], ascending=[False, True])
     )
     origenes_df = (
         od_fecha[(od_fecha["destino"].astype(str) == str(station_sel)) & (od_fecha["exit_bucket"].isin(bloques_sel))]
         .groupby("origen", as_index=False).size()
         .rename(columns={"size": "viajes"})
-        .sort_values(["viajes", "origen"], ascending=[False, True]).head(10)
+        .sort_values(["viajes", "origen"], ascending=[False, True])
     )
+
+    if not destinos_df.empty:
+        destinos_df = destinos_df[destinos_df["destino"].astype(str) != str(station_sel)].copy()
+    if not origenes_df.empty:
+        origenes_df = origenes_df[origenes_df["origen"].astype(str) != str(station_sel)].copy()
 
     salidas_estacion = int(destinos_df["viajes"].sum()) if not destinos_df.empty else 0
     llegadas_estacion = int(origenes_df["viajes"].sum()) if not origenes_df.empty else 0
+    principal_destino = (
+        f"{destinos_df.iloc[0]['destino']} ({fmt_pax(destinos_df.iloc[0]['viajes'])})" if not destinos_df.empty else "-"
+    )
+    principal_origen = (
+        f"{origenes_df.iloc[0]['origen']} ({fmt_pax(origenes_df.iloc[0]['viajes'])})" if not origenes_df.empty else "-"
+    )
 
-    st.markdown("<div class='section-title'>Relaciones OD en el periodo seleccionado</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Perfil de viajes de la estación en el periodo seleccionado</div>", unsafe_allow_html=True)
     st.markdown(
         f"<div class='section-subtitle'><b>{station_sel}</b> · Periodo: {bloques_label} · "
         f"Salidas desde estación: {fmt_pax(salidas_estacion)} · Llegadas hacia estación: {fmt_pax(llegadas_estacion)}</div>",
         unsafe_allow_html=True,
     )
+    dm1, dm2 = st.columns(2)
+    dm1.metric("Principal destino", principal_destino)
+    dm2.metric("Principal origen", principal_origen)
 
-    map_from_title = f"Viajes desde {station_sel} | {bloques_label}"
-    map_to_title = f"Viajes hacia {station_sel} | {bloques_label}"
+    row_bar1, row_bar2 = st.columns(2)
+    with row_bar1:
+        dest_bar = build_od_station_bar_chart(
+            destinos_df, "destino", station_ref,
+            f"Destinos desde {station_sel} | {bloques_label}", EFE_BLUE
+        )
+        if dest_bar:
+            st.plotly_chart(dest_bar, use_container_width=True)
+        else:
+            st.info("No existen viajes desde la estación en el periodo seleccionado.")
+    with row_bar2:
+        ori_bar = build_od_station_bar_chart(
+            origenes_df, "origen", station_ref,
+            f"Orígenes hacia {station_sel} | {bloques_label}", EFE_RED
+        )
+        if ori_bar:
+            st.plotly_chart(ori_bar, use_container_width=True)
+        else:
+            st.info("No existen viajes hacia la estación en el periodo seleccionado.")
 
     row_map1, row_map2 = st.columns(2)
     with row_map1:
-        from_fig = build_od_connection_map(
-            destinos_df,
-            pd.DataFrame(columns=["origen", "viajes"]),
-            station_ref,
-            station_sel,
-            bloques_label,
-            title_text=map_from_title,
+        from_fig = build_od_bubble_map(
+            destinos_df, "destino", station_ref, station_sel,
+            f"Mapa de destinos desde {station_sel} | {bloques_label}", EFE_BLUE,
         )
         if from_fig:
             st.plotly_chart(from_fig, use_container_width=True)
         else:
-            st.info("Sin coordenadas válidas para el mapa de salidas desde la estación.")
-        dest_fig = build_top_od_bar_chart(destinos_df, "destino", f"Principales destinos desde {station_sel}", EFE_BLUE)
-        if dest_fig:
-            st.plotly_chart(dest_fig, use_container_width=True)
-        else:
-            st.info("No existen viajes desde la estación en el periodo seleccionado.")
-
+            st.info("Sin coordenadas válidas para el mapa de destinos.")
     with row_map2:
-        to_fig = build_od_connection_map(
-            pd.DataFrame(columns=["destino", "viajes"]),
-            origenes_df,
-            station_ref,
-            station_sel,
-            bloques_label,
-            title_text=map_to_title,
+        to_fig = build_od_bubble_map(
+            origenes_df, "origen", station_ref, station_sel,
+            f"Mapa de orígenes hacia {station_sel} | {bloques_label}", EFE_RED,
         )
         if to_fig:
             st.plotly_chart(to_fig, use_container_width=True)
         else:
-            st.info("Sin coordenadas válidas para el mapa de llegadas hacia la estación.")
-        ori_fig = build_top_od_bar_chart(origenes_df, "origen", f"Principales orígenes hacia {station_sel}", EFE_RED)
-        if ori_fig:
-            st.plotly_chart(ori_fig, use_container_width=True)
-        else:
-            st.info("No existen viajes hacia la estación en el periodo seleccionado.")
+            st.info("Sin coordenadas válidas para el mapa de orígenes.")
 
     if od_files:
         st.caption(f"Archivos OD cargados: {len(od_files)} | carpeta: {od_path}")
