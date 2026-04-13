@@ -85,14 +85,14 @@ section[data-testid="stSidebar"] {{ display: none !important; }}
 footer {{ visibility: hidden; height: 0; }}
 
 .block-container {{
-    padding-top: 0.2rem; padding-bottom: 0.65rem;
-    padding-left: 1.15rem; padding-right: 1.15rem;
+    padding-top: 0.35rem; padding-bottom: 0.8rem;
+    padding-left: 1.4rem; padding-right: 1.4rem;
 }}
 .hero-shell {{
     background: linear-gradient(135deg,rgba(255,255,255,0.97) 0%,rgba(245,249,253,0.97) 100%);
     border: 1px solid #DDE6EF; border-radius: 28px;
-    padding: 0.82rem 0.95rem 0.78rem; box-shadow: 0 16px 38px rgba(0,40,87,0.08);
-    margin-bottom: 0.35rem;
+    padding: 0.95rem 1.1rem 0.9rem; box-shadow: 0 18px 44px rgba(0,40,87,0.08);
+    margin-bottom: 0.5rem;
 }}
 .hero-kicker {{
     display: inline-block; background: rgba(0,40,87,0.08); color: {EFE_BLUE};
@@ -108,8 +108,8 @@ footer {{ visibility: hidden; height: 0; }}
 .hero-side-note {{ color: {TEXT_MUTED}; font-size: 0.82rem; margin-top: 0.35rem; }}
 .section-shell {{
     background: rgba(255,255,255,0.96); border: 1px solid #DFE7EF;
-    border-radius: 24px; padding: 0.78rem 0.82rem 0.72rem;
-    box-shadow: 0 10px 24px rgba(0,40,87,0.06); margin: 0.2rem 0 0.65rem;
+    border-radius: 24px; padding: 0.9rem 0.95rem 0.85rem;
+    box-shadow: 0 10px 26px rgba(0,40,87,0.06); margin: 0.25rem 0 0.8rem;
 }}
 .section-title {{
     font-size: 1.06rem; font-weight: 800; color: {EFE_BLUE};
@@ -166,8 +166,8 @@ footer {{ visibility: hidden; height: 0; }}
 .filter-chip.soft {{ background: #EEF4FB; }}
 .nav-panel {{
     background: rgba(255,255,255,0.97); border: 1px solid #DFE7EF;
-    border-radius: 22px; padding: 0.58rem 0.78rem 0.14rem;
-    margin: 0.04rem 0 0.42rem; box-shadow: 0 12px 26px rgba(0,40,87,0.08);
+    border-radius: 22px; padding: 0.65rem 0.85rem 0.2rem;
+    margin: 0.08rem 0 0.6rem; box-shadow: 0 12px 26px rgba(0,40,87,0.08);
     backdrop-filter: blur(10px);
 }}
 .sticky-nav-anchor {{ display: block; height: 0; margin: 0; padding: 0; }}
@@ -1744,7 +1744,7 @@ with hero_right:
 st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================================================
-# FILTROS GENERALES (ocultos de la interfaz para priorizar espacio útil)
+# FILTROS
 # =========================================================
 estados_ini  = sorted(iniciativas["estado"].dropna().astype(str).unique().tolist())
 prioridades  = sorted(iniciativas["prioridad"].dropna().astype(str).unique().tolist())
@@ -1754,6 +1754,44 @@ servicios_sel    = servicios_lista
 estados_ini_sel  = estados_ini
 prioridades_sel  = prioridades
 responsables_sel = responsables
+
+toolbar_left, toolbar_right = st.columns([4.6, 1.0])
+with toolbar_right:
+    popover_ctx = st.popover if hasattr(st, "popover") else st.expander
+    pop_kwargs  = {} if hasattr(st, "popover") else {"expanded": False}
+    with popover_ctx("Filtros", **pop_kwargs):
+        servicios_sel = st.multiselect(
+            "Servicio", options=servicios_lista, default=servicios_lista, key="servicios_body_filter")
+        estados_ini_sel = st.multiselect(
+            "Estado iniciativa", options=estados_ini, default=estados_ini, key="estado_body_filter")
+        prioridades_sel = st.multiselect(
+            "Prioridad", options=prioridades, default=prioridades, key="prioridad_body_filter")
+        responsables_sel = st.multiselect(
+            "Responsable", options=responsables, default=responsables, key="responsable_body_filter")
+        if st.button("Restablecer filtros", key="reset_filters_btn", use_container_width=True):
+            for k, v in [("servicios_body_filter", servicios_lista),
+                         ("estado_body_filter", estados_ini),
+                         ("prioridad_body_filter", prioridades),
+                         ("responsable_body_filter", responsables)]:
+                st.session_state[k] = v
+            st.rerun()
+        st.caption(f"Origen de datos: {data_path}")
+
+servicios_sel    = servicios_sel    or servicios_lista
+estados_ini_sel  = estados_ini_sel  or estados_ini
+prioridades_sel  = prioridades_sel  or prioridades
+responsables_sel = responsables_sel or responsables
+
+with toolbar_left:
+    summary = summarize_active_filters(servicios_sel, servicios_lista, estados_ini_sel,
+                                        estados_ini, prioridades_sel, prioridades,
+                                        responsables_sel, responsables)
+    chips   = build_filter_chip_row(servicios_sel, servicios_lista, estados_ini_sel,
+                                    estados_ini, prioridades_sel, prioridades,
+                                    responsables_sel, responsables)
+    st.markdown(f"<div class='toolbar-panel'>"
+                f"<div class='filters-summary'><strong>Filtros activos:</strong> {summary}</div>"
+                f"{chips}</div>", unsafe_allow_html=True)
 
 # =========================================================
 # FILTRADO PRINCIPAL
@@ -1804,7 +1842,7 @@ def render_resumen_ejecutivo():
     servicios_con_datos = [s for s in servicios_sel
                            if s in kpis_f["servicio"].astype(str).unique().tolist()]
     if kpis_f.empty or not servicios_con_datos:
-        st.warning("No existen KPIs para el período seleccionado.")
+        st.warning("No existen KPIs para los filtros seleccionados.")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
@@ -1861,16 +1899,9 @@ def render_resumen_ejecutivo():
         return
 
     hist_plot = hist_sel.groupby("periodo", as_index=False)["valor"].sum()
-    chart_left, chart_right = st.columns([1.15, 1.0])
-    with chart_left:
-        fig_svc = build_line_chart(hist_plot, f"{resumen_kpi_sel} — {resumen_srv}",
-                                    height=350, unit=unit_hist, kpi_name=resumen_kpi_sel)
-        fig_svc.update_traces(line_color=EFE_BLUE)
-        st.plotly_chart(fig_svc, use_container_width=True)
-    with chart_right:
-        fig_trend = build_trend_line_chart(hist_plot, resumen_kpi_sel, unit_hist, resumen_srv)
-        fig_trend.update_layout(height=350)
-        st.plotly_chart(fig_trend, use_container_width=True)
+    fig_trend = build_trend_line_chart(hist_plot, resumen_kpi_sel, unit_hist, resumen_srv)
+    fig_trend.update_layout(height=400)
+    st.plotly_chart(fig_trend, use_container_width=True)
 
     st.markdown("</div></div>", unsafe_allow_html=True)
 
@@ -2124,65 +2155,42 @@ def render_detalle_servicio():
     bar_df["entradas"]      = pd.to_numeric(bar_df["entradas"],      errors="coerce").fillna(0)
     bar_df["meta_entradas"] = pd.to_numeric(bar_df["meta_entradas"], errors="coerce").fillna(0)
 
-    total_entradas = detail_df["entradas"].sum(min_count=1)
-    total_meta     = detail_df["meta_entradas"].sum(min_count=1)
-    total_perdida  = detail_df["perdida_pax"].sum(min_count=1)
-    fuga_prom      = detail_df["fuga_pct_display"].mean()
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Afluencia", fmt_pax(total_entradas))
-    m2.metric("Meta afluencia", fmt_pax(total_meta))
-    m3.metric("Pérdida total", fmt_pax(total_perdida))
-    m4.metric("Fuga promedio", fmt_fuga_pct(fuga_prom))
-
-    map_col, note_col = st.columns([1.4, 0.6])
-    with map_col:
+    top_left, top_right = st.columns([0.95, 1.05])
+    with top_left:
         if valid_map_df.empty:
             st.warning("No existen coordenadas válidas para graficar.")
         else:
             st.plotly_chart(build_station_map(valid_map_df), use_container_width=True)
-    with note_col:
-        st.markdown(
-            "<div class='map-note'><b>Lectura recomendada:</b><br>"
-            "Utilice el mapa para localizar estaciones críticas y el gráfico inferior para comparar "
-            "rápidamente afluencia observada versus meta en todo el corredor.</div>",
-            unsafe_allow_html=True,
-        )
+    with top_right:
+        total_entradas = detail_df["entradas"].sum(min_count=1)
+        total_meta     = detail_df["meta_entradas"].sum(min_count=1)
+        total_perdida  = detail_df["perdida_pax"].sum(min_count=1)
+        fuga_prom      = detail_df["fuga_pct_display"].mean()
+        m1, m2 = st.columns(2); m3, m4 = st.columns(2)
+        m1.metric("Afluencia", fmt_pax(total_entradas))
+        m2.metric("Meta afluencia", fmt_pax(total_meta))
+        m3.metric("Pérdida total", fmt_pax(total_perdida))
+        m4.metric("Fuga promedio", fmt_fuga_pct(fuga_prom))
 
-    if not bar_df.empty:
-        fig_bar = go.Figure()
-        fig_bar.add_trace(go.Bar(x=bar_df["estacion"], y=bar_df["entradas"],
-                                 name="Afluencia", marker_color=EFE_BLUE))
-        fig_bar.add_trace(go.Bar(x=bar_df["estacion"], y=bar_df["meta_entradas"],
-                                 name="Meta", marker_color=EFE_RED))
-        fig_bar.update_layout(
-            title="Afluencia vs meta por estación",
-            plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-            margin=dict(l=20,r=20,t=50,b=20), height=400,
-            barmode="group", font=dict(color=TEXT_MAIN),
-            title_font=dict(color=EFE_BLUE, size=16),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        )
-        fig_bar.update_xaxes(title="", tickangle=-90, categoryorder="array",
-                              categoryarray=station_order)
-        fig_bar.update_yaxes(title="Pasajeros")
-        st.plotly_chart(fig_bar, use_container_width=True)
+        if not bar_df.empty:
+            fig_bar = go.Figure()
+            fig_bar.add_trace(go.Bar(x=bar_df["estacion"], y=bar_df["entradas"],
+                                     name="Afluencia", marker_color=EFE_BLUE))
+            fig_bar.add_trace(go.Bar(x=bar_df["estacion"], y=bar_df["meta_entradas"],
+                                     name="Meta", marker_color=EFE_RED))
+            fig_bar.update_layout(
+                title="Afluencia vs meta por estación",
+                plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
+                margin=dict(l=20,r=20,t=50,b=20), height=465,
+                barmode="group", font=dict(color=TEXT_MAIN),
+                title_font=dict(color=EFE_BLUE, size=16),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            )
+            fig_bar.update_xaxes(title="", tickangle=-90, categoryorder="array",
+                                  categoryarray=station_order)
+            fig_bar.update_yaxes(title="Pasajeros")
+            st.plotly_chart(fig_bar, use_container_width=True)
 
-    st.markdown("<div class='section-title'>Detalle de estaciones</div>", unsafe_allow_html=True)
-    detail_table = detail_df[["estacion","comuna","region","entradas","meta_entradas",
-                               "perdida_pax","fuga_pct_display",
-                               "observacion_afluencia","observacion_estacion"]].copy()
-    detail_table["Afluencia"]      = detail_table["entradas"].apply(fmt_pax)
-    detail_table["Meta afluencia"] = detail_table["meta_entradas"].apply(fmt_pax)
-    detail_table["Pérdida pax"]    = detail_table["perdida_pax"].apply(fmt_pax)
-    detail_table["Fuga %"]         = detail_table["fuga_pct_display"].apply(fmt_fuga_pct)
-    st.dataframe(
-        detail_table[["estacion","comuna","region","Afluencia","Meta afluencia",
-                       "Pérdida pax","Fuga %","observacion_afluencia","observacion_estacion"]]
-        .rename(columns={"estacion":"Estación","comuna":"Comuna","region":"Región",
-                         "observacion_afluencia":"Obs. afluencia","observacion_estacion":"Obs. estación"}),
-        use_container_width=True, hide_index=True,
-    )
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
@@ -2330,33 +2338,6 @@ def render_perfil_carga():
         perfil_dir, f"{profile_srv} | {linea_sel} | {dir_sel} | Todos los servicios")
     st.plotly_chart(fig_comp, use_container_width=True)
 
-    st.markdown("<div class='section-title'>Detalle por estación</div>", unsafe_allow_html=True)
-    detalle_cols = ["estacion","t_arr_est","t_dep_est","B_embarque","D_bajadas",
-                    "L_in_abordo","L_out_abordo","Capacidad_disponible","R_quedados",
-                    "Q_out_cola","archivo_origen"]
-    detalle_cols = [c for c in detalle_cols if c in perfil_servicio.columns]
-    detalle = perfil_servicio[detalle_cols].copy()
-
-    fmt_map = {
-        "t_arr_est": ("Llegada",  lambda s: pd.to_datetime(s, errors="coerce").dt.strftime("%H:%M:%S").fillna("-")),
-        "t_dep_est": ("Salida",   lambda s: pd.to_datetime(s, errors="coerce").dt.strftime("%H:%M:%S").fillna("-")),
-        "B_embarque":("Suben",    lambda s: s.apply(fmt_pax)),
-        "D_bajadas": ("Bajan",    lambda s: s.apply(fmt_pax)),
-        "L_in_abordo":("A bordo entrada", lambda s: s.apply(fmt_pax)),
-        "L_out_abordo":("A bordo salida", lambda s: s.apply(fmt_pax)),
-        "Capacidad_disponible":("Cap. disponible", lambda s: s.apply(fmt_pax)),
-        "R_quedados":("Quedados", lambda s: s.apply(fmt_pax)),
-        "Q_out_cola":("Cola salida", lambda s: s.apply(fmt_pax)),
-        "archivo_origen":("Archivo", lambda s: s),
-    }
-    for raw_col, (new_col, fn) in fmt_map.items():
-        if raw_col in detalle.columns:
-            detalle[new_col] = fn(detalle[raw_col])
-
-    show_cols = ["estacion"] + [v[0] for k,v in fmt_map.items() if k in detalle.columns]
-    show_cols = [c for c in show_cols if c in detalle.columns]
-    st.dataframe(detalle[show_cols].rename(columns={"estacion":"Estación"}),
-                 use_container_width=True, hide_index=True)
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
