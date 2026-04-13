@@ -769,11 +769,14 @@ def load_profile_service_data(service_name: str, data_path_str: str):
 @st.cache_data
 def load_od_service_data(service_name: str, data_path_str: str):
     data_path = Path(data_path_str)
-    required_cols = ["origen","destino","linea","t_entrada_viaje","t_salida_viaje"]
-
     csv_files, folder_path = _resolve_folder(service_name, OD_SERVICE_CONFIG, data_path)
+
+    required_old = ["origen", "destino", "t_entrada_viaje", "t_salida_viaje"]
+    required_new = ["origen", "destino", "fecha_entrada", "fecha_salida"]
+    required_display = ["origen", "destino", "fecha_entrada", "fecha_salida"]
+
     if not csv_files:
-        return pd.DataFrame(), folder_path, required_cols, [], "no_data"
+        return pd.DataFrame(), folder_path, required_display, [], "no_data"
 
     frames, loaded = [], []
     for f in csv_files:
@@ -786,26 +789,45 @@ def load_od_service_data(service_name: str, data_path_str: str):
             continue
 
     if not frames:
-        return pd.DataFrame(), folder_path, required_cols, loaded, "read_error"
+        return pd.DataFrame(), folder_path, required_display, loaded, "read_error"
 
     od_df = pd.concat(frames, ignore_index=True)
-    missing = [c for c in required_cols if c not in od_df.columns]
-    if missing:
+
+    has_new_schema = all(col in od_df.columns for col in required_new)
+    has_old_schema = all(col in od_df.columns for col in required_old)
+
+    if has_new_schema:
+        od_df["t_entrada_viaje"] = pd.to_datetime(od_df["fecha_entrada"], errors="coerce")
+        od_df["t_salida_viaje"] = pd.to_datetime(od_df["fecha_salida"], errors="coerce")
+    elif has_old_schema:
+        od_df["t_entrada_viaje"] = pd.to_datetime(od_df["t_entrada_viaje"], errors="coerce")
+        od_df["t_salida_viaje"] = pd.to_datetime(od_df["t_salida_viaje"], errors="coerce")
+    else:
+        missing = [c for c in required_display if c not in od_df.columns]
+        if not missing:
+            missing = [c for c in required_old if c not in od_df.columns]
         return od_df, folder_path, missing, loaded, "unsupported_format"
 
-    for col in ["origen","destino","linea","direccion"]:
+    for col in ["origen", "destino", "direccion", "linea", "linea_entrada", "linea_salida"]:
         if col not in od_df.columns:
             od_df[col] = ""
         od_df[col] = od_df[col].fillna("").astype(str).str.strip()
 
-    od_df["t_entrada_viaje"] = pd.to_datetime(od_df["t_entrada_viaje"], errors="coerce")
-    od_df["t_salida_viaje"]  = pd.to_datetime(od_df["t_salida_viaje"],  errors="coerce")
+    if od_df["linea"].eq("").all():
+        od_df["linea"] = np.where(
+            od_df["linea_entrada"].astype(str) == od_df["linea_salida"].astype(str),
+            od_df["linea_entrada"].astype(str),
+            (od_df["linea_entrada"].astype(str) + "→" + od_df["linea_salida"].astype(str)).str.strip("→"),
+        )
 
-    od_df["fecha"] = (
-        pd.to_datetime(od_df["dia_proceso"], errors="coerce").dt.date
-        if "dia_proceso" in od_df.columns
-        else od_df["t_entrada_viaje"].dt.date
-    )
+    od_df["fecha"] = od_df["t_entrada_viaje"].dt.date
+    missing_fecha_mask = od_df["fecha"].isna()
+    if missing_fecha_mask.any():
+        od_df.loc[missing_fecha_mask, "fecha"] = od_df.loc[missing_fecha_mask, "t_salida_viaje"].dt.date
+
+    if "dia_proceso" in od_df.columns:
+        dia_proceso = pd.to_datetime(od_df["dia_proceso"], errors="coerce").dt.date
+        od_df["fecha"] = od_df["fecha"].where(pd.Series(od_df["fecha"]).notna(), dia_proceso)
 
     if "servicio_final" in od_df.columns:
         od_df["servicio_label"] = od_df["servicio_final"].apply(format_service_id)
@@ -814,11 +836,12 @@ def load_od_service_data(service_name: str, data_path_str: str):
     else:
         od_df["servicio_label"] = "-"
 
-    for col in ["tarjeta_id","viaje_idx"]:
+    for col in ["tarjeta_id", "viaje_idx", "terminal_entrada", "terminal_salida"]:
         if col in od_df.columns:
             od_df[col] = pd.to_numeric(od_df[col], errors="coerce")
 
     return od_df.dropna(subset=["fecha"]).copy(), folder_path, [], loaded, "ok"
+
 
 
 # =========================================================
@@ -2352,7 +2375,8 @@ def render_od_estaciones():
     folder_name = OD_SERVICE_CONFIG["Biotren"]["folder_candidates"][0]
 
     st.markdown(
-        "<div class='map-note'><b>Enfoque:</b> primero se define la fecha, línea y uno o más bloques horarios; luego se revisa la estación específica y sus relaciones OD para el periodo agregado seleccionado.</div>",
+        "<div class='map-note'><b>Enfoque:</b> la nueva base utiliza <b>origen</b>, <b>fecha_entrada</b>, <b>destino</b> y <b>fecha_salida</b>. "
+        "No se aplica filtro por línea para privilegiar la lectura integral del comportamiento por estación dentro de Biotren.</div>",
         unsafe_allow_html=True)
 
     if od_status == "no_data" or od_df.empty:
@@ -2377,10 +2401,9 @@ def render_od_estaciones():
     fecha_key = "od_bt_fecha_cal"
     fecha_prev = st.session_state.get(fecha_key)
     if isinstance(fecha_prev, date):
-        fecha_default = fecha_prev if fecha_prev in fechas_set else min(fechas_disponibles, key=lambda d: abs((d-fecha_prev).days))
+        fecha_default = fecha_prev if fecha_prev in fechas_set else min(fechas_disponibles, key=lambda d: abs((d - fecha_prev).days))
 
-    row_f1a, row_f1b = st.columns([1.0, 1.0])
-    with row_f1a:
+    with st.container():
         fecha_input = st.date_input(
             "📅 Fecha",
             value=fecha_default,
@@ -2392,34 +2415,28 @@ def render_od_estaciones():
 
     fecha_sel = fecha_input
     if fecha_sel not in fechas_set:
-        fecha_sel = min(fechas_disponibles, key=lambda d: abs((d-fecha_sel).days))
+        fecha_sel = min(fechas_disponibles, key=lambda d: abs((d - fecha_sel).days))
         st.info(f"Fecha sin datos. Se usa la más cercana: {pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}.")
 
     od_fecha = od_df[od_df["fecha"] == fecha_sel].copy()
-    lineas_disp = sorted([x for x in od_fecha["linea"].dropna().astype(str).unique() if x])
-    with row_f1b:
-        linea_sel = option_selector("Línea", lineas_disp, key="od_linea_selector",
-                                    default=lineas_disp[0] if lineas_disp else None)
-
-    od_linea = od_fecha[od_fecha["linea"].astype(str) == str(linea_sel)].copy() if linea_sel else od_fecha.iloc[0:0].copy()
-    if od_linea.empty:
-        st.warning("No existen datos para la combinación de fecha y línea seleccionada.")
+    if od_fecha.empty:
+        st.warning("No existen datos para la fecha seleccionada.")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
     granularity_sel = "Bloques de 1 hora"
-    od_linea["entry_bucket"] = get_time_bucket_series(od_linea["t_entrada_viaje"], granularity_sel)
-    od_linea["exit_bucket"] = get_time_bucket_series(od_linea["t_salida_viaje"], granularity_sel)
+    od_fecha["entry_bucket"] = get_time_bucket_series(od_fecha["t_entrada_viaje"], granularity_sel)
+    od_fecha["exit_bucket"] = get_time_bucket_series(od_fecha["t_salida_viaje"], granularity_sel)
     bucket_order = get_bucket_order(
-        od_linea["entry_bucket"].dropna().tolist() + od_linea["exit_bucket"].dropna().tolist(),
+        od_fecha["entry_bucket"].dropna().tolist() + od_fecha["exit_bucket"].dropna().tolist(),
         granularity_sel,
     )
     if not bucket_order:
-        st.warning("No existen bloques horarios válidos para la fecha y línea seleccionadas.")
+        st.warning("No existen bloques horarios válidos para la fecha seleccionada.")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    bucket_display_map = {b: b.replace('-', ' a ') for b in bucket_order}
+    bucket_display_map = {b: b.replace("-", " a ") for b in bucket_order}
     default_blocks = st.session_state.get("od_bloques_selector_multi")
     if not isinstance(default_blocks, list) or not default_blocks:
         default_blocks = [bucket_order[0]]
@@ -2444,13 +2461,13 @@ def render_od_estaciones():
     bloques_label = ", ".join(bucket_display_map.get(b, b) for b in bloques_sel)
 
     bucket_entry_summary = (
-        od_linea[od_linea["entry_bucket"].isin(bloques_sel)]
+        od_fecha[od_fecha["entry_bucket"].isin(bloques_sel)]
         .groupby("origen", as_index=False).size()
         .rename(columns={"origen": "estacion", "size": "entradas"})
         .sort_values(["entradas", "estacion"], ascending=[False, True])
     )
     bucket_exit_summary = (
-        od_linea[od_linea["exit_bucket"].isin(bloques_sel)]
+        od_fecha[od_fecha["exit_bucket"].isin(bloques_sel)]
         .groupby("destino", as_index=False).size()
         .rename(columns={"destino": "estacion", "size": "salidas"})
         .sort_values(["salidas", "estacion"], ascending=[False, True])
@@ -2477,19 +2494,22 @@ def render_od_estaciones():
     rm3.metric("Mayor entrada", top_entry_station)
     rm4.metric("Mayor salida", top_exit_station)
 
-    station_ref = prepare_od_station_reference("Biotren", od_linea, estaciones)
-    station_candidates = sorted(set(od_linea["origen"].dropna().astype(str)) | set(od_linea["destino"].dropna().astype(str)))
+    station_ref = prepare_od_station_reference("Biotren", od_fecha, estaciones)
+    station_candidates = sorted(set(od_fecha["origen"].dropna().astype(str)) | set(od_fecha["destino"].dropna().astype(str)))
     default_station = station_candidates[0] if station_candidates else None
     prev_station = st.session_state.get("od_station_selector")
     if prev_station in station_candidates:
         default_station = prev_station
 
-    station_sel = (st.selectbox(
-        "Estación",
-        options=station_candidates,
-        index=(station_candidates.index(default_station) if station_candidates and default_station in station_candidates else 0),
-        key="od_station_selector",
-    ) if station_candidates else None)
+    station_sel = (
+        st.selectbox(
+            "Estación",
+            options=station_candidates,
+            index=(station_candidates.index(default_station) if station_candidates and default_station in station_candidates else 0),
+            key="od_station_selector",
+        )
+        if station_candidates else None
+    )
 
     if not station_sel:
         st.warning("No existen estaciones disponibles para la selección actual.")
@@ -2497,13 +2517,13 @@ def render_od_estaciones():
         return
 
     station_entries = (
-        od_linea[od_linea["origen"].astype(str) == str(station_sel)]
+        od_fecha[od_fecha["origen"].astype(str) == str(station_sel)]
         .groupby("entry_bucket", as_index=False).size()
         .rename(columns={"entry_bucket": "bucket", "size": "cantidad"})
     )
     station_entries["tipo"] = "Entradas"
     station_exits = (
-        od_linea[od_linea["destino"].astype(str) == str(station_sel)]
+        od_fecha[od_fecha["destino"].astype(str) == str(station_sel)]
         .groupby("exit_bucket", as_index=False).size()
         .rename(columns={"exit_bucket": "bucket", "size": "cantidad"})
     )
@@ -2525,8 +2545,16 @@ def render_od_estaciones():
     total_exits_day = int(station_exits["cantidad"].sum()) if not station_exits.empty else 0
     peak_entry_row = station_entries.sort_values(["cantidad", "bucket"], ascending=[False, True]).head(1)
     peak_exit_row = station_exits.sort_values(["cantidad", "bucket"], ascending=[False, True]).head(1)
-    peak_entry_label = f"{bucket_display_map.get(peak_entry_row.iloc[0]['bucket'], peak_entry_row.iloc[0]['bucket'])} ({fmt_pax(peak_entry_row.iloc[0]['cantidad'])})" if not peak_entry_row.empty else "-"
-    peak_exit_label = f"{bucket_display_map.get(peak_exit_row.iloc[0]['bucket'], peak_exit_row.iloc[0]['bucket'])} ({fmt_pax(peak_exit_row.iloc[0]['cantidad'])})" if not peak_exit_row.empty else "-"
+    peak_entry_label = (
+        f"{bucket_display_map.get(peak_entry_row.iloc[0]['bucket'], peak_entry_row.iloc[0]['bucket'])} "
+        f"({fmt_pax(peak_entry_row.iloc[0]['cantidad'])})"
+        if not peak_entry_row.empty else "-"
+    )
+    peak_exit_label = (
+        f"{bucket_display_map.get(peak_exit_row.iloc[0]['bucket'], peak_exit_row.iloc[0]['bucket'])} "
+        f"({fmt_pax(peak_exit_row.iloc[0]['cantidad'])})"
+        if not peak_exit_row.empty else "-"
+    )
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Entradas día", fmt_pax(total_entries_day))
@@ -2535,27 +2563,25 @@ def render_od_estaciones():
     m4.metric("Hora punta salidas", peak_exit_label)
 
     destinos_df = (
-        od_linea[(od_linea["origen"].astype(str) == str(station_sel)) & (od_linea["entry_bucket"].isin(bloques_sel))]
+        od_fecha[(od_fecha["origen"].astype(str) == str(station_sel)) & (od_fecha["entry_bucket"].isin(bloques_sel))]
         .groupby("destino", as_index=False).size()
         .rename(columns={"size": "viajes"})
         .sort_values(["viajes", "destino"], ascending=[False, True]).head(10)
     )
     origenes_df = (
-        od_linea[(od_linea["destino"].astype(str) == str(station_sel)) & (od_linea["exit_bucket"].isin(bloques_sel))]
+        od_fecha[(od_fecha["destino"].astype(str) == str(station_sel)) & (od_fecha["exit_bucket"].isin(bloques_sel))]
         .groupby("origen", as_index=False).size()
         .rename(columns={"size": "viajes"})
         .sort_values(["viajes", "origen"], ascending=[False, True]).head(10)
     )
 
-    selected_entries = int(destinos_df["viajes"].sum()) if not destinos_df.empty else 0
-    selected_exits = int(origenes_df["viajes"].sum()) if not origenes_df.empty else 0
+    salidas_estacion = int(destinos_df["viajes"].sum()) if not destinos_df.empty else 0
+    llegadas_estacion = int(origenes_df["viajes"].sum()) if not origenes_df.empty else 0
 
+    st.markdown("<div class='section-title'>Relaciones OD en el periodo seleccionado</div>", unsafe_allow_html=True)
     st.markdown(
-        f"<div class='section-title'>Relaciones OD en el periodo seleccionado</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f"<div class='section-subtitle'><b>{station_sel}</b> · Periodo: {bloques_label} · Salidas desde estación: {fmt_pax(selected_entries)} · Llegadas hacia estación: {fmt_pax(selected_exits)}</div>",
+        f"<div class='section-subtitle'><b>{station_sel}</b> · Periodo: {bloques_label} · "
+        f"Salidas desde estación: {fmt_pax(salidas_estacion)} · Llegadas hacia estación: {fmt_pax(llegadas_estacion)}</div>",
         unsafe_allow_html=True,
     )
 
