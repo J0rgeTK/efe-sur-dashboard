@@ -1007,16 +1007,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
     else:
         plot_df["marker_size"] = 14
 
-    bounds = compute_map_bounds(plot_df.rename(columns={"latitud":"lat_float","longitud":"lon_float"})
-                                 if "lat_float" not in plot_df.columns
-                                 else plot_df)
-    # Si compute_map_bounds necesita lat_float/lon_float, usamos copia renombrada
-    lat_min = float(plot_df["latitud"].min()); lat_max = float(plot_df["latitud"].max())
-    lon_min = float(plot_df["longitud"].min()); lon_max = float(plot_df["longitud"].max())
-    lat_pad = max((lat_max-lat_min)*0.18, 0.015)
-    lon_pad = max((lon_max-lon_min)*0.70, 0.04)
-    bounds  = dict(west=lon_min-lon_pad, east=lon_max+lon_pad,
-                   south=lat_min-lat_pad, north=lat_max+lat_pad)
+    bounds = compute_map_bounds(plot_df)
 
     fig = go.Figure()
     fig.add_trace(go.Scattermapbox(
