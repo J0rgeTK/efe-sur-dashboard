@@ -105,14 +105,14 @@
 104,Tasa de Ocupación,Ocupación,Laja Talcahuano,0.398940311418685,0.471199340503934,%,2026-02,-15.3351295033584,alerta,104,
 105,Tasa de Ocupación,Ocupación,Llanquihue Puerto Montt,0.813353997975709,0.544616105505651,%,2026-01,49.3444629626857,ok,105,
 106,Tasa de Ocupación,Ocupación,Llanquihue Puerto Montt,0.856209590517241,0.552217479720426,%,2026-02,55.0493459480346,ok,106,
-107,Pasajeros,Afluencia,Biotren,1134764,1264530.51368351,pax,2026-03,-10.2620310288526,alerta,107,Falta Reproceso de Datos
-108,Pasajeros,Afluencia,Tren Araucanía,72593,102481.831955277,pax,2026-03,-29.1650055283171,critico,108,
-109,Pasajeros,Afluencia,Laja Talcahuano,38764,40328.202846309,pax,2026-03,-3.8786822518975,alerta,109,
+107,Pasajeros,Afluencia,Biotren,1169450,1264530.51368351,pax,2026-03,-7.51903672190133,alerta,107,Falta Reproceso de Datos
+108,Pasajeros,Afluencia,Tren Araucanía,72866,102481.831955277,pax,2026-03,-28.8986168477175,critico,108,
+109,Pasajeros,Afluencia,Laja Talcahuano,39187,40328.202846309,pax,2026-03,-2.82978849977059,alerta,109,
 110,Pasajeros,Afluencia,Llanquihue Puerto Montt,38607,54115.5459166667,pax,2026-03,-28.6582083834995,critico,110,
-111,Tasa de Ocupación,Ocupación,Biotren,0.5313436190387,0.592105688518021,%,2026-03,-10.2620310288526,alerta,111,Falta Reproceso de Datos
-112,Tasa de Ocupación,Ocupación,Tren Araucanía,,,%,2026-03,,,112,Sin Datos
-113,Tasa de Ocupación,Ocupación,Laja Talcahuano,0.247475069906408,0.257461170637451,%,2026-03,-3.87868225189749,alerta,113,
-114,Tasa de Ocupación,Ocupación,Llanquihue Puerto Montt,,,%,2026-03,,,114,Sin Datos
+111,Tasa de Ocupación,Ocupación,Biotren,0.545114271464064,0.589434032845068,%,2026-03,-7.51903672190134,alerta,111,Falta Reproceso de Datos
+112,Tasa de Ocupación,Ocupación,Tren Araucanía,0.453146766169154,0.63732482559252,%,2026-03,-28.8986168477175,critico,112,Sin Datos
+113,Tasa de Ocupación,Ocupación,Laja Talcahuano,0.273377330059158,0.281338617914311,%,2026-03,-2.8297884997706,alerta,113,
+114,Tasa de Ocupación,Ocupación,Llanquihue Puerto Montt,0.377257270168856,0.528802629736033,%,2026-03,-28.6582083834995,critico,114,Sin Datos
 115,Tarifa Media,Financiero,Biotren,459.11358920234,508.683923042446,CLP/pax,2025-01,-9.74482023013917,alerta,115,
 116,Tarifa Media,Financiero,Biotren,457.70190599697,511.377937006367,CLP/pax,2025-02,-10.4963525261998,alerta,116,
 117,Tarifa Media,Financiero,Biotren,438.75241369695,484.358063177919,CLP/pax,2025-03,-9.41568912505471,alerta,117,
@@ -166,7 +166,7 @@
 165,Tarifa Media,Financiero,Laja Talcahuano,1385.01707594731,1718.8837323621,CLP/pax,2026-02,-19.4234578016505,alerta,165,
 166,Tarifa Media,Financiero,Llanquihue Puerto Montt,977.889947501458,908.274816239316,CLP/pax,2026-01,7.66454491718499,ok,166,
 167,Tarifa Media,Financiero,Llanquihue Puerto Montt,977.230525184195,908.274816239316,CLP/pax,2026-02,7.59194328764802,ok,167,
-168,Tarifa Media,Financiero,Biotren,511.14,527.094297992961,CLP/pax,2026-03,-3.02683942013992,alerta,168,
-169,Tarifa Media,Financiero,Tren Araucanía,541.467083603102,707.179479238361,CLP/pax,2026-03,-23.4328625900928,critico,169,
-170,Tarifa Media,Financiero,Laja Talcahuano,1276.17325353421,1471.31234905226,CLP/pax,2026-03,-13.2629278646205,alerta,170,
+168,Tarifa Media,Financiero,Biotren,510.764230001814,527.094297992961,CLP/pax,2026-03,-3.09813026878256,alerta,168,
+169,Tarifa Media,Financiero,Tren Araucanía,686.737984794005,707.179479238361,CLP/pax,2026-03,-2.89056668702712,alerta,169,
+170,Tarifa Media,Financiero,Laja Talcahuano,1276.9502641182,1471.31234905226,CLP/pax,2026-03,-13.2101171487656,alerta,170,
 171,Tarifa Media,Financiero,Llanquihue Puerto Montt,916.546999248841,392.745381017292,CLP/pax,2026-03,133.369262516798,ok,171,
