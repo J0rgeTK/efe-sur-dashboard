@@ -1,0 +1,321 @@
+﻿id_servicio_pdf,pagina_pdf,sector,tipo_dia,sentido,servicio,estacion_origen,hora_salida_origen,hora_llegada_orig,estacion_terminal,hora_llegada_term,hora_salida_term,n_estaciones_hora
+P02|Concepción a Coronel|20281,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20281,CONCEPCIÓN,5:30,6:14,CORONEL,6:14,6:09,7
+P02|Concepción a Coronel|20283,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20283,LOMAS COLORADAS,6:15,6:40,CORONEL,6:40,6:35,4
+P02|Concepción a Coronel|20001,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20001,CONCEPCIÓN,6:45,6:50:40,CORONEL,7:27,7:24:30,14
+P02|Concepción a Coronel|20003,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20003,CONCEPCIÓN,6:57,7:02:40,CORONEL,7:39,7:36:30,14
+P02|Concepción a Coronel|20285,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20285,Desvío Lagunillas (HDLC),7:11,7:16,CORONEL,7:16,7:11,2
+P02|Concepción a Coronel|20005,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20005,CONCEPCIÓN,7:13,7:18:40,CORONEL,7:55,7:52:30,14
+P02|Concepción a Coronel|20009,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20009,CONCEPCIÓN,7:25,7:30:40,CORONEL,8:07,8:04:30,14
+P02|Concepción a Coronel|20011,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20011,CONCEPCIÓN,7:42,7:47:40,CORONEL,8:24,8:21:30,14
+P02|Concepción a Coronel|20015,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20015,CONCEPCIÓN,7:54,7:59:40,CORONEL,8:36,8:33:30,14
+P02|Concepción a Coronel|20017,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20017,CONCEPCIÓN,8:17,8:22:40,CORONEL,8:59,8:56:30,14
+P02|Concepción a Coronel|20023,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20023,CONCEPCIÓN,8:28,8:33:40,CORONEL,9:10,9:07:30,14
+P02|Concepción a Coronel|20025,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20025,CONCEPCIÓN,8:39,8:44:40,CORONEL,9:21,9:18:30,14
+P02|Concepción a Coronel|20027,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20027,CONCEPCIÓN,8:51,8:56:40,CORONEL,9:33,9:30:30,14
+P02|Concepción a Coronel|20029,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20029,CONCEPCIÓN,9:03,9:08:40,CORONEL,9:45,9:42:30,14
+P02|Coronel a Concepción|20000,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20000,CORONEL,5:55,5:57:40,CONCEPCIÓN,6:40,6:33:30,14
+P02|Coronel a Concepción|20002,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20002,CORONEL,6:09,6:11:40,CONCEPCIÓN,6:54,6:47:30,14
+P02|Coronel a Concepción|20004,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20004,CORONEL,6:20,6:22:40,CONCEPCIÓN,7:05,6:58:30,14
+P02|Coronel a Concepción|20008,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20008,CORONEL,6:37,6:39:40,CONCEPCIÓN,7:22,7:15:30,14
+P02|Coronel a Concepción|20010,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20010,CORONEL,6:49,6:51:40,CONCEPCIÓN,7:34,7:27:30,14
+P02|Coronel a Concepción|20196,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20196,LOMAS COLORADAS,6:51,6:54:10,CONCEPCIÓN,7:12,7:05:30,7
+P02|Coronel a Concepción|20198,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20198,Desvío Lagunillas (HDLC),6:59,7:01,CONCEPCIÓN,7:41,7:34:30,13
+P02|Coronel a Concepción|20014,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20014,CORONEL,7:06,7:08:40,CONCEPCIÓN,7:51,7:44:30,14
+P02|Coronel a Concepción|20016,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20016,CORONEL,7:17,7:19:40,CONCEPCIÓN,8:02,7:55:30,14
+P02|Coronel a Concepción|20018,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20018,CORONEL,7:24,7:26:40,CONCEPCIÓN,8:09,8:02:30,14
+P02|Coronel a Concepción|20020,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20020,CORONEL,7:31,7:33:40,CONCEPCIÓN,8:16,8:09:30,14
+P02|Coronel a Concepción|20022,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20022,CORONEL,7:40,7:42:40,CONCEPCIÓN,8:25,8:18:30,14
+P02|Coronel a Concepción|20024,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20024,CORONEL,7:51,7:53:40,CONCEPCIÓN,8:36,8:29:30,14
+P02|Coronel a Concepción|20026,2,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20026,CORONEL,8:03,8:05:40,CONCEPCIÓN,8:48,8:41:30,14
+P03|Concepción a Coronel|20037,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20037,CONCEPCIÓN,10:05,10:10:40,CORONEL,10:47,10:44:30,14
+P03|Concepción a Coronel|20041,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20041,CONCEPCIÓN,10:30,10:35:40,CORONEL,11:12,11:09:30,14
+P03|Concepción a Coronel|20049,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20049,CONCEPCIÓN,11:30,11:35:40,CORONEL,12:12,12:09:30,14
+P03|Concepción a Coronel|20051,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20051,CONCEPCIÓN,11:45,11:50:40,CORONEL,12:27,12:24:30,14
+P03|Concepción a Coronel|20053,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20053,CONCEPCIÓN,12:10,12:15:40,CORONEL,12:52,12:49:30,14
+P03|Concepción a Coronel|20055,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20055,CONCEPCIÓN,12:23,12:28:40,CORONEL,13:05,13:02:30,14
+P03|Concepción a Coronel|20057,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20057,CONCEPCIÓN,13:00,13:05:40,CORONEL,13:42,13:39:30,14
+P03|Concepción a Coronel|20031,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20031,CONCEPCIÓN,9:15,9:20:40,CORONEL,9:57,9:54:30,14
+P03|Concepción a Coronel|20033,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20033,CONCEPCIÓN,9:30,9:35:40,CORONEL,10:12,10:09:30,14
+P03|Concepción a Coronel|20035,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Concepción a Coronel,20035,CONCEPCIÓN,9:50,9:55:40,CORONEL,10:32,10:29:30,14
+P03|Coronel a Concepción|20044,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20044,CORONEL,10:05,10:07:25,CONCEPCIÓN,10:47,10:41:15,14
+P03|Coronel a Concepción|20048,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20048,CORONEL,10:40,10:42:25,CONCEPCIÓN,11:22,11:16:15,14
+P03|Coronel a Concepción|20050,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20050,CORONEL,11:00,11:02:25,CONCEPCIÓN,11:42,11:36:15,14
+P03|Coronel a Concepción|20052,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20052,CORONEL,11:20,11:22:25,CONCEPCIÓN,12:02,11:56:15,14
+P03|Coronel a Concepción|20054,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20054,CORONEL,11:35,11:37:25,CONCEPCIÓN,12:17,12:11:15,14
+P03|Coronel a Concepción|20056,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20056,CORONEL,12:15,12:17:25,CONCEPCIÓN,12:57,12:51:15,14
+P03|Coronel a Concepción|20028,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20028,CORONEL,8:18,8:20:25,CONCEPCIÓN,9:00,8:54:15,14
+P03|Coronel a Concepción|20030,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20030,CORONEL,8:30,8:32:25,CONCEPCIÓN,9:12,9:06:15,14
+P03|Coronel a Concepción|20032,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20032,CORONEL,8:45,8:47:25,CONCEPCIÓN,9:27,9:21:15,14
+P03|Coronel a Concepción|20034,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20034,CORONEL,9:02,9:04:25,CONCEPCIÓN,9:44,9:38:15,14
+P03|Coronel a Concepción|20036,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20036,CORONEL,9:15,9:17:25,CONCEPCIÓN,9:57,9:51:15,14
+P03|Coronel a Concepción|20280,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20280,CORONEL,9:24,9:28,Desvío Lagunillas (HDLC),9:28,9:24,2
+P03|Coronel a Concepción|20040,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20040,CORONEL,9:40,9:42:25,CONCEPCIÓN,10:22,10:16:15,14
+P03|Coronel a Concepción|20042,3,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Mañana y Horario Valle,Coronel a Concepción,20042,CORONEL,9:55,9:57:25,CONCEPCIÓN,10:37,10:31:15,14
+P04|Concepción a Coronel|20059,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20059,CONCEPCIÓN,13:15,13:20:40,CORONEL,13:57,13:54:30,14
+P04|Concepción a Coronel|20063,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20063,CONCEPCIÓN,14:35,14:40:40,CORONEL,15:17,15:14:30,14
+P04|Concepción a Coronel|20065,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20065,CONCEPCIÓN,15:15,15:20:40,CORONEL,15:57,15:54:30,14
+P04|Concepción a Coronel|20067,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20067,CONCEPCIÓN,15:30,15:35:40,CORONEL,16:12,16:09:30,14
+P04|Concepción a Coronel|20069,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20069,CONCEPCIÓN,16:20,16:25:40,CORONEL,17:02,16:59:30,14
+P04|Concepción a Coronel|20071,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20071,CONCEPCIÓN,16:40,16:45:40,CORONEL,17:22,17:19:30,14
+P04|Concepción a Coronel|20291,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20291,Desvío Lagunillas (HDLC),16:40,16:44,CORONEL,16:44,16:40,2
+P04|Concepción a Coronel|20073,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20073,CONCEPCIÓN,16:55,17:00:40,CORONEL,17:37,17:34:30,14
+P04|Concepción a Coronel|20293,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20293,Desvío Lagunillas (HDLC),17:07,17:11,CORONEL,17:11,17:07,2
+P04|Concepción a Coronel|20075,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20075,CONCEPCIÓN,17:12,17:18:30,CORONEL,17:57,17:54:20,14
+P04|Concepción a Coronel|20077,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20077,CONCEPCIÓN,17:24,17:30:30,CORONEL,18:09,18:06:20,14
+P04|Concepción a Coronel|20079,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20079,CONCEPCIÓN,17:36,17:42:30,CORONEL,18:21,18:18:20,14
+P04|Concepción a Coronel|20083,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20083,CONCEPCIÓN,17:48,17:54:30,CORONEL,18:33,18:30:20,14
+P04|Concepción a Coronel|20085,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20085,CONCEPCIÓN,18:00,18:06:30,CORONEL,18:45,18:42:20,14
+P04|Coronel a Concepción|20058,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20058,CORONEL,12:30,12:32:25,CONCEPCIÓN,13:12,13:06:15,14
+P04|Coronel a Concepción|20282,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20282,CORONEL,12:55,12:59,Desvío Lagunillas (HDLC),12:59,12:55,2
+P04|Coronel a Concepción|20062,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20062,CORONEL,13:50,13:52:25,CONCEPCIÓN,14:32,14:26:15,14
+P04|Coronel a Concepción|20064,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20064,CORONEL,14:30,14:32:25,CONCEPCIÓN,15:12,15:06:15,14
+P04|Coronel a Concepción|20066,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20066,CORONEL,14:45,14:47:25,CONCEPCIÓN,15:27,15:21:15,14
+P04|Coronel a Concepción|20068,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20068,CORONEL,15:35,15:37:25,CONCEPCIÓN,16:17,16:11:15,14
+P04|Coronel a Concepción|20072,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20072,CORONEL,16:05,16:07:25,CONCEPCIÓN,16:47,16:41:15,14
+P04|Coronel a Concepción|20078,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20078,CORONEL,16:50,16:52:25,CONCEPCIÓN,17:32,17:26:15,14
+P04|Coronel a Concepción|20082,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20082,CORONEL,17:02,17:04:25,CONCEPCIÓN,17:44,17:38:15,14
+P04|Coronel a Concepción|20084,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20084,CORONEL,17:14,17:16:25,CONCEPCIÓN,17:56,17:50:15,14
+P04|Coronel a Concepción|20086,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20086,CORONEL,17:26,17:28:25,CONCEPCIÓN,18:08,18:02:15,14
+P04|Coronel a Concepción|20088,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20088,CORONEL,17:38,17:40:25,CONCEPCIÓN,18:20,18:14:15,14
+P04|Coronel a Concepción|20090,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20090,CORONEL,17:50,17:52:25,CONCEPCIÓN,18:32,18:26:15,14
+P04|Coronel a Concepción|20092,4,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20092,CORONEL,18:02,18:04:25,CONCEPCIÓN,18:44,18:38:15,14
+P05|Concepción a Coronel|20087,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20087,CONCEPCIÓN,18:12,18:18:30,CORONEL,18:57,18:54:20,14
+P05|Concepción a Coronel|20089,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20089,CONCEPCIÓN,18:24,18:30:30,CORONEL,19:09,19:06:20,14
+P05|Concepción a Coronel|20091,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20091,CONCEPCIÓN,18:36,18:42:30,CORONEL,19:21,19:18:20,14
+P05|Concepción a Coronel|20093,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20093,CONCEPCIÓN,18:48,18:54:30,CORONEL,19:33,19:30:20,14
+P05|Concepción a Coronel|20095,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20095,CONCEPCIÓN,19:00,19:06:30,CORONEL,19:45,19:42:20,14
+P05|Concepción a Coronel|20097,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20097,CONCEPCIÓN,19:10,19:16:30,CORONEL,19:55,19:52:20,14
+P05|Concepción a Coronel|20099,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20099,CONCEPCIÓN,19:17,19:23:30,CORONEL,20:02,19:59:20,14
+P05|Concepción a Coronel|20101,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20101,CONCEPCIÓN,19:30,19:36:30,CORONEL,20:15,20:12:20,14
+P05|Concepción a Coronel|20105,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20105,CONCEPCIÓN,19:45,19:50:40,CORONEL,20:27,20:24:30,14
+P05|Concepción a Coronel|20107,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20107,CONCEPCIÓN,20:00,20:05:40,CORONEL,20:42,20:39:30,14
+P05|Concepción a Coronel|20109,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20109,CONCEPCIÓN,20:15,20:20:40,CORONEL,20:57,20:54:30,14
+P05|Concepción a Coronel|20111,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20111,CONCEPCIÓN,20:30,20:35:40,CORONEL,21:12,21:09:30,14
+P05|Concepción a Coronel|20113,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20113,CONCEPCIÓN,20:45,20:50:40,CORONEL,21:27,21:24:30,14
+P05|Concepción a Coronel|20115,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20115,CONCEPCIÓN,21:00,21:05:40,CORONEL,21:42,21:39:30,14
+P05|Coronel a Concepción|20094,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20094,CORONEL,18:14,18:16:25,CONCEPCIÓN,18:56,18:50:15,14
+P05|Coronel a Concepción|20098,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20098,CORONEL,18:26,18:28:25,CONCEPCIÓN,19:08,19:02:15,14
+P05|Coronel a Concepción|20100,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20100,CORONEL,18:43,18:45:25,CONCEPCIÓN,19:25,19:19:15,14
+P05|Coronel a Concepción|20104,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20104,CORONEL,18:58,19:00:25,CONCEPCIÓN,19:40,19:34:15,14
+P05|Coronel a Concepción|20284,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20284,CORONEL,19:03,19:07,Desvío Lagunillas (HDLC),19:07,19:03,2
+P05|Coronel a Concepción|20106,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20106,CORONEL,19:15,19:17:25,CONCEPCIÓN,19:57,19:51:15,14
+P05|Coronel a Concepción|20108,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20108,CORONEL,19:29,19:31:25,CONCEPCIÓN,20:11,20:05:15,14
+P05|Coronel a Concepción|20110,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20110,CORONEL,19:40,19:42:40,CONCEPCIÓN,20:25,20:18:30,14
+P05|Coronel a Concepción|20286,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20286,CORONEL,19:48,19:52,Desvío Lagunillas (HDLC),19:52,19:48,2
+P05|Coronel a Concepción|20112,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20112,CORONEL,20:00,20:02:25,CONCEPCIÓN,20:42,20:36:15,14
+P05|Coronel a Concepción|20114,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20114,CORONEL,20:11,20:13:40,CONCEPCIÓN,20:56,20:49:30,14
+P05|Coronel a Concepción|20288,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20288,CORONEL,20:20,20:24,Desvío Lagunillas (HDLC),20:24,20:20,2
+P05|Coronel a Concepción|20116,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20116,CORONEL,20:30,20:32:25,CONCEPCIÓN,21:12,21:06:15,14
+P05|Coronel a Concepción|20120,5,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20120,CORONEL,20:45,20:47:25,CONCEPCIÓN,21:27,21:21:15,14
+P06|Concepción a Coronel|20117,6,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20117,CONCEPCIÓN,21:15,21:20:40,CORONEL,21:57,21:54:30,14
+P06|Concepción a Coronel|20121,6,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20121,CONCEPCIÓN,21:30,21:35:40,CORONEL,22:12,22:09:30,14
+P06|Concepción a Coronel|20123,6,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20123,CONCEPCIÓN,21:45,21:50:40,CORONEL,22:27,22:24:30,14
+P06|Concepción a Coronel|20127,6,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20127,CONCEPCIÓN,22:25,22:30:40,CORONEL,23:07,23:04:30,14
+P06|Concepción a Coronel|20129,6,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Concepción a Coronel,20129,CONCEPCIÓN,22:50,22:55:40,CORONEL,23:32,23:29:30,14
+P06|Coronel a Concepción|20122,6,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20122,CORONEL,21:00,21:02:25,CONCEPCIÓN,21:42,21:36:15,14
+P06|Coronel a Concepción|20292,6,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20292,CORONEL,21:20,21:39,LOMAS COLORADAS,21:39,21:30,4
+P06|Coronel a Concepción|20126,6,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20126,CORONEL,21:35,21:37:25,CONCEPCIÓN,22:17,22:11:15,14
+P06|Coronel a Concepción|20128,6,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20128,CORONEL,21:55,21:57:25,CONCEPCIÓN,22:37,22:31:15,14
+P06|Coronel a Concepción|20294,6,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20294,CORONEL,22:08,22:27,LOMAS COLORADAS,22:27,22:18,4
+P06|Coronel a Concepción|20298,6,CONCEPCIÓN-CORONEL,Lunes a Viernes Punta Tarde,Coronel a Concepción,20298,CORONEL,22:50,23:25,CONCEPCIÓN,23:25,23:19,7
+P07|Concepción a Coronel|20037,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20037,CONCEPCIÓN,10:05,10:10:40,CORONEL,10:47,10:44:30,14
+P07|Concepción a Coronel|20041,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20041,CONCEPCIÓN,10:30,10:35:40,CORONEL,11:12,11:09:30,14
+P07|Concepción a Coronel|20049,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20049,CONCEPCIÓN,11:30,11:35:40,CORONEL,12:12,12:09:30,14
+P07|Concepción a Coronel|20051,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20051,CONCEPCIÓN,11:45,11:50:40,CORONEL,12:27,12:24:30,14
+P07|Concepción a Coronel|20053,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20053,CONCEPCIÓN,12:10,12:15:40,CORONEL,12:52,12:49:30,14
+P07|Concepción a Coronel|20057,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20057,CONCEPCIÓN,13:00,13:05:40,CORONEL,13:42,13:39:30,14
+P07|Concepción a Coronel|20141,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20141,CONCEPCIÓN,6:45,6:50:40,CORONEL,7:27,7:24:30,14
+P07|Concepción a Coronel|20143,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20143,CONCEPCIÓN,7:15,7:20:40,CORONEL,7:57,7:54:30,14
+P07|Concepción a Coronel|20145,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20145,CONCEPCIÓN,7:45,7:50:40,CORONEL,8:27,8:24:30,14
+P07|Concepción a Coronel|20147,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20147,CONCEPCIÓN,8:15,8:20:40,CORONEL,8:57,8:54:30,14
+P07|Concepción a Coronel|20149,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20149,CONCEPCIÓN,8:30,8:35:40,CORONEL,9:12,9:09:30,14
+P07|Concepción a Coronel|20151,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20151,CONCEPCIÓN,8:45,8:50:40,CORONEL,9:27,9:24:30,14
+P07|Concepción a Coronel|20153,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20153,CONCEPCIÓN,9:15,9:20:40,CORONEL,9:57,9:54:30,14
+P07|Concepción a Coronel|20035,7,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20035,CONCEPCIÓN,9:50,9:55:40,CORONEL,10:32,10:29:30,14
+P07|Coronel a Concepción|20044,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20044,CORONEL,10:05,10:07:25,CONCEPCIÓN,10:47,10:41:15,14
+P07|Coronel a Concepción|20048,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20048,CORONEL,10:40,10:42:25,CONCEPCIÓN,11:22,11:16:15,14
+P07|Coronel a Concepción|20050,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20050,CORONEL,11:00,11:02:25,CONCEPCIÓN,11:42,11:36:15,14
+P07|Coronel a Concepción|20052,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20052,CORONEL,11:20,11:22:25,CONCEPCIÓN,12:02,11:56:15,14
+P07|Coronel a Concepción|20056,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20056,CORONEL,12:15,12:17:25,CONCEPCIÓN,12:57,12:51:15,14
+P07|Coronel a Concepción|20058,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20058,CORONEL,12:30,12:32:25,CONCEPCIÓN,13:12,13:06:15,14
+P07|Coronel a Concepción|20142,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20142,CORONEL,6:30,6:32:25,CONCEPCIÓN,7:12,7:06:15,14
+P07|Coronel a Concepción|20144,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20144,CORONEL,7:00,7:02:25,CONCEPCIÓN,7:42,7:36:15,14
+P07|Coronel a Concepción|20146,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20146,CORONEL,7:30,7:32:25,CONCEPCIÓN,8:12,8:06:15,14
+P07|Coronel a Concepción|20150,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20150,CORONEL,8:00,8:02:25,CONCEPCIÓN,8:42,8:36:15,14
+P07|Coronel a Concepción|20152,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20152,CORONEL,8:30,8:32:25,CONCEPCIÓN,9:12,9:06:15,14
+P07|Coronel a Concepción|20154,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20154,CORONEL,9:00,9:02:25,CONCEPCIÓN,9:42,9:36:15,14
+P07|Coronel a Concepción|20156,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20156,CORONEL,9:15,9:17:25,CONCEPCIÓN,9:57,9:51:15,14
+P07|Coronel a Concepción|20040,7,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20040,CORONEL,9:40,9:42:25,CONCEPCIÓN,10:22,10:16:15,14
+P08|Concepción a Coronel|20059,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20059,CONCEPCIÓN,13:15,13:20:40,CORONEL,13:57,13:54:30,14
+P08|Concepción a Coronel|20063,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20063,CONCEPCIÓN,14:35,14:40:40,CORONEL,15:17,15:14:30,14
+P08|Concepción a Coronel|20067,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20067,CONCEPCIÓN,15:30,15:35:40,CORONEL,16:12,16:09:30,14
+P08|Concepción a Coronel|20071,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20071,CONCEPCIÓN,16:40,16:45:40,CORONEL,17:22,17:19:30,14
+P08|Concepción a Coronel|20157,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20157,CONCEPCIÓN,17:30,17:35:40,CORONEL,18:12,18:09:30,14
+P08|Concepción a Coronel|20159,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20159,CONCEPCIÓN,18:00,18:05:40,CORONEL,18:42,18:39:30,14
+P08|Concepción a Coronel|20161,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20161,CONCEPCIÓN,18:30,18:35:40,CORONEL,19:12,19:09:30,14
+P08|Concepción a Coronel|20163,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20163,CONCEPCIÓN,19:00,19:05:40,CORONEL,19:42,19:39:30,14
+P08|Concepción a Coronel|20165,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20165,CONCEPCIÓN,19:30,19:35:40,CORONEL,20:12,20:09:30,14
+P08|Concepción a Coronel|20167,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20167,CONCEPCIÓN,20:00,20:05:40,CORONEL,20:42,20:39:30,14
+P08|Concepción a Coronel|20169,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20169,CONCEPCIÓN,20:30,20:35:40,CORONEL,21:12,21:09:30,14
+P08|Concepción a Coronel|20171,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20171,CONCEPCIÓN,21:00,21:05:40,CORONEL,21:42,21:39:30,14
+P08|Concepción a Coronel|20173,8,CONCEPCIÓN-CORONEL,Sábado,Concepción a Coronel,20173,CONCEPCIÓN,21:30,21:35:40,CORONEL,22:12,22:09:30,14
+P08|Coronel a Concepción|20062,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20062,CORONEL,13:50,13:52:25,CONCEPCIÓN,14:32,14:26:15,14
+P08|Coronel a Concepción|20066,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20066,CORONEL,14:45,14:47:25,CONCEPCIÓN,15:27,15:21:15,14
+P08|Coronel a Concepción|20068,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20068,CORONEL,15:35,15:37:25,CONCEPCIÓN,16:17,16:11:15,14
+P08|Coronel a Concepción|20180,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20180,CORONEL,16:45,16:47:25,CONCEPCIÓN,17:27,17:21:15,14
+P08|Coronel a Concepción|20158,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20158,CORONEL,17:15,17:17:25,CONCEPCIÓN,17:57,17:51:15,14
+P08|Coronel a Concepción|20160,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20160,CORONEL,17:45,17:47:25,CONCEPCIÓN,18:27,18:21:15,14
+P08|Coronel a Concepción|20162,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20162,CORONEL,18:15,18:17:25,CONCEPCIÓN,18:57,18:51:15,14
+P08|Coronel a Concepción|20164,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20164,CORONEL,18:45,18:47:25,CONCEPCIÓN,19:27,19:21:15,14
+P08|Coronel a Concepción|20166,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20166,CORONEL,19:15,19:17:25,CONCEPCIÓN,19:57,19:51:15,14
+P08|Coronel a Concepción|20168,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20168,CORONEL,19:45,19:47:25,CONCEPCIÓN,20:27,20:21:15,14
+P08|Coronel a Concepción|20170,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20170,CORONEL,20:15,20:17:25,CONCEPCIÓN,20:57,20:51:15,14
+P08|Coronel a Concepción|20172,8,CONCEPCIÓN-CORONEL,Sábado,Coronel a Concepción,20172,CORONEL,20:45,20:47:25,CONCEPCIÓN,21:27,21:21:15,14
+P09|Concepción a Coronel|20037,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20037,CONCEPCIÓN,10:05,10:10:40,CORONEL,10:47,10:44:30,14
+P09|Concepción a Coronel|20041,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20041,CONCEPCIÓN,10:30,10:35:40,CORONEL,11:12,11:09:30,14
+P09|Concepción a Coronel|20049,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20049,CONCEPCIÓN,11:30,11:35:40,CORONEL,12:12,12:09:30,14
+P09|Concepción a Coronel|20051,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20051,CONCEPCIÓN,11:45,11:50:40,CORONEL,12:27,12:24:30,14
+P09|Concepción a Coronel|20053,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20053,CONCEPCIÓN,12:10,12:15:40,CORONEL,12:52,12:49:30,14
+P09|Concepción a Coronel|20059,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20059,CONCEPCIÓN,13:15,13:20:40,CORONEL,13:57,13:54:30,14
+P09|Concepción a Coronel|20063,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20063,CONCEPCIÓN,14:35,14:40:40,CORONEL,15:17,15:14:30,14
+P09|Concepción a Coronel|20067,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20067,CONCEPCIÓN,15:30,15:35:40,CORONEL,16:12,16:09:30,14
+P09|Concepción a Coronel|20071,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20071,CONCEPCIÓN,16:40,16:45:40,CORONEL,17:22,17:19:30,14
+P09|Concepción a Coronel|20157,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20157,CONCEPCIÓN,17:30,17:35:40,CORONEL,18:12,18:09:30,14
+P09|Concepción a Coronel|20161,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20161,CONCEPCIÓN,18:30,18:35:40,CORONEL,19:12,19:09:30,14
+P09|Concepción a Coronel|20163,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20163,CONCEPCIÓN,19:00,19:05:40,CORONEL,19:42,19:39:30,14
+P09|Concepción a Coronel|20149,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20149,CONCEPCIÓN,8:30,8:35:40,CORONEL,9:12,9:09:30,14
+P09|Concepción a Coronel|20153,9,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20153,CONCEPCIÓN,9:15,9:20:40,CORONEL,9:57,9:54:30,14
+P09|Coronel a Concepción|20044,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20044,CORONEL,10:05,10:07:25,CONCEPCIÓN,10:47,10:41:15,14
+P09|Coronel a Concepción|20050,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20050,CORONEL,11:00,11:02:25,CONCEPCIÓN,11:42,11:36:15,14
+P09|Coronel a Concepción|20052,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20052,CORONEL,11:20,11:22:25,CONCEPCIÓN,12:02,11:56:15,14
+P09|Coronel a Concepción|20056,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20056,CORONEL,12:15,12:17:25,CONCEPCIÓN,12:57,12:51:15,14
+P09|Coronel a Concepción|20058,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20058,CORONEL,12:30,12:32:25,CONCEPCIÓN,13:12,13:06:15,14
+P09|Coronel a Concepción|20062,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20062,CORONEL,13:50,13:52:25,CONCEPCIÓN,14:32,14:26:15,14
+P09|Coronel a Concepción|20066,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20066,CORONEL,14:45,14:47:25,CONCEPCIÓN,15:27,15:21:15,14
+P09|Coronel a Concepción|20068,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20068,CORONEL,15:35,15:37:25,CONCEPCIÓN,16:17,16:11:15,14
+P09|Coronel a Concepción|20180,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20180,CORONEL,16:45,16:47:25,CONCEPCIÓN,17:27,17:21:15,14
+P09|Coronel a Concepción|20160,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20160,CORONEL,17:45,17:47:25,CONCEPCIÓN,18:27,18:21:15,14
+P09|Coronel a Concepción|20162,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20162,CORONEL,18:15,18:17:25,CONCEPCIÓN,18:57,18:51:15,14
+P09|Coronel a Concepción|20152,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20152,CORONEL,8:30,8:32:25,CONCEPCIÓN,9:12,9:06:15,14
+P09|Coronel a Concepción|20156,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20156,CORONEL,9:15,9:17:25,CONCEPCIÓN,9:57,9:51:15,14
+P09|Coronel a Concepción|20040,9,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20040,CORONEL,9:40,9:42:25,CONCEPCIÓN,10:22,10:16:15,14
+P10|Concepción a Coronel|20167,10,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20167,CONCEPCIÓN,20:00,20:05:40,CORONEL,20:42,20:39:30,14
+P10|Concepción a Coronel|20295,10,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20295,CONCEPCIÓN,20:10,20:52,CORONEL,20:52,20:46,7
+P10|Concepción a Coronel|20171,10,CONCEPCIÓN-CORONEL,Domingo,Concepción a Coronel,20171,CONCEPCIÓN,21:00,21:05:40,CORONEL,21:42,21:39:30,14
+P10|Coronel a Concepción|20166,10,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20166,CORONEL,19:15,19:17:25,CONCEPCIÓN,19:57,19:51:15,14
+P10|Coronel a Concepción|20170,10,CONCEPCIÓN-CORONEL,Domingo,Coronel a Concepción,20170,CORONEL,20:15,20:17:25,CONCEPCIÓN,20:57,20:51:15,14
+P11|Laja a Talcahuano|20205,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20205,EL ARENAL,6:18,6:21,Mercado,6:21,6:18,2
+P11|Laja a Talcahuano|20397,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20397,TALCAMÁVIDA,6:18,6:21,Mercado,7:56,7:53,19
+P11|Laja a Talcahuano|20301,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20301,HUALQUI,6:20,6:29,Mercado,7:24,7:21,13
+P11|Laja a Talcahuano|20842,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20842,LAJA,6:38,6:44,Mercado,8:56,8:53,23
+P11|Laja a Talcahuano|20207,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20207,EL ARENAL,6:53,6:56,Mercado,6:56,6:53,2
+P11|Laja a Talcahuano|20351,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20351,CONCEPCIÓN,7:21,7:26,EL ARENAL,7:42,7:38,6
+P11|Laja a Talcahuano|20305,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20305,HUALQUI,7:30,7:39,Mercado,8:26,8:23,13
+P11|Laja a Talcahuano|20353,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20353,CONCEPCIÓN,8:20,8:25,EL ARENAL,8:40,8:37,6
+P11|Laja a Talcahuano|20371,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20371,LA LEONERA,8:25,8:27,EL ARENAL,9:10,9:07,10
+P11|Laja a Talcahuano|20309,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20309,HUALQUI,8:30,8:39,Mercado,9:26,9:23,13
+P11|Laja a Talcahuano|20373,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20373,LA LEONERA,8:55,8:57,EL ARENAL,9:40,9:37,10
+P11|Laja a Talcahuano|20311,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20311,HUALQUI,9:15,9:24,Mercado,10:11,10:08,13
+P11|Laja a Talcahuano|20377,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20377,LA LEONERA,9:40,9:42,EL ARENAL,10:22,10:19,10
+P11|Laja a Talcahuano|20219,11,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20219,EL ARENAL,9:55,9:58,Mercado,9:58,9:55,2
+P11|Talcahuano a Laja|20312,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20312,Mercado,10:01,10:04,HUALQUI,10:57,10:51,13
+P11|Talcahuano a Laja|20200,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20200,HUALQUI,5:40,6:08,TALCAMÁVIDA,6:08,5:59,4
+P11|Talcahuano a Laja|20202,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20202,OMER HUET,5:45,5:56,HUALQUI,5:56,5:45,2
+P11|Talcahuano a Laja|20300,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20300,Mercado,6:31,6:34,HUALQUI,7:27,7:21,13
+P11|Talcahuano a Laja|20841,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20841,Mercado,7:01,7:04,LAJA,9:20,9:14,23
+P11|Talcahuano a Laja|20304,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20304,Mercado,7:31,7:34,HUALQUI,8:27,8:21,13
+P11|Talcahuano a Laja|20362,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20362,CONCEPCIÓN,7:45,7:54,LA LEONERA,8:03,8:01,5
+P11|Talcahuano a Laja|20865,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20865,Mercado,8:01,8:04,LAJA,10:19,10:13,23
+P11|Talcahuano a Laja|20364,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20364,CONCEPCIÓN,8:15,8:24,LA LEONERA,8:33,8:31,5
+P11|Talcahuano a Laja|20390,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20390,EL ARENAL,8:15,8:18,HUALQUI,9:12,9:06,12
+P11|Talcahuano a Laja|20308,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20308,Mercado,8:31,8:34,HUALQUI,9:32,9:26,13
+P11|Talcahuano a Laja|20374,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20374,EL ARENAL,8:45,8:48,LA LEONERA,9:32,9:30,10
+P11|Talcahuano a Laja|20310,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20310,Mercado,9:01,9:04,HUALQUI,9:57,9:51,13
+P11|Talcahuano a Laja|20220,11,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20220,Mercado,9:29,9:32,EL ARENAL,9:32,9:29,2
+P12|Laja a Talcahuano|20313,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20313,HUALQUI,10:00,10:09,Mercado,10:56,10:53,13
+P12|Laja a Talcahuano|20844,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20844,LAJA,10:55,11:01,Mercado,13:13,13:10,23
+P12|Laja a Talcahuano|20231,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20231,HUALQUI,11:22,11:33,OMER HUET,11:33,11:22,2
+P12|Laja a Talcahuano|20315,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20315,HUALQUI,11:40,11:49,Mercado,12:37,12:34,13
+P12|Laja a Talcahuano|20229,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20229,EL ARENAL,11:48,11:51,Mercado,11:51,11:48,2
+P12|Laja a Talcahuano|20856,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20856,LAJA,14:15,14:21,Mercado,16:33,16:30,23
+P12|Laja a Talcahuano|20239,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20239,EL ARENAL,14:55,14:58,Mercado,14:58,14:55,2
+P12|Laja a Talcahuano|20241,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20241,EL ARENAL,15:25,15:28,Mercado,15:28,15:25,2
+P12|Laja a Talcahuano|20243,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20243,EL ARENAL,15:55,15:58,Mercado,15:58,15:55,2
+P12|Laja a Talcahuano|20321,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20321,HUALQUI,16:00,16:09,Mercado,16:56,16:53,13
+P12|Laja a Talcahuano|20323,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20323,HUALQUI,16:30,16:39,Mercado,17:26,17:23,13
+P12|Laja a Talcahuano|20325,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20325,HUALQUI,17:00,17:09,Mercado,17:56,17:53,13
+P12|Laja a Talcahuano|20379,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20379,LA LEONERA,17:35,17:37,EL ARENAL,18:20,18:17,10
+P12|Laja a Talcahuano|20327,12,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20327,HUALQUI,18:00,18:09,Mercado,18:56,18:53,13
+P12|Talcahuano a Laja|20222,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20222,Mercado,10:14,10:17,EL ARENAL,10:17,10:14,2
+P12|Talcahuano a Laja|90150,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,90150,CONCEPCIÓN,10:56,11:21,HUALQUI,11:21,11:15,5
+P12|Talcahuano a Laja|20228,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20228,Mercado,11:00,11:03,EL ARENAL,11:03,11:00,2
+P12|Talcahuano a Laja|20843,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20843,Mercado,11:55,11:58,LAJA,14:13,14:07,23
+P12|Talcahuano a Laja|20232,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20232,Mercado,12:40,12:43,EL ARENAL,12:43,12:40,2
+P12|Talcahuano a Laja|20234,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20234,Mercado,13:16,13:19,EL ARENAL,13:19,13:16,2
+P12|Talcahuano a Laja|20316,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20316,Mercado,15:01,15:04,HUALQUI,15:57,15:51,13
+P12|Talcahuano a Laja|20318,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20318,Mercado,15:31,15:34,HUALQUI,16:27,16:21,13
+P12|Talcahuano a Laja|20320,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20320,Mercado,16:01,16:04,HUALQUI,16:57,16:51,13
+P12|Talcahuano a Laja|20376,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20376,EL ARENAL,16:30,16:33,LA LEONERA,17:17,17:15,10
+P12|Talcahuano a Laja|20248,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20248,Mercado,16:36,16:42,EL ARENAL,16:42,16:36,2
+P12|Talcahuano a Laja|20250,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20250,EL ARENAL,16:45,17:01,CONCEPCIÓN,17:01,16:45,2
+P12|Talcahuano a Laja|20322,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20322,Mercado,17:01,17:04,HUALQUI,17:57,17:51,13
+P12|Talcahuano a Laja|20398,12,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20398,HUALQUI,17:30,17:43,TALCAMÁVIDA,18:07,18:04,7
+P13|Laja a Talcahuano|20399,13,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20399,TALCAMÁVIDA,18:15,18:18,HUALQUI,18:52,18:39,7
+P13|Laja a Talcahuano|20329,13,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20329,HUALQUI,18:30,18:39,Mercado,19:26,19:23,13
+P13|Laja a Talcahuano|20331,13,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20331,HUALQUI,19:00,19:09,Mercado,19:56,19:53,13
+P13|Laja a Talcahuano|20333,13,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20333,HUALQUI,20:00,20:09,Mercado,21:07,21:04,13
+P13|Laja a Talcahuano|20862,13,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20862,LAJA,20:30,20:36,Mercado,22:48,22:45,23
+P13|Laja a Talcahuano|20261,13,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20261,EL ARENAL,20:48,20:51,Mercado,20:51,20:48,2
+P13|Laja a Talcahuano|20335,13,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20335,HUALQUI,21:00,21:09,Mercado,21:56,21:53,13
+P13|Laja a Talcahuano|20269,13,LAJA-TALCAHUANO,Lunes a Viernes,Laja a Talcahuano,20269,HUALQUI,21:10,21:34,CONCEPCIÓN,21:34,21:24,5
+P13|Talcahuano a Laja|20324,13,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20324,Mercado,17:31,17:34,HUALQUI,18:27,18:21,13
+P13|Talcahuano a Laja|20326,13,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20326,Mercado,18:01,18:04,HUALQUI,18:57,18:51,13
+P13|Talcahuano a Laja|20256,13,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20256,EL ARENAL,18:45,19:03,CONCEPCIÓN,19:03,18:45,2
+P13|Talcahuano a Laja|20328,13,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20328,Mercado,19:01,19:04,HUALQUI,19:57,19:51,13
+P13|Talcahuano a Laja|20330,13,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20330,Mercado,19:31,19:34,HUALQUI,20:27,20:21,13
+P13|Talcahuano a Laja|20332,13,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20332,Mercado,20:01,20:04,HUALQUI,20:57,20:51,13
+P13|Talcahuano a Laja|20855,13,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20855,Mercado,20:55,20:58,LAJA,23:14,23:08,23
+P13|Talcahuano a Laja|20264,13,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20264,Mercado,21:10,21:13,EL ARENAL,21:13,21:10,2
+P13|Talcahuano a Laja|20266,13,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20266,Mercado,21:59,22:02,EL ARENAL,22:02,21:59,2
+P13|Talcahuano a Laja|20270,13,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20270,Mercado,21:59,22:20,CONCEPCIÓN,22:20,22:02,3
+P13|Talcahuano a Laja|20272,13,LAJA-TALCAHUANO,Lunes a Viernes,Talcahuano a Laja,20272,Mercado,22:50,22:53,EL ARENAL,22:53,22:50,2
+P14|Laja a Talcahuano|20844,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20844,LAJA,10:55,11:01,Mercado,13:13,13:10,23
+P14|Laja a Talcahuano|20229,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20229,EL ARENAL,12:23,12:26,Mercado,12:26,12:23,2
+P14|Laja a Talcahuano|20846,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20846,LAJA,15:38,15:44,Mercado,17:56,17:53,23
+P14|Laja a Talcahuano|20243,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20243,EL ARENAL,15:55,15:58,Mercado,15:58,15:55,2
+P14|Laja a Talcahuano|20321,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20321,HUALQUI,16:00,16:09,Mercado,16:56,16:53,13
+P14|Laja a Talcahuano|20327,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20327,HUALQUI,18:00,18:09,Mercado,18:56,18:53,13
+P14|Laja a Talcahuano|20331,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20331,HUALQUI,19:00,19:09,Mercado,19:56,19:53,13
+P14|Laja a Talcahuano|20848,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20848,LAJA,19:08,19:14,Mercado,21:26,21:23,23
+P14|Laja a Talcahuano|20263,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20263,HUALQUI,20:00,20:43,EL ARENAL,20:43,20:24,6
+P14|Laja a Talcahuano|20850,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20850,LAJA,8:05,8:11,Mercado,10:23,10:20,23
+P14|Laja a Talcahuano|20213,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20213,EL ARENAL,8:24,8:27,Mercado,8:27,8:24,2
+P14|Laja a Talcahuano|20341,14,LAJA-TALCAHUANO,Sábado,Laja a Talcahuano,20341,HUALQUI,9:00,9:09,Mercado,9:56,9:53,13
+P14|Talcahuano a Laja|20312,14,LAJA-TALCAHUANO,Sábado,Talcahuano a Laja,20312,Mercado,10:01,10:04,HUALQUI,10:57,10:51,13
+P14|Talcahuano a Laja|20224,14,LAJA-TALCAHUANO,Sábado,Talcahuano a Laja,20224,Mercado,10:26,10:29,EL ARENAL,10:29,10:26,2
+P14|Talcahuano a Laja|20859,14,LAJA-TALCAHUANO,Sábado,Talcahuano a Laja,20859,Mercado,12:30,12:33,LAJA,14:48,14:42,23
+P14|Talcahuano a Laja|20234,14,LAJA-TALCAHUANO,Sábado,Talcahuano a Laja,20234,Mercado,13:16,13:19,EL ARENAL,13:19,13:16,2
+P14|Talcahuano a Laja|20845,14,LAJA-TALCAHUANO,Sábado,Talcahuano a Laja,20845,Mercado,16:01,16:04,LAJA,18:20,18:14,23
+P14|Talcahuano a Laja|20322,14,LAJA-TALCAHUANO,Sábado,Talcahuano a Laja,20322,Mercado,17:01,17:04,HUALQUI,17:57,17:51,13
+P14|Talcahuano a Laja|20326,14,LAJA-TALCAHUANO,Sábado,Talcahuano a Laja,20326,Mercado,18:01,18:04,HUALQUI,18:57,18:51,13
+P14|Talcahuano a Laja|20328,14,LAJA-TALCAHUANO,Sábado,Talcahuano a Laja,20328,Mercado,19:01,19:04,HUALQUI,19:57,19:51,13
+P14|Talcahuano a Laja|20847,14,LAJA-TALCAHUANO,Sábado,Talcahuano a Laja,20847,Mercado,20:01,20:04,LAJA,22:20,22:14,23
+P14|Talcahuano a Laja|20268,14,LAJA-TALCAHUANO,Sábado,Talcahuano a Laja,20268,Mercado,21:29,21:32,EL ARENAL,21:32,21:29,2
+P14|Talcahuano a Laja|20857,14,LAJA-TALCAHUANO,Sábado,Talcahuano a Laja,20857,Mercado,8:30,8:33,LAJA,10:48,10:42,23
+P15|Laja a Talcahuano|20844,15,LAJA-TALCAHUANO,Domingo,Laja a Talcahuano,20844,LAJA,10:55,11:01,Mercado,13:13,13:10,23
+P15|Laja a Talcahuano|20229,15,LAJA-TALCAHUANO,Domingo,Laja a Talcahuano,20229,EL ARENAL,12:23,12:26,Mercado,12:26,12:23,2
+P15|Laja a Talcahuano|20846,15,LAJA-TALCAHUANO,Domingo,Laja a Talcahuano,20846,LAJA,15:38,15:44,Mercado,17:56,17:53,23
+P15|Laja a Talcahuano|20243,15,LAJA-TALCAHUANO,Domingo,Laja a Talcahuano,20243,EL ARENAL,15:55,15:58,Mercado,15:58,15:55,2
+P15|Laja a Talcahuano|20848,15,LAJA-TALCAHUANO,Domingo,Laja a Talcahuano,20848,LAJA,19:08,19:14,Mercado,21:26,21:23,23
+P15|Laja a Talcahuano|20259,15,LAJA-TALCAHUANO,Domingo,Laja a Talcahuano,20259,EL ARENAL,19:55,19:58,Mercado,19:58,19:55,2
+P15|Laja a Talcahuano|20850,15,LAJA-TALCAHUANO,Domingo,Laja a Talcahuano,20850,LAJA,8:05,8:11,Mercado,10:23,10:20,23
+P15|Laja a Talcahuano|20213,15,LAJA-TALCAHUANO,Domingo,Laja a Talcahuano,20213,EL ARENAL,8:24,8:27,Mercado,8:27,8:24,2
+P15|Talcahuano a Laja|20224,15,LAJA-TALCAHUANO,Domingo,Talcahuano a Laja,20224,Mercado,10:26,10:29,EL ARENAL,10:29,10:26,2
+P15|Talcahuano a Laja|20859,15,LAJA-TALCAHUANO,Domingo,Talcahuano a Laja,20859,Mercado,12:30,12:33,LAJA,14:48,14:42,23
+P15|Talcahuano a Laja|20234,15,LAJA-TALCAHUANO,Domingo,Talcahuano a Laja,20234,Mercado,13:16,13:19,EL ARENAL,13:19,13:16,2
+P15|Talcahuano a Laja|20845,15,LAJA-TALCAHUANO,Domingo,Talcahuano a Laja,20845,Mercado,16:01,16:04,LAJA,18:20,18:14,23
+P15|Talcahuano a Laja|20254,15,LAJA-TALCAHUANO,Domingo,Talcahuano a Laja,20254,Mercado,17:59,18:02,EL ARENAL,18:02,17:59,2
+P15|Talcahuano a Laja|20262,15,LAJA-TALCAHUANO,Domingo,Talcahuano a Laja,20262,EL ARENAL,19:50,20:05,CONCEPCIÓN,20:05,19:50,2
+P15|Talcahuano a Laja|20847,15,LAJA-TALCAHUANO,Domingo,Talcahuano a Laja,20847,Mercado,20:01,20:04,LAJA,22:20,22:14,23
+P15|Talcahuano a Laja|20268,15,LAJA-TALCAHUANO,Domingo,Talcahuano a Laja,20268,Mercado,21:29,21:32,EL ARENAL,21:32,21:29,2
+P15|Talcahuano a Laja|20857,15,LAJA-TALCAHUANO,Domingo,Talcahuano a Laja,20857,Mercado,8:30,8:33,LAJA,10:48,10:42,23
