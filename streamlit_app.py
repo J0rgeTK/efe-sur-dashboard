@@ -1109,22 +1109,99 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
 # GRÁFICOS — Perfil de carga
 # =========================================================
 
+PROFILE_STATION_SEQUENCES = {
+    "l1": {
+        "hq-th": [
+            "Hualqui", "La Leonera", "Manquimavida", "Pedro Medina", "Chiguayante",
+            "Concepcion", "Lzo. Arenas", "UTF Santa Maria", "Los Condores",
+            "Higueras", "El Arenal", "Mercado",
+        ],
+        "th-hq": [
+            "Mercado", "El Arenal", "Higueras", "Los Condores", "UTF Santa Maria",
+            "Lzo. Arenas", "Concepcion", "Chiguayante", "Pedro Medina",
+            "Manquimavida", "La Leonera", "Hualqui",
+        ],
+    },
+    "l2": {
+        "cw-cc": [
+            "Coronel", "Laguna Quinenco", "Cristo Redentor", "Huinca", "Los Canelos",
+            "Hito Galvarino", "Cdal. Raul Silva Henriquez", "Lomas Coloradas", "El Parque",
+            "Costa Mar", "Alborada", "Diagonal Bio Bio", "Juan Pablo II", "Concepcion",
+        ],
+        "cc-cw": [
+            "Concepcion", "Juan Pablo II", "Diagonal Bio Bio", "Alborada", "Costa Mar",
+            "El Parque", "Lomas Coloradas", "Cdal. Raul Silva Henriquez", "Hito Galvarino",
+            "Los Canelos", "Huinca", "Cristo Redentor", "Laguna Quinenco", "Coronel",
+        ],
+    },
+}
+
+
+def _normalize_direction_key(value: str) -> str:
+    raw = "" if value is None else str(value).strip().lower()
+    for token in ["→", "—", "–", "_", "/", "\\"]:
+        raw = raw.replace(token, "-")
+    raw = raw.replace(" ", "")
+    while "--" in raw:
+        raw = raw.replace("--", "-")
+    return raw.strip("-")
+
+
+def get_configured_station_order(linea: str, direccion: str, stations_present: list[str] | None = None) -> list:
+    line_key = normalize_text(linea).replace(" ", "")
+    dir_key = _normalize_direction_key(direccion)
+    seq = PROFILE_STATION_SEQUENCES.get(line_key, {}).get(dir_key, [])
+    if not seq:
+        return []
+    if not stations_present:
+        return list(seq)
+
+    norm_to_actual = {}
+    for station in stations_present:
+        st = "" if station is None else str(station).strip()
+        if st:
+            norm_to_actual.setdefault(normalize_text(st), st)
+
+    ordered = [norm_to_actual[normalize_text(st)] for st in seq if normalize_text(st) in norm_to_actual]
+    extras = [st for st in stations_present if st not in ordered]
+    return ordered + extras
+
+
 def get_station_order_from_profile(df: pd.DataFrame) -> list:
     if df.empty or "estacion" not in df.columns:
         return []
+
     temp = df.copy()
-    temp["event_time"] = temp["t_arr_est"].fillna(temp["t_dep_est"])
     temp["estacion"] = temp["estacion"].fillna("").astype(str).str.strip()
     temp = temp[temp["estacion"] != ""]
     if temp.empty:
         return []
+
+    estaciones_presentes = list(dict.fromkeys(temp["estacion"].astype(str).tolist()))
+    linea = temp["linea"].dropna().astype(str).str.strip().iloc[0] if "linea" in temp.columns and not temp["linea"].dropna().empty else ""
+    direccion = temp["direccion"].dropna().astype(str).str.strip().iloc[0] if "direccion" in temp.columns and not temp["direccion"].dropna().empty else ""
+
+    configured_order = get_configured_station_order(linea, direccion, estaciones_presentes)
+    if configured_order:
+        return configured_order
+
+    if "event_time" in temp.columns:
+        temp["event_time"] = pd.to_datetime(temp["event_time"], errors="coerce")
+    else:
+        arr = pd.to_datetime(temp["t_arr_est"], errors="coerce") if "t_arr_est" in temp.columns else pd.Series(index=temp.index, dtype="datetime64[ns]")
+        dep = pd.to_datetime(temp["t_dep_est"], errors="coerce") if "t_dep_est" in temp.columns else pd.Series(index=temp.index, dtype="datetime64[ns]")
+        temp["event_time"] = arr.fillna(dep)
+
     if temp["event_time"].notna().any():
-        order = (temp.groupby("estacion", as_index=False)["event_time"]
-                 .min().sort_values(["event_time","estacion"]))["estacion"].tolist()
+        order = (
+            temp.groupby("estacion", as_index=False)["event_time"]
+            .min()
+            .sort_values(["event_time", "estacion"])["estacion"]
+            .tolist()
+        )
     else:
         order = temp["estacion"].tolist()
     return list(dict.fromkeys(order))
-
 
 
 
@@ -2421,12 +2498,7 @@ def render_perfil_carga():
 
     perfil_df, perfil_path, perfil_missing, perfil_files, perfil_status = load_profile_service_data(
         profile_srv, str(data_path))
-    if isinstance(perfil_df, pd.DataFrame) and "profile_schema" in perfil_df.columns:
-        profile_schema_values = perfil_df["profile_schema"].dropna().astype(str).unique().tolist()
-        profile_schema = "transactional" if "transactional" in profile_schema_values else "aggregated"
-    else:
-        profile_schema = "aggregated"
-
+    profile_schema = perfil_df.attrs.get("profile_schema", "aggregated") if isinstance(perfil_df, pd.DataFrame) else "aggregated"
     folder_name  = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("folder_candidates", ["perfil_carga"])[0]
     service_desc = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("description", "")
 
