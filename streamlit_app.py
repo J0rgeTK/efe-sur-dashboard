@@ -1727,25 +1727,39 @@ def build_service_transport_chart(summary_df: pd.DataFrame, title: str) -> go.Fi
         fig.update_layout(title=title, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, height=430)
         return fig
 
-    plot_df["servicio_label"] = plot_df["servicio_label"].astype(str)
-    service_order = plot_df["servicio_label"].tolist()
+    plot_df["servicio_label"] = plot_df["servicio_label"].astype(str).str.strip()
+    plot_df["hora_salida_fmt"] = plot_df["hora_salida_fmt"].fillna("-").astype(str)
+    plot_df["estacion_origen"] = plot_df["estacion_origen"].fillna("-").astype(str)
+
+    # Etiqueta unitaria del eje X para diferenciar claramente cada servicio.
+    # Si existieran servicios repetidos, se agrega un correlativo estable.
+    dup_rank = plot_df.groupby("servicio_label").cumcount() + 1
+    dup_total = plot_df.groupby("servicio_label")["servicio_label"].transform("size")
+    plot_df["servicio_base"] = "Srv. " + plot_df["servicio_label"]
+    plot_df["servicio_eje"] = np.where(
+        dup_total > 1,
+        plot_df["servicio_base"] + " (" + dup_rank.astype(str) + ")",
+        plot_df["servicio_base"],
+    )
+
+    service_order = plot_df["servicio_eje"].tolist()
     plot_df["pasajeros_label"] = plot_df["pasajeros_transportados"].apply(fmt_pax)
     plot_df["max_abordo_label"] = plot_df["max_abordo"].apply(fmt_pax)
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=plot_df["servicio_label"],
+        x=plot_df["servicio_eje"],
         y=plot_df["pasajeros_transportados"],
         marker_color=EFE_BLUE,
         text=plot_df["pasajeros_label"],
         textposition="outside",
-        customdata=plot_df[["hora_salida_fmt", "estacion_origen", "max_abordo_label"]].values,
+        customdata=plot_df[["servicio_label", "hora_salida_fmt", "estacion_origen", "max_abordo_label"]].values,
         hovertemplate=(
-            "<b>Servicio %{x}</b><br>"
-            "Hora salida: %{customdata[0]}<br>"
-            "Origen: %{customdata[1]}<br>"
+            "<b>Servicio %{customdata[0]}</b><br>"
+            "Hora salida: %{customdata[1]}<br>"
+            "Origen: %{customdata[2]}<br>"
             "Pasajeros transportados: %{y:,.0f}<br>"
-            "Máx. a bordo: %{customdata[2]}<extra></extra>"
+            "Máx. a bordo: %{customdata[3]}<extra></extra>"
         ),
         name="Pasajeros transportados",
     ))
@@ -1759,7 +1773,12 @@ def build_service_transport_chart(summary_df: pd.DataFrame, title: str) -> go.Fi
         title_font=dict(color=EFE_BLUE, size=16),
         showlegend=False,
     )
-    fig.update_xaxes(title="Servicio", categoryorder="array", categoryarray=service_order)
+    fig.update_xaxes(
+        title="Servicio",
+        tickangle=-90,
+        categoryorder="array",
+        categoryarray=service_order,
+    )
     fig.update_yaxes(title="Pasajeros transportados")
     return fig
 
