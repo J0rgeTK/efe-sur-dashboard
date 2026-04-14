@@ -603,7 +603,7 @@ PROFILE_SERVICE_CONFIG = {
     },
     "Llanquihue Puerto Montt": {
         "folder_candidates": ["perfil_lpm", "perfil_llanquihue_puerto_montt"],
-        "description": "Preparado para futura incorporación del formato de perfil de carga.",
+        "description": "Compatible con base transaccional tipo reporte de ventas/validaciones en CSV o XLSX.",
     },
 }
 
@@ -616,17 +616,23 @@ OD_SERVICE_CONFIG = {
 
 
 def _resolve_folder(service_name: str, config_dict: dict, data_path: Path) -> tuple[list, str]:
-    """Devuelve (csv_files, folder_path_str) buscando candidatos del config."""
+    """Devuelve (data_files, folder_path_str) buscando candidatos del config."""
     base = Path(__file__).resolve().parent
     config = config_dict.get(service_name, {})
     folder_names = config.get("folder_candidates", [])
     folder_name_default = folder_names[0] if folder_names else "data"
 
+    def _list_supported_files(folder: Path) -> list:
+        files = []
+        for pattern in ("*.csv", "*.xlsx", "*.xls"):
+            files.extend(folder.glob(pattern))
+        return sorted(files)
+
     for folder_name in folder_names:
         for root in [base, data_path]:
             candidate = root / folder_name
             if candidate.exists() and candidate.is_dir():
-                files = sorted(candidate.glob("*.csv"))
+                files = _list_supported_files(candidate)
                 if files:
                     return list(files), str(candidate)
 
@@ -719,6 +725,85 @@ def load_data():
     return kpis, iniciativas, personas, servicios, estaciones, afluencia_estacion, data_path
 
 
+
+
+def _read_tabular_profile_file(path: Path) -> pd.DataFrame:
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        return pd.read_csv(path, low_memory=False)
+    if suffix in (".xlsx", ".xls"):
+        return pd.read_excel(path)
+    raise ValueError(f"Formato no soportado: {suffix}")
+
+
+def _canonical_lpm_station_name(value: str) -> str:
+    norm = normalize_text(value).replace(".", "").replace(" ", "")
+    mapping = {
+        "lapaloma": "La Paloma",
+        "alerce": "Alerce",
+        "puertovaras": "Puerto Varas",
+        "llanquihue": "Llanquihue",
+    }
+    if norm in mapping:
+        return mapping[norm]
+    raw = "" if value is None else str(value).strip()
+    return raw.title() if raw else ""
+
+
+def _prepare_lpm_profile_from_raw(raw_df: pd.DataFrame) -> pd.DataFrame:
+    df = raw_df.copy()
+
+    df["Estado"] = df["Estado"].fillna("").astype(str).str.strip()
+    df = df[df["Estado"].str.lower().isin(["vendido", "validado"])].copy()
+    if df.empty:
+        return df
+
+    pair = df["Nombre viaje"].fillna("").astype(str).str.split(r"\s*-\s*", n=1, expand=True)
+    df["station_a"] = pair[0].apply(_canonical_lpm_station_name)
+    df["station_b"] = pair[1].apply(_canonical_lpm_station_name) if pair.shape[1] > 1 else ""
+
+    df["direccion"] = df["Sentido"].fillna("").astype(str).str.strip()
+    df["linea"] = "LPM"
+    df["t_entrada_viaje"] = pd.to_datetime(df["Boleto actualizado el"], errors="coerce", dayfirst=True)
+    df["t_salida_viaje"] = df["t_entrada_viaje"]
+    df["fecha"] = df["t_entrada_viaje"].dt.date
+    df["servicio_final"] = df["Servicio"]
+    df["servicio_label"] = df["Servicio"].apply(format_service_id)
+    df["profile_schema"] = "transactional"
+
+    origin_vals = []
+    dest_vals = []
+    for _, row in df.iterrows():
+        a = row.get("station_a", "")
+        b = row.get("station_b", "")
+        direccion = row.get("direccion", "")
+        seq = get_configured_station_order("LPM", direccion, [a, b])
+        if not seq:
+            seq = [x for x in [a, b] if x]
+        idx_map = {normalize_text(st): i for i, st in enumerate(seq)}
+
+        a_key = normalize_text(a)
+        b_key = normalize_text(b)
+        ia = idx_map.get(a_key)
+        ib = idx_map.get(b_key)
+
+        if ia is not None and ib is not None:
+            if ia <= ib:
+                origin_vals.append(a)
+                dest_vals.append(b)
+            else:
+                origin_vals.append(b)
+                dest_vals.append(a)
+        else:
+            origin_vals.append(a)
+            dest_vals.append(b)
+
+    df["origen"] = pd.Series(origin_vals, index=df.index).fillna("").astype(str).str.strip()
+    df["destino"] = pd.Series(dest_vals, index=df.index).fillna("").astype(str).str.strip()
+
+    df = df[(df["origen"] != "") & (df["destino"] != "")].copy()
+    df.attrs["profile_schema"] = "transactional"
+    return df
 @st.cache_data
 def load_profile_service_data(service_name: str, data_path_str: str):
     data_path = Path(data_path_str)
@@ -732,18 +817,21 @@ def load_profile_service_data(service_name: str, data_path_str: str):
         "origen", "destino", "servicio_final", "linea", "direccion",
         "t_entrada_viaje", "t_salida_viaje"
     ]
+    required_lpm_raw_cols = [
+        "Nombre viaje", "Servicio", "Estado", "Boleto actualizado el", "Sentido"
+    ]
 
-    csv_files, folder_path = _resolve_folder(service_name, PROFILE_SERVICE_CONFIG, data_path)
-    if not csv_files:
+    data_files, folder_path = _resolve_folder(service_name, PROFILE_SERVICE_CONFIG, data_path)
+    if not data_files:
         return pd.DataFrame(), folder_path, required_agg_cols, [], "no_data"
 
     frames, loaded = [], []
-    for f in csv_files:
+    for f in data_files:
         try:
-            temp = pd.read_csv(f, low_memory=False)
-            temp["archivo_origen"] = f.name
+            temp = _read_tabular_profile_file(Path(f))
+            temp["archivo_origen"] = Path(f).name
             frames.append(temp)
-            loaded.append(f.name)
+            loaded.append(Path(f).name)
         except Exception:
             continue
 
@@ -754,6 +842,9 @@ def load_profile_service_data(service_name: str, data_path_str: str):
 
     has_agg_schema = all(col in perfil_df.columns for col in required_agg_cols)
     has_tx_schema = all(col in perfil_df.columns for col in required_tx_cols)
+    has_lpm_raw_schema = service_name == "Llanquihue Puerto Montt" and all(
+        col in perfil_df.columns for col in required_lpm_raw_cols
+    )
 
     if has_agg_schema:
         perfil_df["fecha"] = pd.to_datetime(perfil_df["fecha"], errors="coerce").dt.date
@@ -806,11 +897,18 @@ def load_profile_service_data(service_name: str, data_path_str: str):
         perfil_df.attrs["profile_schema"] = "transactional"
         return perfil_df, folder_path, [], loaded, "ok"
 
+    if has_lpm_raw_schema:
+        perfil_df = _prepare_lpm_profile_from_raw(perfil_df)
+        perfil_df = perfil_df.dropna(subset=["fecha"]).copy()
+        perfil_df.attrs["profile_schema"] = "transactional"
+        return perfil_df, folder_path, [], loaded, "ok"
+
     missing = [c for c in required_agg_cols if c not in perfil_df.columns]
     if len(missing) == len(required_agg_cols):
         missing = [c for c in required_tx_cols if c not in perfil_df.columns]
+    if len(missing) == len(required_tx_cols):
+        missing = [c for c in required_lpm_raw_cols if c not in perfil_df.columns]
     return perfil_df, folder_path, missing, loaded, "unsupported_format"
-
 
 
 
@@ -1136,6 +1234,14 @@ PROFILE_STATION_SEQUENCES = {
             "Concepcion", "Juan Pablo II", "Diagonal Bio Bio", "Alborada", "Costa Mar",
             "El Parque", "Lomas Coloradas", "Cdal. Raul Silva Henriquez", "Hito Galvarino",
             "Los Canelos", "Huinca", "Cristo Redentor", "Laguna Quinenco", "Coronel",
+        ],
+    },
+    "lpm": {
+        "xp-nq": [
+            "La Paloma", "Alerce", "Puerto Varas", "Llanquihue",
+        ],
+        "nq-xp": [
+            "Llanquihue", "Puerto Varas", "Alerce", "La Paloma",
         ],
     },
 }
@@ -2591,7 +2697,7 @@ def render_perfil_carga():
         with sel_date_col:
             st.selectbox("📅 Fecha disponible", options=[], index=None,
                          placeholder="Sin fechas disponibles", key="perfil_fecha_selector_empty")
-        st.info(f"No se encontraron archivos CSV para <b>{profile_srv}</b>. "
+        st.info(f"No se encontraron archivos de perfil (CSV/XLSX) para <b>{profile_srv}</b>. "
                 f"Cree la carpeta <b>{folder_name}</b> y agregue los archivos diarios. "
                 f"Ruta buscada: <b>{perfil_path}</b>.", icon="ℹ️")
         st.markdown("</div></div>", unsafe_allow_html=True)
@@ -2794,7 +2900,7 @@ def render_od_estaciones():
         unsafe_allow_html=True)
 
     if od_status == "no_data" or od_df.empty:
-        st.info(f"No se encontraron archivos CSV en <b>{folder_name}</b>. Ruta buscada: <b>{od_path}</b>.", icon="ℹ️")
+        st.info(f"No se encontraron archivos OD en <b>{folder_name}</b>. Ruta buscada: <b>{od_path}</b>.", icon="ℹ️")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
     if od_status == "unsupported_format" or od_missing:
