@@ -1249,8 +1249,8 @@ def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure
                               line=dict(color=SUCCESS, width=3), marker=dict(size=8),
                               hovertemplate="<b>%{x}</b><br>A bordo: %{y:,.0f}<extra></extra>"))
 
-    cap = pd.to_numeric(plot_df.get("capacidad_tren"), errors="coerce")
-    if cap.notna().any():
+    cap = pd.to_numeric(plot_df.get("capacidad_tren", pd.Series(index=plot_df.index, dtype=float)), errors="coerce")
+    if isinstance(cap, pd.Series) and cap.notna().any():
         capacidad = float(cap.dropna().iloc[0])
         fig.add_trace(go.Scatter(x=plot_df["estacion"], y=[capacidad]*len(plot_df),
                                   mode="lines", name="Capacidad",
