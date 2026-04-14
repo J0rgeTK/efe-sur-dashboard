@@ -1212,91 +1212,146 @@ def get_station_order_from_profile(df: pd.DataFrame) -> list:
 def build_transactional_service_profile(service_tx: pd.DataFrame) -> pd.DataFrame:
     """
     Reconstruye un perfil de carga por estación a partir de transacciones OD de un servicio.
+    El cálculo de pasajeros a bordo se realiza directamente desde la matriz OD,
+    respetando el orden operacional definido para cada línea y sentido.
     """
     tx = service_tx.copy()
+    empty_cols = [
+        "estacion", "t_arr_est", "t_dep_est", "B_embarque",
+        "D_bajadas", "L_in_abordo", "L_out_abordo", "servicio_label",
+        "linea", "direccion", "event_time"
+    ]
     if tx.empty:
-        return pd.DataFrame(columns=[
-            "estacion", "t_arr_est", "t_dep_est", "B_embarque",
-            "D_bajadas", "L_in_abordo", "L_out_abordo", "servicio_label"
-        ])
+        return pd.DataFrame(columns=empty_cols)
 
     tx["t_entrada_viaje"] = pd.to_datetime(tx["t_entrada_viaje"], errors="coerce")
     tx["t_salida_viaje"] = pd.to_datetime(tx["t_salida_viaje"], errors="coerce")
     tx["origen"] = tx["origen"].fillna("").astype(str).str.strip()
     tx["destino"] = tx["destino"].fillna("").astype(str).str.strip()
 
+    linea = str(tx["linea"].dropna().astype(str).iloc[0]).strip() if "linea" in tx.columns and not tx["linea"].dropna().empty else ""
+    direccion = str(tx["direccion"].dropna().astype(str).iloc[0]).strip() if "direccion" in tx.columns and not tx["direccion"].dropna().empty else ""
+    servicio_label = str(tx["servicio_label"].dropna().astype(str).iloc[0]).strip() if "servicio_label" in tx.columns and not tx["servicio_label"].dropna().empty else "-"
+
     entry_events = tx.loc[tx["origen"] != "", ["origen", "t_entrada_viaje"]].copy()
     entry_events.columns = ["estacion", "event_time"]
     exit_events = tx.loc[tx["destino"] != "", ["destino", "t_salida_viaje"]].copy()
     exit_events.columns = ["estacion", "event_time"]
+    station_events = pd.concat([entry_events, exit_events], ignore_index=True).dropna(subset=["event_time"])
 
-    station_events = pd.concat([entry_events, exit_events], ignore_index=True)
-    station_events = station_events.dropna(subset=["event_time"])
-    if station_events.empty:
-        return pd.DataFrame(columns=[
-            "estacion", "t_arr_est", "t_dep_est", "B_embarque",
-            "D_bajadas", "L_in_abordo", "L_out_abordo", "servicio_label"
-        ])
+    stations_present = list(dict.fromkeys(
+        tx.loc[tx["origen"] != "", "origen"].astype(str).tolist() +
+        tx.loc[tx["destino"] != "", "destino"].astype(str).tolist()
+    ))
 
-    station_order = (
-        station_events.groupby("estacion", as_index=False)["event_time"]
-        .median()
-        .sort_values(["event_time", "estacion"])
-        .rename(columns={"event_time": "station_time"})
-    )
+    configured_full = PROFILE_STATION_SEQUENCES.get(normalize_text(linea).replace(" ", ""), {}).get(_normalize_direction_key(direccion), [])
+    if configured_full:
+        norm_to_actual = {}
+        for st in stations_present:
+            st_clean = "" if st is None else str(st).strip()
+            if st_clean:
+                norm_to_actual.setdefault(normalize_text(st_clean), st_clean)
+        ordered_stations = [norm_to_actual.get(normalize_text(st), st) for st in configured_full]
+        extras = [st for st in stations_present if normalize_text(st) not in {normalize_text(x) for x in configured_full}]
+        if station_events.empty:
+            extras_ordered = extras
+        else:
+            extras_ordered = (
+                station_events.assign(station_key=normalize_series(station_events["estacion"]))
+                .groupby("station_key", as_index=False)["event_time"].median()
+                .sort_values(["event_time", "station_key"])["station_key"]
+                .tolist()
+            )
+            extras_lookup = {normalize_text(st): st for st in extras}
+            extras_ordered = [extras_lookup[k] for k in extras_ordered if k in extras_lookup]
+        order_list = ordered_stations + [st for st in extras_ordered if st not in ordered_stations]
+    else:
+        if station_events.empty:
+            return pd.DataFrame(columns=empty_cols)
+        order_list = (
+            station_events.groupby("estacion", as_index=False)["event_time"]
+            .median()
+            .sort_values(["event_time", "estacion"])["estacion"]
+            .tolist()
+        )
+
+    order_df = pd.DataFrame({"estacion": order_list, "station_idx": range(len(order_list))})
+    order_df["station_key"] = normalize_series(order_df["estacion"])
+    key_to_idx = dict(zip(order_df["station_key"], order_df["station_idx"]))
+
+    tx["origen_key"] = normalize_series(tx["origen"])
+    tx["destino_key"] = normalize_series(tx["destino"])
+    tx["origen_idx"] = tx["origen_key"].map(key_to_idx)
+    tx["destino_idx"] = tx["destino_key"].map(key_to_idx)
+
+    valid_tx = tx.dropna(subset=["origen_idx", "destino_idx"]).copy()
+    valid_tx["origen_idx"] = valid_tx["origen_idx"].astype(int)
+    valid_tx["destino_idx"] = valid_tx["destino_idx"].astype(int)
 
     board = (
-        tx.loc[tx["origen"] != ""]
-        .groupby("origen", as_index=False)
-        .size()
-        .rename(columns={"origen": "estacion", "size": "B_embarque"})
+        valid_tx.groupby("origen_idx", as_index=False)
+        .size().rename(columns={"size": "B_embarque", "origen_idx": "station_idx"})
     )
     alight = (
-        tx.loc[tx["destino"] != ""]
-        .groupby("destino", as_index=False)
-        .size()
-        .rename(columns={"destino": "estacion", "size": "D_bajadas"})
+        valid_tx.groupby("destino_idx", as_index=False)
+        .size().rename(columns={"size": "D_bajadas", "destino_idx": "station_idx"})
     )
     arr_times = (
-        tx.loc[tx["origen"] != ""]
-        .groupby("origen", as_index=False)["t_entrada_viaje"]
-        .median()
-        .rename(columns={"origen": "estacion", "t_entrada_viaje": "t_arr_est"})
+        valid_tx.groupby("origen_idx", as_index=False)["t_entrada_viaje"]
+        .median().rename(columns={"origen_idx": "station_idx", "t_entrada_viaje": "t_arr_est"})
     )
     dep_times = (
-        tx.loc[tx["destino"] != ""]
-        .groupby("destino", as_index=False)["t_salida_viaje"]
-        .median()
-        .rename(columns={"destino": "estacion", "t_salida_viaje": "t_dep_est"})
+        valid_tx.groupby("destino_idx", as_index=False)["t_salida_viaje"]
+        .median().rename(columns={"destino_idx": "station_idx", "t_salida_viaje": "t_dep_est"})
     )
 
     profile = (
-        station_order
-        .merge(board, how="left", on="estacion")
-        .merge(alight, how="left", on="estacion")
-        .merge(arr_times, how="left", on="estacion")
-        .merge(dep_times, how="left", on="estacion")
+        order_df.merge(board, how="left", on="station_idx")
+        .merge(alight, how="left", on="station_idx")
+        .merge(arr_times, how="left", on="station_idx")
+        .merge(dep_times, how="left", on="station_idx")
     )
     profile["B_embarque"] = pd.to_numeric(profile["B_embarque"], errors="coerce").fillna(0)
     profile["D_bajadas"] = pd.to_numeric(profile["D_bajadas"], errors="coerce").fillna(0)
 
-    net = (profile["B_embarque"] - profile["D_bajadas"]).cumsum()
-    profile["L_out_abordo"] = net.clip(lower=0)
-    profile["L_in_abordo"] = (profile["L_out_abordo"] - profile["B_embarque"] + profile["D_bajadas"]).clip(lower=0)
+    onboard_in = []
+    onboard_out = []
+    for i in profile["station_idx"]:
+        l_in = int(((valid_tx["origen_idx"] < i) & (valid_tx["destino_idx"] >= i)).sum())
+        l_out = int(((valid_tx["origen_idx"] <= i) & (valid_tx["destino_idx"] > i)).sum())
+        onboard_in.append(l_in)
+        onboard_out.append(l_out)
+    profile["L_in_abordo"] = onboard_in
+    profile["L_out_abordo"] = onboard_out
 
-    profile["t_arr_est"] = pd.to_datetime(profile["t_arr_est"], errors="coerce").fillna(profile["station_time"])
-    profile["t_dep_est"] = pd.to_datetime(profile["t_dep_est"], errors="coerce").fillna(profile["station_time"])
+    profile["t_arr_est"] = pd.to_datetime(profile["t_arr_est"], errors="coerce")
+    profile["t_dep_est"] = pd.to_datetime(profile["t_dep_est"], errors="coerce")
+    profile["event_time"] = profile["t_arr_est"].fillna(profile["t_dep_est"])
 
-    if "servicio_label" in tx.columns and not tx["servicio_label"].dropna().empty:
-        profile["servicio_label"] = str(tx["servicio_label"].dropna().astype(str).iloc[0])
-    else:
-        profile["servicio_label"] = "-"
-    if "linea" in tx.columns and not tx["linea"].dropna().empty:
-        profile["linea"] = str(tx["linea"].dropna().astype(str).iloc[0])
-    if "direccion" in tx.columns and not tx["direccion"].dropna().empty:
-        profile["direccion"] = str(tx["direccion"].dropna().astype(str).iloc[0])
+    # Para estaciones sin eventos observados, usar un tiempo sintético solo como apoyo visual
+    if profile["event_time"].isna().any():
+        base_time = None
+        non_null_times = pd.concat([valid_tx["t_entrada_viaje"], valid_tx["t_salida_viaje"]], ignore_index=True).dropna()
+        if not non_null_times.empty:
+            base_time = non_null_times.min().floor("min")
+        else:
+            base_time = pd.Timestamp("2000-01-01 00:00:00")
+        synthetic = [base_time + pd.Timedelta(minutes=int(idx)) for idx in profile["station_idx"]]
+        synthetic = pd.Series(synthetic, index=profile.index)
+        profile["event_time"] = profile["event_time"].fillna(synthetic)
+        profile["t_arr_est"] = profile["t_arr_est"].fillna(profile["event_time"])
+        profile["t_dep_est"] = profile["t_dep_est"].fillna(profile["event_time"])
 
-    return profile.sort_values(["station_time", "estacion"]).reset_index(drop=True)
+    profile["servicio_label"] = servicio_label
+    profile["linea"] = linea
+    profile["direccion"] = direccion
+
+    keep_cols = [
+        "estacion", "t_arr_est", "t_dep_est", "event_time", "B_embarque",
+        "D_bajadas", "L_in_abordo", "L_out_abordo", "servicio_label",
+        "linea", "direccion"
+    ]
+    return profile[keep_cols].copy()
 
 
 def build_transactional_profiles_for_subset(profile_tx_df: pd.DataFrame) -> pd.DataFrame:
@@ -1343,9 +1398,24 @@ def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure
                                   line=dict(color=TEXT_MUTED, width=2, dash="dash"),
                                   hovertemplate="Capacidad: %{y:,.0f}<extra></extra>"))
 
+    for _, row in plot_df.dropna(subset=["L_out_abordo"]).iterrows():
+        fig.add_annotation(
+            x=row["estacion"],
+            y=row["L_out_abordo"],
+            text=fmt_pax(row["L_out_abordo"]),
+            showarrow=False,
+            yshift=18,
+            font=dict(size=10, color=SUCCESS),
+            bgcolor="rgba(255,255,255,0.96)",
+            bordercolor=SUCCESS,
+            borderwidth=1,
+            borderpad=3,
+            align="center",
+        )
+
     fig.update_layout(
         title=titulo, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-        margin=dict(l=20,r=20,t=55,b=20), height=460, barmode="group",
+        margin=dict(l=20,r=20,t=55,b=20), height=500, barmode="group",
         font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
