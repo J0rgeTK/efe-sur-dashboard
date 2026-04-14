@@ -2706,11 +2706,28 @@ def render_perfil_carga():
                       if "capacidad_tren" in perfil_servicio.columns
                       and perfil_servicio["capacidad_tren"].dropna().any() else None)
 
+    servicios_realizados = perfil_dir["servicio_label"].nunique()
+    pasajeros_transportados = total_bajadas
+    tramo_max_abordo = "-"
+    l_out_series = pd.to_numeric(perfil_servicio.get("L_out_abordo"), errors="coerce")
+    if l_out_series.notna().any():
+        ordered_stations = [str(s) for s in station_order] if station_order else perfil_servicio["estacion"].astype(str).tolist()
+        max_idx = l_out_series.idxmax()
+        est_max = str(perfil_servicio.loc[max_idx, "estacion"])
+        if est_max in ordered_stations:
+            pos = ordered_stations.index(est_max)
+            if pos < len(ordered_stations) - 1:
+                tramo_max_abordo = f"{ordered_stations[pos]} - {ordered_stations[pos + 1]}"
+            elif pos > 0:
+                tramo_max_abordo = f"{ordered_stations[pos - 1]} - {ordered_stations[pos]}"
+            else:
+                tramo_max_abordo = est_max
+
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Servicios del día",      perfil_dir["servicio_label"].nunique())
-    m2.metric("Embarques del servicio", fmt_pax(total_embarque))
-    m3.metric("Bajadas del servicio",   fmt_pax(total_bajadas))
-    m4.metric("Máximo a bordo",         fmt_pax(max_abordo))
+    m1.metric(f"Servicios realizados ({linea_sel} | {dir_sel})", servicios_realizados)
+    m2.metric("Pasajeros transportados", fmt_pax(pasajeros_transportados))
+    m3.metric("Máximo a bordo", fmt_pax(max_abordo))
+    m4.metric("Tramo con máximo a bordo", tramo_max_abordo)
 
     titulo = f"{profile_srv} | {linea_sel} | {dir_sel} | Servicio {servicio_sel}"
     st.plotly_chart(build_perfil_carga_chart(perfil_servicio, titulo), use_container_width=True)
