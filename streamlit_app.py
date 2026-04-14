@@ -892,6 +892,181 @@ def load_od_service_data(service_name: str, data_path_str: str):
 
 
 
+
+
+@st.cache_data
+def load_itinerary_reference(data_path_str: str):
+    """
+    Carga la base de itinerario generada desde PDF.
+    Prioriza CSV en carpeta itinerarios/, pero también soporta el XLSX consolidado.
+    """
+    data_path = Path(data_path_str)
+    base = Path(__file__).resolve().parent
+    search_roots = [base / "itinerarios", data_path / "itinerarios", base, data_path, base / "data", base / "datos"]
+
+    summary_df = pd.DataFrame()
+    detail_df = pd.DataFrame()
+    found_path = None
+    found_files = []
+
+    def _safe_read_csv(path: Path):
+        try:
+            return pd.read_csv(path, low_memory=False)
+        except Exception:
+            return pd.DataFrame()
+
+    def _safe_read_xlsx(path: Path, sheet: str):
+        try:
+            return pd.read_excel(path, sheet_name=sheet)
+        except Exception:
+            return pd.DataFrame()
+
+    for root in search_roots:
+        if not root.exists():
+            continue
+        summary_csv = root / 'itinerario_resumen_servicios.csv'
+        detail_csv = root / 'itinerario_detalle_estaciones.csv'
+        xlsx_file   = root / 'itinerario_efe_sur_extraido.xlsx'
+
+        temp_summary = pd.DataFrame()
+        temp_detail = pd.DataFrame()
+        temp_files = []
+
+        if summary_csv.exists():
+            temp_summary = _safe_read_csv(summary_csv)
+            if not temp_summary.empty:
+                temp_files.append(summary_csv.name)
+        if detail_csv.exists():
+            temp_detail = _safe_read_csv(detail_csv)
+            if not temp_detail.empty:
+                temp_files.append(detail_csv.name)
+        if temp_summary.empty and xlsx_file.exists():
+            temp_summary = _safe_read_xlsx(xlsx_file, 'Resumen_servicios')
+            temp_detail = _safe_read_xlsx(xlsx_file, 'Detalle_estaciones')
+            if not temp_summary.empty:
+                temp_files.append(xlsx_file.name + '::Resumen_servicios')
+            if not temp_detail.empty:
+                temp_files.append(xlsx_file.name + '::Detalle_estaciones')
+
+        if not temp_summary.empty:
+            summary_df = temp_summary.copy()
+            detail_df = temp_detail.copy()
+            found_path = str(root)
+            found_files = temp_files
+            break
+
+    if summary_df.empty:
+        return pd.DataFrame(), pd.DataFrame(), '', [], 'no_data'
+
+    # Normalización mínima
+    for df in [summary_df, detail_df]:
+        if df.empty:
+            continue
+        for col in ['sector', 'tipo_dia', 'sentido', 'estacion_origen', 'estacion_terminal', 'estacion']:
+            if col in df.columns:
+                df[col] = df[col].fillna('').astype(str).str.strip()
+        if 'servicio' in df.columns:
+            df['servicio_label'] = df['servicio'].apply(format_service_id)
+
+    if 'hora_salida_origen' in summary_df.columns:
+        summary_df['hora_salida_origen_str'] = summary_df['hora_salida_origen'].fillna('').astype(str).str.strip()
+    if 'hora_llegada_term' in summary_df.columns:
+        summary_df['hora_llegada_term_str'] = summary_df['hora_llegada_term'].fillna('').astype(str).str.strip()
+
+    return summary_df, detail_df, found_path or '', found_files, 'ok'
+
+
+def infer_itinerary_day_filter(fecha_sel: date) -> str:
+    if fecha_sel.weekday() == 5:
+        return 'sabado'
+    if fecha_sel.weekday() == 6:
+        return 'domingo'
+    return 'lunes a viernes'
+
+
+def infer_itinerary_sector(profile_service: str, linea_sel: str) -> str | None:
+    if normalize_text(profile_service) != 'biotren':
+        return None
+    line_key = normalize_text(linea_sel).replace(' ', '')
+    if line_key == 'l2':
+        return 'CONCEPCIÓN-CORONEL'
+    if line_key == 'l1':
+        return 'LAJA-TALCAHUANO'
+    return None
+
+
+def infer_itinerary_sentido(linea_sel: str, direccion_sel: str) -> str | None:
+    line_key = normalize_text(linea_sel).replace(' ', '')
+    dir_key = _normalize_direction_key(direccion_sel)
+    if line_key == 'l2':
+        if dir_key == 'cw-cc':
+            return 'Coronel a Concepción'
+        if dir_key == 'cc-cw':
+            return 'Concepción a Coronel'
+    if line_key == 'l1':
+        if dir_key == 'hq-th':
+            return 'Laja a Talcahuano'
+        if dir_key == 'th-hq':
+            return 'Talcahuano a Laja'
+    return None
+
+
+def enrich_service_summary_with_itinerary(summary_df: pd.DataFrame,
+                                         itinerary_summary: pd.DataFrame,
+                                         profile_service: str,
+                                         linea_sel: str,
+                                         dir_sel: str,
+                                         fecha_sel: date) -> pd.DataFrame:
+    if summary_df.empty or itinerary_summary.empty:
+        return summary_df.copy()
+
+    enriched = summary_df.copy()
+    itin = itinerary_summary.copy()
+    itin['servicio_label'] = itin['servicio_label'].astype(str)
+    enriched['servicio_label'] = enriched['servicio_label'].astype(str)
+
+    day_filter = infer_itinerary_day_filter(fecha_sel)
+    sector = infer_itinerary_sector(profile_service, linea_sel)
+    sentido = infer_itinerary_sentido(linea_sel, dir_sel)
+
+    if sector and 'sector' in itin.columns:
+        itin = itin[normalize_series(itin['sector']) == normalize_text(sector)].copy()
+    if day_filter and 'tipo_dia' in itin.columns:
+        itin = itin[normalize_series(itin['tipo_dia']).str.contains(day_filter, regex=False)].copy()
+    if sentido and 'sentido' in itin.columns:
+        temp = itin[normalize_series(itin['sentido']) == normalize_text(sentido)].copy()
+        if not temp.empty:
+            itin = temp
+
+    if itin.empty:
+        return enriched
+
+    itin = itin.sort_values(['servicio_label', 'pagina_pdf']).drop_duplicates(subset=['servicio_label'], keep='first').copy()
+    join_cols = ['servicio_label']
+    extra_cols = [c for c in ['estacion_origen', 'hora_salida_origen_str', 'estacion_terminal', 'hora_llegada_term_str', 'tipo_dia', 'sentido', 'sector'] if c in itin.columns]
+    itin_small = itin[join_cols + extra_cols].copy()
+    itin_small = itin_small.rename(columns={
+        'estacion_origen': 'it_estacion_origen',
+        'hora_salida_origen_str': 'it_hora_salida',
+        'estacion_terminal': 'it_estacion_terminal',
+        'hora_llegada_term_str': 'it_hora_llegada_term',
+        'tipo_dia': 'it_tipo_dia',
+        'sentido': 'it_sentido',
+        'sector': 'it_sector',
+    })
+
+    enriched = enriched.merge(itin_small, how='left', on='servicio_label')
+    if 'it_estacion_origen' in enriched.columns:
+        enriched['estacion_origen'] = enriched['it_estacion_origen'].where(enriched['it_estacion_origen'].fillna('').astype(str).str.strip() != '', enriched['estacion_origen'])
+    if 'it_hora_salida' in enriched.columns:
+        base_date = pd.Timestamp(fecha_sel)
+        it_ts = pd.to_datetime(base_date.strftime('%Y-%m-%d') + ' ' + enriched['it_hora_salida'].fillna('').astype(str), errors='coerce')
+        enriched['hora_salida'] = it_ts.where(it_ts.notna(), enriched['hora_salida'])
+    enriched['hora_salida'] = pd.to_datetime(enriched['hora_salida'], errors='coerce')
+    enriched['hora_salida_fmt'] = enriched['hora_salida'].dt.strftime('%H:%M:%S').fillna('-')
+    enriched = enriched.sort_values(['hora_salida', 'servicio_label'], na_position='last').reset_index(drop=True)
+    return enriched
+
 # =========================================================
 # GRÁFICOS — KPIs y evolución
 # =========================================================
@@ -1463,6 +1638,129 @@ def build_perfil_abordo_comparativo_chart(day_df: pd.DataFrame, titulo: str) -> 
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
                      categoryarray=station_order or None)
     fig.update_yaxes(title="Pasajeros a bordo")
+    return fig
+
+
+def build_service_level_summary(profile_subset: pd.DataFrame, profile_schema: str) -> pd.DataFrame:
+    columns = [
+        "servicio_label", "hora_salida", "hora_salida_fmt", "estacion_origen",
+        "pasajeros_transportados", "max_abordo"
+    ]
+    if profile_subset.empty:
+        return pd.DataFrame(columns=columns)
+
+    summaries = []
+    for servicio_label, svc_df in profile_subset.groupby("servicio_label", sort=False):
+        svc_df = svc_df.copy()
+        if profile_schema == "transactional":
+            profile = build_transactional_service_profile(svc_df)
+        else:
+            profile = svc_df.copy()
+            if "event_time" not in profile.columns:
+                arr = pd.to_datetime(profile["t_arr_est"], errors="coerce") if "t_arr_est" in profile.columns else pd.Series(index=profile.index, dtype="datetime64[ns]")
+                dep = pd.to_datetime(profile["t_dep_est"], errors="coerce") if "t_dep_est" in profile.columns else pd.Series(index=profile.index, dtype="datetime64[ns]")
+                profile["event_time"] = arr.fillna(dep)
+        if profile.empty:
+            continue
+
+        station_order = get_station_order_from_profile(profile)
+        if station_order:
+            origin_station = str(station_order[0])
+        elif "estacion" in profile.columns and not profile["estacion"].dropna().empty:
+            origin_station = str(profile["estacion"].dropna().astype(str).iloc[0]).strip()
+        else:
+            origin_station = "-"
+
+        departure_ts = pd.NaT
+        if profile_schema == "transactional":
+            if origin_station != "-" and "origen" in svc_df.columns:
+                origin_mask = normalize_series(svc_df["origen"]) == normalize_text(origin_station)
+                departure_candidates = pd.to_datetime(svc_df.loc[origin_mask, "t_entrada_viaje"], errors="coerce").dropna()
+                if not departure_candidates.empty:
+                    departure_ts = departure_candidates.min()
+            if pd.isna(departure_ts) and "event_time" in profile.columns:
+                fallback = pd.to_datetime(profile["event_time"], errors="coerce").dropna()
+                if not fallback.empty:
+                    departure_ts = fallback.min()
+        else:
+            ordered_profile = profile.copy()
+            if station_order and "estacion" in ordered_profile.columns:
+                ordered_profile["estacion"] = pd.Categorical(ordered_profile["estacion"], categories=station_order, ordered=True)
+                sort_cols = ["estacion"]
+                if "event_time" in ordered_profile.columns:
+                    sort_cols.append("event_time")
+                ordered_profile = ordered_profile.sort_values(sort_cols)
+            if not ordered_profile.empty:
+                first_row = ordered_profile.iloc[0]
+                for col in ["t_dep_est", "t_arr_est", "event_time"]:
+                    if col in ordered_profile.columns:
+                        ts = pd.to_datetime(first_row[col], errors="coerce")
+                        if pd.notna(ts):
+                            departure_ts = ts
+                            break
+
+        pasajeros_transportados = float(pd.to_numeric(profile.get("D_bajadas"), errors="coerce").fillna(0).sum()) if "D_bajadas" in profile.columns else 0.0
+        max_abordo = float(pd.to_numeric(profile.get("L_out_abordo"), errors="coerce").dropna().max()) if "L_out_abordo" in profile.columns and pd.to_numeric(profile.get("L_out_abordo"), errors="coerce").notna().any() else np.nan
+
+        summaries.append({
+            "servicio_label": str(servicio_label),
+            "hora_salida": departure_ts,
+            "estacion_origen": origin_station,
+            "pasajeros_transportados": pasajeros_transportados,
+            "max_abordo": max_abordo,
+        })
+
+    summary_df = pd.DataFrame(summaries)
+    if summary_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    summary_df["hora_salida"] = pd.to_datetime(summary_df["hora_salida"], errors="coerce")
+    summary_df = summary_df.sort_values(["hora_salida", "servicio_label"], na_position="last").reset_index(drop=True)
+    summary_df["hora_salida_fmt"] = summary_df["hora_salida"].dt.strftime("%H:%M:%S").fillna("-")
+    return summary_df
+
+
+def build_service_transport_chart(summary_df: pd.DataFrame, title: str) -> go.Figure:
+    plot_df = summary_df.copy()
+    if plot_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE, height=430)
+        return fig
+
+    plot_df["servicio_label"] = plot_df["servicio_label"].astype(str)
+    service_order = plot_df["servicio_label"].tolist()
+    plot_df["pasajeros_label"] = plot_df["pasajeros_transportados"].apply(fmt_pax)
+    plot_df["max_abordo_label"] = plot_df["max_abordo"].apply(fmt_pax)
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=plot_df["servicio_label"],
+        y=plot_df["pasajeros_transportados"],
+        marker_color=EFE_BLUE,
+        text=plot_df["pasajeros_label"],
+        textposition="outside",
+        customdata=plot_df[["hora_salida_fmt", "estacion_origen", "max_abordo_label"]].values,
+        hovertemplate=(
+            "<b>Servicio %{x}</b><br>"
+            "Hora salida: %{customdata[0]}<br>"
+            "Origen: %{customdata[1]}<br>"
+            "Pasajeros transportados: %{y:,.0f}<br>"
+            "Máx. a bordo: %{customdata[2]}<extra></extra>"
+        ),
+        name="Pasajeros transportados",
+    ))
+    fig.update_layout(
+        title=title,
+        plot_bgcolor=EFE_WHITE,
+        paper_bgcolor=EFE_WHITE,
+        margin=dict(l=20, r=20, t=55, b=20),
+        height=430,
+        font=dict(color=TEXT_MAIN),
+        title_font=dict(color=EFE_BLUE, size=16),
+        showlegend=False,
+    )
+    fig.update_xaxes(title="Servicio", categoryorder="array", categoryarray=service_order)
+    fig.update_yaxes(title="Pasajeros transportados")
     return fig
 
 # =========================================================
@@ -2583,8 +2881,9 @@ def render_perfil_carga():
     service_desc = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("description", "")
 
     schema_note = "Esquema detectado: transaccional por viaje." if profile_schema == "transactional" else "Esquema detectado: agregado por estación."
+    itinerary_note = "Itinerario de referencia: carpeta recomendada <b>itinerarios/</b> con los archivos <b>itinerario_resumen_servicios.csv</b> y opcionalmente <b>itinerario_detalle_estaciones.csv</b>. También se acepta el consolidado <b>itinerario_efe_sur_extraido.xlsx</b>."
     with info_col:
-        st.markdown(f"<div class='map-note'><b>Carpeta esperada:</b> {folder_name}<br>{service_desc}<br>{schema_note}</div>",
+        st.markdown(f"<div class='map-note'><b>Carpeta perfil:</b> {folder_name}<br>{service_desc}<br>{schema_note}<br><br>{itinerary_note}</div>",
                     unsafe_allow_html=True)
 
     if perfil_status in ("no_data",) or perfil_df.empty:
@@ -2675,14 +2974,14 @@ def render_perfil_carga():
     if profile_schema not in {"transactional", "aggregated"}:
         profile_schema = "transactional" if {"origen", "destino", "t_entrada_viaje", "t_salida_viaje"}.issubset(set(perfil_dir.columns)) else "aggregated"
 
+    itinerary_summary_df, itinerary_detail_df, itinerary_path, itinerary_files, itinerary_status = load_itinerary_reference(str(data_path))
+
     if profile_schema == "transactional":
         perfil_servicio_tx = perfil_dir[perfil_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
         perfil_servicio = build_transactional_service_profile(perfil_servicio_tx)
-        perfiles_comparativo = build_transactional_profiles_for_subset(perfil_dir)
     else:
         perfil_servicio = perfil_dir[perfil_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
         perfil_servicio["event_time"] = perfil_servicio["t_arr_est"].fillna(perfil_servicio["t_dep_est"])
-        perfiles_comparativo = perfil_dir.copy()
 
     if perfil_servicio.empty:
         st.warning("No fue posible reconstruir el perfil de carga para el servicio seleccionado.")
@@ -2706,7 +3005,17 @@ def render_perfil_carga():
                       if "capacidad_tren" in perfil_servicio.columns
                       and perfil_servicio["capacidad_tren"].dropna().any() else None)
 
-    servicios_realizados = perfil_dir["servicio_label"].nunique()
+    service_summary = build_service_level_summary(perfil_dir, profile_schema)
+    service_summary = enrich_service_summary_with_itinerary(
+        service_summary,
+        itinerary_summary_df,
+        profile_srv,
+        linea_sel,
+        dir_sel,
+        fecha_sel,
+    )
+
+    servicios_realizados = int(len(service_summary)) if not service_summary.empty else int(perfil_dir["servicio_label"].nunique())
     pasajeros_transportados = total_bajadas
     tramo_max_abordo = "-"
     l_out_series = pd.to_numeric(perfil_servicio.get("L_out_abordo"), errors="coerce")
@@ -2732,22 +3041,44 @@ def render_perfil_carga():
     titulo = f"{profile_srv} | {linea_sel} | {dir_sel} | Servicio {servicio_sel}"
     st.plotly_chart(build_perfil_carga_chart(perfil_servicio, titulo), use_container_width=True)
 
+    cap_msg = None
     if capacidad and pd.notna(max_abordo) and float(capacidad) != 0:
-        st.caption(f"Capacidad tren: {fmt_pax(capacidad)} · "
-                   f"Ocupación máxima: {fmt_pct((float(max_abordo)/float(capacidad))*100)}")
-    elif perfil_files:
-        st.caption(f"Archivos cargados: {len(perfil_files)} | carpeta: {perfil_path}")
+        cap_msg = f"Capacidad tren: {fmt_pax(capacidad)} · Ocupación máxima: {fmt_pct((float(max_abordo)/float(capacidad))*100)}"
+    ref_parts = []
+    if perfil_files:
+        ref_parts.append(f"Perfil: {len(perfil_files)} archivo(s) en {perfil_path}")
+    if itinerary_status == 'ok' and itinerary_files:
+        ref_parts.append(f"Itinerario: {len(itinerary_files)} archivo(s) en {itinerary_path}")
+    elif itinerary_status == 'no_data':
+        ref_parts.append("Itinerario no encontrado; se usa hora/origen inferidos desde las transacciones")
+    caption_parts = [x for x in [cap_msg] + ref_parts if x]
+    if caption_parts:
+        st.caption(" · ".join(caption_parts))
 
-    st.markdown("<div class='section-title'>Comparativo diario de pasajeros a bordo</div>",
-                unsafe_allow_html=True)
-    if perfiles_comparativo.empty:
-        st.info("No existen perfiles comparativos para el día seleccionado.")
+    st.markdown("<div class='section-title'>Pasajeros transportados por servicio</div>", unsafe_allow_html=True)
+    if service_summary.empty:
+        st.info("No existen servicios disponibles para resumir en el día seleccionado.")
     else:
-        fig_comp = build_perfil_abordo_comparativo_chart(
-            perfiles_comparativo, f"{profile_srv} | {linea_sel} | {dir_sel} | Todos los servicios")
-        st.plotly_chart(fig_comp, use_container_width=True)
+        fig_transport = build_service_transport_chart(
+            service_summary,
+            f"{profile_srv} | {linea_sel} | {dir_sel} | Pasajeros transportados por servicio",
+        )
+        st.plotly_chart(fig_transport, use_container_width=True)
 
-    st.markdown("<div class='section-title'>Detalle por estación</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Detalle por servicio</div>", unsafe_allow_html=True)
+    if service_summary.empty:
+        st.info("No existen detalles de servicios para el día seleccionado.")
+    else:
+        detalle_servicios = service_summary.copy()
+        detalle_servicios["Hora salida"] = detalle_servicios["hora_salida_fmt"]
+        detalle_servicios["Servicio"] = detalle_servicios["servicio_label"]
+        detalle_servicios["Estación origen"] = detalle_servicios["estacion_origen"]
+        detalle_servicios["Pasajeros transportados"] = detalle_servicios["pasajeros_transportados"].apply(fmt_pax)
+        detalle_servicios["Máximo a bordo"] = detalle_servicios["max_abordo"].apply(fmt_pax)
+        visible_cols = ["Servicio", "Hora salida", "Estación origen", "Pasajeros transportados", "Máximo a bordo"]
+        st.dataframe(detalle_servicios[visible_cols], use_container_width=True, hide_index=True)
+
+    st.markdown("<div class='section-title'>Detalle por estación del servicio seleccionado</div>", unsafe_allow_html=True)
     detalle_cols = ["estacion","t_arr_est","t_dep_est","B_embarque","D_bajadas",
                     "L_in_abordo","L_out_abordo","Capacidad_disponible","R_quedados",
                     "Q_out_cola","archivo_origen"]
