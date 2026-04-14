@@ -591,7 +591,7 @@ def get_bucket_order(bucket_values: list, granularity: str) -> list:
 PROFILE_SERVICE_CONFIG = {
     "Biotren": {
         "folder_candidates": ["perfil_bt", ".perfil-bt", ".perfil_bt"],
-        "description": "Formato base implementado para Biotren.",
+        "description": "Base transaccional por viaje para reconstruir embarques, bajadas y pasajeros a bordo por servicio.",
     },
     "Tren Araucanía": {
         "folder_candidates": ["perfil_ta", "perfil_tren_araucania"],
@@ -719,64 +719,21 @@ def load_data():
     return kpis, iniciativas, personas, servicios, estaciones, afluencia_estacion, data_path
 
 
+
 @st.cache_data
 def load_profile_service_data(service_name: str, data_path_str: str):
     data_path = Path(data_path_str)
-    required_cols = ["fecha","linea","direccion","servicio","estacion",
-                     "t_arr_est","t_dep_est","capacidad_tren","D_bajadas",
-                     "B_embarque","L_out_abordo"]
+
+    required_aggregated = ["fecha", "linea", "direccion", "servicio", "estacion",
+                           "t_arr_est", "t_dep_est", "capacidad_tren", "D_bajadas",
+                           "B_embarque", "L_out_abordo"]
+    required_transactional_base = ["origen", "destino", "servicio_final", "linea", "direccion"]
+    required_transactional_time_old = ["t_entrada_viaje", "t_salida_viaje"]
+    required_transactional_time_new = ["fecha_entrada", "fecha_salida"]
 
     csv_files, folder_path = _resolve_folder(service_name, PROFILE_SERVICE_CONFIG, data_path)
     if not csv_files:
-        return pd.DataFrame(), folder_path, required_cols, [], "no_data"
-
-    frames, loaded = [], []
-    for f in csv_files:
-        try:
-            temp = pd.read_csv(f)
-            temp["archivo_origen"] = f.name
-            frames.append(temp)
-            loaded.append(f.name)
-        except Exception:
-            continue
-
-    if not frames:
-        return pd.DataFrame(), folder_path, required_cols, loaded, "read_error"
-
-    perfil_df = pd.concat(frames, ignore_index=True)
-    missing = [c for c in required_cols if c not in perfil_df.columns]
-    if missing:
-        return perfil_df, folder_path, missing, loaded, "unsupported_format"
-
-    perfil_df["fecha"]      = pd.to_datetime(perfil_df["fecha"], errors="coerce").dt.date
-    perfil_df["linea"]      = perfil_df["linea"].fillna("").astype(str).str.strip()
-    perfil_df["direccion"]  = perfil_df["direccion"].fillna("").astype(str).str.strip()
-    perfil_df["estacion"]   = perfil_df["estacion"].fillna("").astype(str).str.strip()
-    perfil_df["servicio_label"] = perfil_df["servicio"].apply(format_service_id)
-
-    for tc in ["t_arr_est","t_dep_est"]:
-        perfil_df[tc] = pd.to_datetime(perfil_df[tc], errors="coerce")
-
-    for col in ["capacidad_tren","A_llegadas_anden","D_bajadas","Demanda_anden",
-                "Capacidad_disponible","B_embarque","R_quedados","Q_out_cola",
-                "L_in_abordo","L_out_abordo"]:
-        if col in perfil_df.columns:
-            perfil_df[col] = pd.to_numeric(perfil_df[col], errors="coerce")
-
-    return perfil_df.dropna(subset=["fecha"]).copy(), folder_path, [], loaded, "ok"
-
-
-@st.cache_data
-def load_od_service_data(service_name: str, data_path_str: str):
-    data_path = Path(data_path_str)
-    csv_files, folder_path = _resolve_folder(service_name, OD_SERVICE_CONFIG, data_path)
-
-    required_old = ["origen", "destino", "t_entrada_viaje", "t_salida_viaje"]
-    required_new = ["origen", "destino", "fecha_entrada", "fecha_salida"]
-    required_display = ["origen", "destino", "fecha_entrada", "fecha_salida"]
-
-    if not csv_files:
-        return pd.DataFrame(), folder_path, required_display, [], "no_data"
+        return pd.DataFrame(), folder_path, required_aggregated, [], "no_data"
 
     frames, loaded = [], []
     for f in csv_files:
@@ -789,45 +746,119 @@ def load_od_service_data(service_name: str, data_path_str: str):
             continue
 
     if not frames:
-        return pd.DataFrame(), folder_path, required_display, loaded, "read_error"
+        return pd.DataFrame(), folder_path, required_aggregated, loaded, "read_error"
+
+    perfil_df = pd.concat(frames, ignore_index=True)
+
+    has_aggregated = all(col in perfil_df.columns for col in required_aggregated)
+    has_transactional_base = all(col in perfil_df.columns for col in required_transactional_base)
+    has_transactional_old = all(col in perfil_df.columns for col in required_transactional_time_old)
+    has_transactional_new = all(col in perfil_df.columns for col in required_transactional_time_new)
+
+    if has_aggregated:
+        perfil_df["fecha"] = pd.to_datetime(perfil_df["fecha"], errors="coerce").dt.date
+        perfil_df["linea"] = perfil_df["linea"].fillna("").astype(str).str.strip()
+        perfil_df["direccion"] = perfil_df["direccion"].fillna("").astype(str).str.strip()
+        perfil_df["estacion"] = perfil_df["estacion"].fillna("").astype(str).str.strip()
+        perfil_df["servicio_label"] = perfil_df["servicio"].apply(format_service_id)
+
+        for tc in ["t_arr_est", "t_dep_est"]:
+            perfil_df[tc] = pd.to_datetime(perfil_df[tc], errors="coerce")
+
+        for col in ["capacidad_tren", "A_llegadas_anden", "D_bajadas", "Demanda_anden",
+                    "Capacidad_disponible", "B_embarque", "R_quedados", "Q_out_cola",
+                    "L_in_abordo", "L_out_abordo"]:
+            if col in perfil_df.columns:
+                perfil_df[col] = pd.to_numeric(perfil_df[col], errors="coerce")
+
+        perfil_df = perfil_df.dropna(subset=["fecha"]).copy()
+        perfil_df.attrs["profile_schema"] = "aggregated"
+        return perfil_df, folder_path, [], loaded, "ok"
+
+    if has_transactional_base and (has_transactional_old or has_transactional_new):
+        if has_transactional_old:
+            perfil_df["t_entrada_viaje"] = pd.to_datetime(perfil_df["t_entrada_viaje"], errors="coerce")
+            perfil_df["t_salida_viaje"] = pd.to_datetime(perfil_df["t_salida_viaje"], errors="coerce")
+        else:
+            perfil_df["t_entrada_viaje"] = pd.to_datetime(perfil_df["fecha_entrada"], errors="coerce")
+            perfil_df["t_salida_viaje"] = pd.to_datetime(perfil_df["fecha_salida"], errors="coerce")
+
+        perfil_df["fecha"] = (
+            pd.to_datetime(perfil_df["dia_proceso"], errors="coerce").dt.date
+            if "dia_proceso" in perfil_df.columns
+            else perfil_df["t_entrada_viaje"].dt.date
+        )
+        missing_fecha_mask = perfil_df["fecha"].isna()
+        if missing_fecha_mask.any():
+            perfil_df.loc[missing_fecha_mask, "fecha"] = perfil_df.loc[missing_fecha_mask, "t_salida_viaje"].dt.date
+
+        for col in ["origen", "destino", "linea", "direccion"]:
+            if col not in perfil_df.columns:
+                perfil_df[col] = ""
+            perfil_df[col] = perfil_df[col].fillna("").astype(str).str.strip()
+
+        perfil_df["servicio_label"] = perfil_df["servicio_final"].apply(format_service_id)
+
+        for col in ["tarjeta_id", "viaje_idx", "servicio_final"]:
+            if col in perfil_df.columns:
+                perfil_df[col] = pd.to_numeric(perfil_df[col], errors="coerce")
+
+        perfil_df = perfil_df.dropna(subset=["fecha"]).copy()
+        perfil_df.attrs["profile_schema"] = "transactional"
+        return perfil_df, folder_path, [], loaded, "ok"
+
+    missing = [c for c in required_transactional_base if c not in perfil_df.columns]
+    if not missing:
+        missing = [c for c in required_transactional_time_old if c not in perfil_df.columns]
+        if len(missing) == len(required_transactional_time_old):
+            missing = [c for c in required_transactional_time_new if c not in perfil_df.columns]
+    if not missing:
+        missing = [c for c in required_aggregated if c not in perfil_df.columns]
+
+    return perfil_df, folder_path, missing, loaded, "unsupported_format"
+
+
+
+@st.cache_data
+def load_od_service_data(service_name: str, data_path_str: str):
+    data_path = Path(data_path_str)
+    required_cols = ["origen","destino","linea","t_entrada_viaje","t_salida_viaje"]
+
+    csv_files, folder_path = _resolve_folder(service_name, OD_SERVICE_CONFIG, data_path)
+    if not csv_files:
+        return pd.DataFrame(), folder_path, required_cols, [], "no_data"
+
+    frames, loaded = [], []
+    for f in csv_files:
+        try:
+            temp = pd.read_csv(f, low_memory=False)
+            temp["archivo_origen"] = f.name
+            frames.append(temp)
+            loaded.append(f.name)
+        except Exception:
+            continue
+
+    if not frames:
+        return pd.DataFrame(), folder_path, required_cols, loaded, "read_error"
 
     od_df = pd.concat(frames, ignore_index=True)
-
-    has_new_schema = all(col in od_df.columns for col in required_new)
-    has_old_schema = all(col in od_df.columns for col in required_old)
-
-    if has_new_schema:
-        od_df["t_entrada_viaje"] = pd.to_datetime(od_df["fecha_entrada"], errors="coerce")
-        od_df["t_salida_viaje"] = pd.to_datetime(od_df["fecha_salida"], errors="coerce")
-    elif has_old_schema:
-        od_df["t_entrada_viaje"] = pd.to_datetime(od_df["t_entrada_viaje"], errors="coerce")
-        od_df["t_salida_viaje"] = pd.to_datetime(od_df["t_salida_viaje"], errors="coerce")
-    else:
-        missing = [c for c in required_display if c not in od_df.columns]
-        if not missing:
-            missing = [c for c in required_old if c not in od_df.columns]
+    missing = [c for c in required_cols if c not in od_df.columns]
+    if missing:
         return od_df, folder_path, missing, loaded, "unsupported_format"
 
-    for col in ["origen", "destino", "direccion", "linea", "linea_entrada", "linea_salida"]:
+    for col in ["origen","destino","linea","direccion"]:
         if col not in od_df.columns:
             od_df[col] = ""
         od_df[col] = od_df[col].fillna("").astype(str).str.strip()
 
-    if od_df["linea"].eq("").all():
-        od_df["linea"] = np.where(
-            od_df["linea_entrada"].astype(str) == od_df["linea_salida"].astype(str),
-            od_df["linea_entrada"].astype(str),
-            (od_df["linea_entrada"].astype(str) + "→" + od_df["linea_salida"].astype(str)).str.strip("→"),
-        )
+    od_df["t_entrada_viaje"] = pd.to_datetime(od_df["t_entrada_viaje"], errors="coerce")
+    od_df["t_salida_viaje"]  = pd.to_datetime(od_df["t_salida_viaje"],  errors="coerce")
 
-    od_df["fecha"] = od_df["t_entrada_viaje"].dt.date
-    missing_fecha_mask = od_df["fecha"].isna()
-    if missing_fecha_mask.any():
-        od_df.loc[missing_fecha_mask, "fecha"] = od_df.loc[missing_fecha_mask, "t_salida_viaje"].dt.date
-
-    if "dia_proceso" in od_df.columns:
-        dia_proceso = pd.to_datetime(od_df["dia_proceso"], errors="coerce").dt.date
-        od_df["fecha"] = od_df["fecha"].where(pd.Series(od_df["fecha"]).notna(), dia_proceso)
+    od_df["fecha"] = (
+        pd.to_datetime(od_df["dia_proceso"], errors="coerce").dt.date
+        if "dia_proceso" in od_df.columns
+        else od_df["t_entrada_viaje"].dt.date
+    )
 
     if "servicio_final" in od_df.columns:
         od_df["servicio_label"] = od_df["servicio_final"].apply(format_service_id)
@@ -836,12 +867,11 @@ def load_od_service_data(service_name: str, data_path_str: str):
     else:
         od_df["servicio_label"] = "-"
 
-    for col in ["tarjeta_id", "viaje_idx", "terminal_entrada", "terminal_salida"]:
+    for col in ["tarjeta_id","viaje_idx"]:
         if col in od_df.columns:
             od_df[col] = pd.to_numeric(od_df[col], errors="coerce")
 
     return od_df.dropna(subset=["fecha"]).copy(), folder_path, [], loaded, "ok"
-
 
 
 # =========================================================
@@ -1030,7 +1060,16 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
     else:
         plot_df["marker_size"] = 14
 
-    bounds = compute_map_bounds(plot_df)
+    bounds = compute_map_bounds(plot_df.rename(columns={"latitud":"lat_float","longitud":"lon_float"})
+                                 if "lat_float" not in plot_df.columns
+                                 else plot_df)
+    # Si compute_map_bounds necesita lat_float/lon_float, usamos copia renombrada
+    lat_min = float(plot_df["latitud"].min()); lat_max = float(plot_df["latitud"].max())
+    lon_min = float(plot_df["longitud"].min()); lon_max = float(plot_df["longitud"].max())
+    lat_pad = max((lat_max-lat_min)*0.18, 0.015)
+    lon_pad = max((lon_max-lon_min)*0.70, 0.04)
+    bounds  = dict(west=lon_min-lon_pad, east=lon_max+lon_pad,
+                   south=lat_min-lat_pad, north=lat_max+lat_pad)
 
     fig = go.Figure()
     fig.add_trace(go.Scattermapbox(
@@ -1080,6 +1119,114 @@ def get_station_order_from_profile(df: pd.DataFrame) -> list:
     else:
         order = temp["estacion"].tolist()
     return list(dict.fromkeys(order))
+
+
+
+
+def build_transactional_service_profile(service_tx: pd.DataFrame) -> pd.DataFrame:
+    """
+    Reconstruye un perfil de carga por estación a partir de transacciones OD de un servicio.
+    """
+    tx = service_tx.copy()
+    if tx.empty:
+        return pd.DataFrame(columns=[
+            "estacion", "t_arr_est", "t_dep_est", "B_embarque",
+            "D_bajadas", "L_in_abordo", "L_out_abordo", "servicio_label"
+        ])
+
+    tx["t_entrada_viaje"] = pd.to_datetime(tx["t_entrada_viaje"], errors="coerce")
+    tx["t_salida_viaje"] = pd.to_datetime(tx["t_salida_viaje"], errors="coerce")
+    tx["origen"] = tx["origen"].fillna("").astype(str).str.strip()
+    tx["destino"] = tx["destino"].fillna("").astype(str).str.strip()
+
+    entry_events = tx.loc[tx["origen"] != "", ["origen", "t_entrada_viaje"]].copy()
+    entry_events.columns = ["estacion", "event_time"]
+    exit_events = tx.loc[tx["destino"] != "", ["destino", "t_salida_viaje"]].copy()
+    exit_events.columns = ["estacion", "event_time"]
+
+    station_events = pd.concat([entry_events, exit_events], ignore_index=True)
+    station_events = station_events.dropna(subset=["event_time"])
+    if station_events.empty:
+        return pd.DataFrame(columns=[
+            "estacion", "t_arr_est", "t_dep_est", "B_embarque",
+            "D_bajadas", "L_in_abordo", "L_out_abordo", "servicio_label"
+        ])
+
+    station_order = (
+        station_events.groupby("estacion", as_index=False)["event_time"]
+        .median()
+        .sort_values(["event_time", "estacion"])
+        .rename(columns={"event_time": "station_time"})
+    )
+
+    board = (
+        tx.loc[tx["origen"] != ""]
+        .groupby("origen", as_index=False)
+        .size()
+        .rename(columns={"origen": "estacion", "size": "B_embarque"})
+    )
+    alight = (
+        tx.loc[tx["destino"] != ""]
+        .groupby("destino", as_index=False)
+        .size()
+        .rename(columns={"destino": "estacion", "size": "D_bajadas"})
+    )
+    arr_times = (
+        tx.loc[tx["origen"] != ""]
+        .groupby("origen", as_index=False)["t_entrada_viaje"]
+        .median()
+        .rename(columns={"origen": "estacion", "t_entrada_viaje": "t_arr_est"})
+    )
+    dep_times = (
+        tx.loc[tx["destino"] != ""]
+        .groupby("destino", as_index=False)["t_salida_viaje"]
+        .median()
+        .rename(columns={"destino": "estacion", "t_salida_viaje": "t_dep_est"})
+    )
+
+    profile = (
+        station_order
+        .merge(board, how="left", on="estacion")
+        .merge(alight, how="left", on="estacion")
+        .merge(arr_times, how="left", on="estacion")
+        .merge(dep_times, how="left", on="estacion")
+    )
+    profile["B_embarque"] = pd.to_numeric(profile["B_embarque"], errors="coerce").fillna(0)
+    profile["D_bajadas"] = pd.to_numeric(profile["D_bajadas"], errors="coerce").fillna(0)
+
+    net = (profile["B_embarque"] - profile["D_bajadas"]).cumsum()
+    profile["L_out_abordo"] = net.clip(lower=0)
+    profile["L_in_abordo"] = (profile["L_out_abordo"] - profile["B_embarque"] + profile["D_bajadas"]).clip(lower=0)
+
+    profile["t_arr_est"] = pd.to_datetime(profile["t_arr_est"], errors="coerce").fillna(profile["station_time"])
+    profile["t_dep_est"] = pd.to_datetime(profile["t_dep_est"], errors="coerce").fillna(profile["station_time"])
+
+    if "servicio_label" in tx.columns and not tx["servicio_label"].dropna().empty:
+        profile["servicio_label"] = str(tx["servicio_label"].dropna().astype(str).iloc[0])
+    else:
+        profile["servicio_label"] = "-"
+    if "linea" in tx.columns and not tx["linea"].dropna().empty:
+        profile["linea"] = str(tx["linea"].dropna().astype(str).iloc[0])
+    if "direccion" in tx.columns and not tx["direccion"].dropna().empty:
+        profile["direccion"] = str(tx["direccion"].dropna().astype(str).iloc[0])
+
+    return profile.sort_values(["station_time", "estacion"]).reset_index(drop=True)
+
+
+def build_transactional_profiles_for_subset(profile_tx_df: pd.DataFrame) -> pd.DataFrame:
+    profiles = []
+    if profile_tx_df.empty:
+        return pd.DataFrame()
+
+    for servicio_label, svc_df in profile_tx_df.groupby("servicio_label", sort=False):
+        profile = build_transactional_service_profile(svc_df)
+        if not profile.empty:
+            profiles.append(profile)
+
+    if not profiles:
+        return pd.DataFrame()
+
+    return pd.concat(profiles, ignore_index=True)
 
 
 def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure:
@@ -1574,159 +1721,120 @@ def build_station_activity_map(activity_df: pd.DataFrame, station_ref: pd.DataFr
     return fig
 
 
-def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
-                        station_ref: pd.DataFrame, selected_station: str,
-                        title_text: str, bubble_color: str) -> go.Figure | None:
-    """
-    Mapa de burbujas para mostrar todos los puntos de origen/destino asociados
-    a la estación seleccionada, evitando la sobrecarga visual de líneas OD.
-    """
+def build_od_connection_map(destinos_df: pd.DataFrame, origenes_df: pd.DataFrame,
+                              station_ref: pd.DataFrame, selected_station: str,
+                              bucket_label: str) -> go.Figure | None:
     if station_ref is None or station_ref.empty:
         return None
-    if flow_df is None:
-        flow_df = pd.DataFrame(columns=[category_col, "viajes"])
 
     ref = station_ref.copy()
     ref["station_key"] = ref["station_key"].astype(str)
-    selected_key = normalize_text(selected_station)
-    selected_df = ref[ref["station_key"] == selected_key].copy()
-    if selected_df.empty:
+    station_key = normalize_text(selected_station)
+    node_df = ref[ref["station_key"] == station_key].copy()
+    if node_df.empty:
         return None
-    selected_row = selected_df.iloc[0]
 
-    plot_df = flow_df.copy()
-    if category_col not in plot_df.columns:
-        plot_df[category_col] = []
-    if "viajes" not in plot_df.columns:
-        plot_df["viajes"] = []
+    node = node_df.iloc[0]
+    all_markers = ref.copy()
+    all_markers["label_mapa"] = all_markers["estacion"].astype(str)
 
-    plot_df["station_key"] = normalize_series(plot_df[category_col]) if not plot_df.empty else pd.Series(dtype=str)
-    plot_df = plot_df.merge(
-        ref[["station_key", "estacion", "latitud", "longitud"]],
-        how="left", on="station_key", suffixes=("", "_ref")
-    )
-    plot_df = plot_df.dropna(subset=["latitud", "longitud"]).copy()
-
-    if not plot_df.empty and float(plot_df["viajes"].max()) > float(plot_df["viajes"].min()):
-        plot_df["marker_size"] = 12 + ((plot_df["viajes"] - plot_df["viajes"].min()) /
-                                        (plot_df["viajes"].max() - plot_df["viajes"].min())) * 20
-    else:
-        plot_df["marker_size"] = 16 if not plot_df.empty else pd.Series(dtype=float)
-
-    all_points = pd.concat([
-        pd.DataFrame([{
-            "estacion": selected_station,
-            "latitud": float(selected_row["latitud"]),
-            "longitud": float(selected_row["longitud"]),
-        }]),
-        plot_df[["estacion", "latitud", "longitud"]] if not plot_df.empty else pd.DataFrame(columns=["estacion", "latitud", "longitud"]),
-    ], ignore_index=True).drop_duplicates(subset=["estacion"])
-
-    lat_min = float(all_points["latitud"].min()); lat_max = float(all_points["latitud"].max())
-    lon_min = float(all_points["longitud"].min()); lon_max = float(all_points["longitud"].max())
-    lat_pad = max((lat_max - lat_min) * 0.18, 0.015)
-    lon_pad = max((lon_max - lon_min) * 0.65, 0.04)
+    def scale_width(series, min_w=1.5, max_w=6.0):
+        if len(series) == 0:
+            return []
+        smin, smax = float(series.min()), float(series.max())
+        if smax <= smin:
+            return [3.0] * len(series)
+        return [min_w + ((float(v)-smin)/(smax-smin))*(max_w-min_w) for v in series]
 
     fig = go.Figure()
 
-    if not plot_df.empty:
-        fig.add_trace(go.Scattermapbox(
-            lat=plot_df["latitud"].astype(float),
-            lon=plot_df["longitud"].astype(float),
-            mode="markers+text",
-            text=plot_df["estacion"].astype(str),
-            textposition="top right",
-            textfont=dict(size=11, color=EFE_BLUE),
-            marker=dict(size=plot_df["marker_size"], color=bubble_color, opacity=0.72, sizemode="diameter"),
-            customdata=plot_df[["estacion", "viajes"]].values,
-            hovertemplate="<b>%{customdata[0]}</b><br>Viajes: %{customdata[1]:,.0f}<extra></extra>",
-            showlegend=False,
-        ))
+    if destinos_df is not None and not destinos_df.empty:
+        dest_plot = destinos_df.copy()
+        dest_plot["station_key"] = normalize_series(dest_plot["destino"])
+        dest_plot = dest_plot.merge(ref[["station_key","latitud","longitud","estacion"]],
+                                    how="left", on="station_key")
+        dest_plot = dest_plot.dropna(subset=["latitud","longitud"]).copy()
+        widths = scale_width(dest_plot["viajes"])
+        for (_, row), w in zip(dest_plot.iterrows(), widths):
+            fig.add_trace(go.Scattermapbox(
+                lat=[float(node["latitud"]), float(row["latitud"])],
+                lon=[float(node["longitud"]), float(row["longitud"])],
+                mode="lines", line=dict(width=w, color=EFE_BLUE), opacity=0.65,
+                hovertemplate=f"<b>{selected_station}</b> → <b>{row['destino']}</b><br>Viajes: {int(row['viajes']):,}".replace(",",".") + "<extra></extra>",
+                showlegend=False,
+            ))
+
+    if origenes_df is not None and not origenes_df.empty:
+        ori_plot = origenes_df.copy()
+        ori_plot["station_key"] = normalize_series(ori_plot["origen"])
+        ori_plot = ori_plot.merge(ref[["station_key","latitud","longitud","estacion"]],
+                                   how="left", on="station_key")
+        ori_plot = ori_plot.dropna(subset=["latitud","longitud"]).copy()
+        widths = scale_width(ori_plot["viajes"])
+        for (_, row), w in zip(ori_plot.iterrows(), widths):
+            fig.add_trace(go.Scattermapbox(
+                lat=[float(row["latitud"]), float(node["latitud"])],
+                lon=[float(row["longitud"]), float(node["longitud"])],
+                mode="lines", line=dict(width=w, color=EFE_RED), opacity=0.6,
+                hovertemplate=f"<b>{row['origen']}</b> → <b>{selected_station}</b><br>Viajes: {int(row['viajes']):,}".replace(",",".") + "<extra></extra>",
+                showlegend=False,
+            ))
+
+    marker_sizes = [15 if est == str(selected_station) else 9
+                    for est in all_markers["estacion"].astype(str).tolist()]
+    marker_colors = [WARNING if est == str(selected_station) else EFE_BLUE
+                     for est in all_markers["estacion"].astype(str).tolist()]
 
     fig.add_trace(go.Scattermapbox(
-        lat=[float(selected_row["latitud"])],
-        lon=[float(selected_row["longitud"])],
-        mode="markers+text",
-        text=[str(selected_station)],
-        textposition="top right",
-        textfont=dict(size=12, color=EFE_BLUE),
-        marker=dict(size=18, color=WARNING, opacity=0.95, sizemode="diameter"),
-        hovertemplate=f"<b>{selected_station}</b><extra></extra>",
-        showlegend=False,
+        lat=all_markers["latitud"].astype(float), lon=all_markers["longitud"].astype(float),
+        mode="markers+text", text=all_markers["label_mapa"], textposition="top right",
+        textfont=dict(size=11, color=EFE_BLUE),
+        marker=dict(size=marker_sizes, color=marker_colors, opacity=0.88, sizemode="diameter"),
+        hovertemplate="<b>%{text}</b><extra></extra>", showlegend=False,
     ))
 
+    lat_min = float(all_markers["latitud"].min()); lat_max = float(all_markers["latitud"].max())
+    lon_min = float(all_markers["longitud"].min()); lon_max = float(all_markers["longitud"].max())
+    lat_pad = max((lat_max-lat_min)*0.18, 0.015)
+    lon_pad = max((lon_max-lon_min)*0.65, 0.04)
+
     fig.update_layout(
-        title=title_text,
+        title=f"Relaciones OD desde/hacia {selected_station} | {bucket_label}",
         mapbox=dict(
             style="white-bg",
-            layers=[dict(
-                sourcetype="raster",
-                source=["https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png"],
-                below="traces",
-            )],
-            bounds=dict(
-                west=lon_min - lon_pad,
-                east=lon_max + lon_pad,
-                south=lat_min - lat_pad,
-                north=lat_max + lat_pad,
-            ),
+            layers=[dict(sourcetype="raster",
+                         source=["https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png"],
+                         below="traces")],
+            bounds=dict(west=lon_min-lon_pad, east=lon_max+lon_pad,
+                        south=lat_min-lat_pad, north=lat_max+lat_pad),
         ),
-        margin=dict(l=0, r=0, t=45, b=0),
-        height=460,
-        paper_bgcolor=EFE_WHITE,
-        font=dict(color=TEXT_MAIN),
+        margin=dict(l=0,r=0,t=45,b=0), height=470,
+        paper_bgcolor=EFE_WHITE, font=dict(color=TEXT_MAIN),
         title_font=dict(color=EFE_BLUE, size=16),
     )
     return fig
 
 
-def build_od_station_bar_chart(flow_df: pd.DataFrame, category_col: str,
-                               station_ref: pd.DataFrame, title: str,
-                               bar_color: str) -> go.Figure | None:
-    """
-    Distribución de viajes por estación mostrando todas las estaciones relevantes
-    y usando orden de trazado cuando exista.
-    """
-    if flow_df is None or flow_df.empty:
+def build_top_od_bar_chart(df: pd.DataFrame, category_col: str,
+                             title: str, color: str) -> go.Figure | None:
+    if df is None or df.empty:
         return None
-
-    plot_df = flow_df.copy()
-    plot_df[category_col] = plot_df[category_col].fillna("").astype(str).str.strip()
-    plot_df = plot_df[plot_df[category_col] != ""].copy()
-    if plot_df.empty:
-        return None
-
-    order_input = plot_df.rename(columns={category_col: "estacion", "viajes": "total"})[["estacion", "total"]].copy()
-    station_order = resolve_station_order_from_reference(order_input, station_ref)
-    if station_order:
-        plot_df[category_col] = pd.Categorical(plot_df[category_col], categories=station_order, ordered=True)
-        plot_df = plot_df.sort_values(category_col)
-
-    total_viajes = float(plot_df["viajes"].sum()) if not plot_df.empty else 0.0
-    plot_df["participacion"] = np.where(total_viajes > 0, plot_df["viajes"] / total_viajes * 100, 0.0)
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=plot_df[category_col],
-        y=plot_df["viajes"],
-        marker_color=bar_color,
-        hovertemplate="<b>%{x}</b><br>Viajes: %{y:,.0f}<br>Participación: %{customdata:.1f}%<extra></extra>",
-        customdata=plot_df["participacion"],
-        name="Viajes",
+    plot_df = df.copy().head(10).sort_values("viajes", ascending=True)
+    fig = go.Figure(go.Bar(
+        x=plot_df["viajes"], y=plot_df[category_col], orientation="h",
+        marker_color=color,
+        text=plot_df["viajes"].apply(lambda x: f"{int(x):,}".replace(",",".")),
+        textposition="outside",
+        hovertemplate="%{y}<br>Viajes: %{x:,.0f}<extra></extra>",
     ))
     fig.update_layout(
-        title=title,
-        plot_bgcolor=EFE_WHITE,
-        paper_bgcolor=EFE_WHITE,
-        margin=dict(l=20, r=20, t=50, b=20),
-        height=340,
-        font=dict(color=TEXT_MAIN),
-        title_font=dict(color=EFE_BLUE, size=16),
-        showlegend=False,
+        title=title, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
+        margin=dict(l=20,r=20,t=50,b=20), height=320,
+        font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
     )
-    fig.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=station_order or None)
-    fig.update_yaxes(title="Viajes")
+    fig.update_xaxes(title="Viajes")
     return fig
+
 
 # =========================================================
 # CARGA INICIAL
@@ -1885,8 +1993,8 @@ with st.container():
     st.markdown("<div class='nav-panel'>", unsafe_allow_html=True)
     section_sel = option_selector(
         "Navegación",
-        ["KPIs por Servicio","Personas","Estaciones","Perfil de Carga","OD Estaciones"],
-        key="main_nav_selector", default="KPIs por Servicio", horizontal=True,
+        ["Resumen ejecutivo","KPIs","Personas","Estaciones","Perfil de Carga","OD Estaciones"],
+        key="main_nav_selector", default="Resumen ejecutivo", horizontal=True,
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1897,8 +2005,8 @@ with st.container():
 
 def render_resumen_ejecutivo():
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>KPIs por Servicio</div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-subtitle'>KPIs del período por servicio y evolución histórica del indicador seleccionado.</div>",
+    st.markdown("<div class='section-title'>Resumen ejecutivo</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-subtitle'>Síntesis de KPIs del período y evolución histórica con tendencia.</div>",
                 unsafe_allow_html=True)
 
     servicios_con_datos = [s for s in servicios_sel
@@ -1960,10 +2068,20 @@ def render_resumen_ejecutivo():
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
+    # Gráfico con tendencia (nuevo)
     hist_plot = hist_sel.groupby("periodo", as_index=False)["valor"].sum()
-    fig_trend = build_trend_line_chart(hist_plot, resumen_kpi_sel, unit_hist, resumen_srv)
-    fig_trend.update_layout(height=400)
-    st.plotly_chart(fig_trend, use_container_width=True)
+    tab1, tab2, tab3 = st.tabs(["📈 Evolución", "📉 Tendencia", "⚠️ Anomalías"])
+    with tab1:
+        fig_svc = build_line_chart(hist_plot, f"{resumen_kpi_sel} — {resumen_srv}",
+                                    height=370, unit=unit_hist, kpi_name=resumen_kpi_sel)
+        fig_svc.update_traces(line_color=EFE_BLUE)
+        st.plotly_chart(fig_svc, use_container_width=True)
+    with tab2:
+        fig_trend = build_trend_line_chart(hist_plot, resumen_kpi_sel, unit_hist, resumen_srv)
+        st.plotly_chart(fig_trend, use_container_width=True)
+    with tab3:
+        fig_anom = detect_anomalies(hist_plot, resumen_kpi_sel, resumen_srv, unit_hist)
+        st.plotly_chart(fig_anom, use_container_width=True)
 
     st.markdown("</div></div>", unsafe_allow_html=True)
 
@@ -2253,13 +2371,29 @@ def render_detalle_servicio():
             fig_bar.update_yaxes(title="Pasajeros")
             st.plotly_chart(fig_bar, use_container_width=True)
 
+    st.markdown("<div class='section-title'>Detalle de estaciones</div>", unsafe_allow_html=True)
+    detail_table = detail_df[["estacion","comuna","region","entradas","meta_entradas",
+                               "perdida_pax","fuga_pct_display",
+                               "observacion_afluencia","observacion_estacion"]].copy()
+    detail_table["Afluencia"]      = detail_table["entradas"].apply(fmt_pax)
+    detail_table["Meta afluencia"] = detail_table["meta_entradas"].apply(fmt_pax)
+    detail_table["Pérdida pax"]    = detail_table["perdida_pax"].apply(fmt_pax)
+    detail_table["Fuga %"]         = detail_table["fuga_pct_display"].apply(fmt_fuga_pct)
+    st.dataframe(
+        detail_table[["estacion","comuna","region","Afluencia","Meta afluencia",
+                       "Pérdida pax","Fuga %","observacion_afluencia","observacion_estacion"]]
+        .rename(columns={"estacion":"Estación","comuna":"Comuna","region":"Región",
+                         "observacion_afluencia":"Obs. afluencia","observacion_estacion":"Obs. estación"}),
+        use_container_width=True, hide_index=True,
+    )
     st.markdown("</div></div>", unsafe_allow_html=True)
+
 
 
 def render_perfil_carga():
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Perfil de Carga</div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-subtitle'>Lectura diaria por servicio: pasajeros a bordo, embarques y bajadas por estación.</div>",
+    st.markdown("<div class='section-subtitle'>Reconstrucción del perfil de carga por servicio a partir de transacciones OD: embarques, bajadas y pasajeros a bordo por estación.</div>",
                 unsafe_allow_html=True)
 
     service_options = list(PROFILE_SERVICE_CONFIG.keys())
@@ -2270,11 +2404,13 @@ def render_perfil_carga():
 
     perfil_df, perfil_path, perfil_missing, perfil_files, perfil_status = load_profile_service_data(
         profile_srv, str(data_path))
+    profile_schema = perfil_df.attrs.get("profile_schema", "aggregated") if isinstance(perfil_df, pd.DataFrame) else "aggregated"
     folder_name  = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("folder_candidates", ["perfil_carga"])[0]
     service_desc = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("description", "")
 
+    schema_note = "Esquema detectado: transaccional por viaje." if profile_schema == "transactional" else "Esquema detectado: agregado por estación."
     with info_col:
-        st.markdown(f"<div class='map-note'><b>Carpeta esperada:</b> {folder_name}<br>{service_desc}</div>",
+        st.markdown(f"<div class='map-note'><b>Carpeta esperada:</b> {folder_name}<br>{service_desc}<br>{schema_note}</div>",
                     unsafe_allow_html=True)
 
     if perfil_status in ("no_data",) or perfil_df.empty:
@@ -2290,8 +2426,7 @@ def render_perfil_carga():
     if perfil_status == "unsupported_format" or perfil_missing:
         with sel_date_col:
             fechas_tmp = sorted(pd.to_datetime(perfil_df.get("fecha"), errors="coerce")
-                                .dropna().dt.date.unique().tolist(), reverse=True) \
-                         if "fecha" in perfil_df.columns else []
+                                .dropna().dt.date.unique().tolist(), reverse=True)                          if isinstance(perfil_df, pd.DataFrame) and "fecha" in perfil_df.columns else []
             st.selectbox("📅 Fecha disponible", options=fechas_tmp, index=0 if fechas_tmp else None,
                          placeholder="Sin fechas válidas", key="perfil_fecha_selector_unsupported",
                          format_func=lambda d: pd.to_datetime(d).strftime("%d-%m-%Y") if pd.notna(d) else "-")
@@ -2363,13 +2498,28 @@ def render_perfil_carga():
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    perfil_servicio = perfil_dir[perfil_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
-    perfil_servicio["event_time"] = perfil_servicio["t_arr_est"].fillna(perfil_servicio["t_dep_est"])
+    if profile_schema == "transactional":
+        perfil_servicio_tx = perfil_dir[perfil_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
+        perfil_servicio = build_transactional_service_profile(perfil_servicio_tx)
+        perfiles_comparativo = build_transactional_profiles_for_subset(perfil_dir)
+    else:
+        perfil_servicio = perfil_dir[perfil_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
+        perfil_servicio["event_time"] = perfil_servicio["t_arr_est"].fillna(perfil_servicio["t_dep_est"])
+        perfiles_comparativo = perfil_dir.copy()
+
+    if perfil_servicio.empty:
+        st.warning("No fue posible reconstruir el perfil de carga para el servicio seleccionado.")
+        st.markdown("</div></div>", unsafe_allow_html=True)
+        return
+
     station_order = get_station_order_from_profile(perfil_servicio)
     if station_order:
         perfil_servicio["estacion"] = pd.Categorical(perfil_servicio["estacion"],
                                                       categories=station_order, ordered=True)
-        perfil_servicio = perfil_servicio.sort_values(["estacion","event_time"])
+        sort_cols = ["estacion"]
+        if "event_time" in perfil_servicio.columns:
+            sort_cols.append("event_time")
+        perfil_servicio = perfil_servicio.sort_values(sort_cols)
 
     total_embarque = perfil_servicio["B_embarque"].sum(min_count=1)
     total_bajadas  = perfil_servicio["D_bajadas"].sum(min_count=1)
@@ -2396,31 +2546,63 @@ def render_perfil_carga():
 
     st.markdown("<div class='section-title'>Comparativo diario de pasajeros a bordo</div>",
                 unsafe_allow_html=True)
-    fig_comp = build_perfil_abordo_comparativo_chart(
-        perfil_dir, f"{profile_srv} | {linea_sel} | {dir_sel} | Todos los servicios")
-    st.plotly_chart(fig_comp, use_container_width=True)
+    if perfiles_comparativo.empty:
+        st.info("No existen perfiles comparativos para el día seleccionado.")
+    else:
+        fig_comp = build_perfil_abordo_comparativo_chart(
+            perfiles_comparativo, f"{profile_srv} | {linea_sel} | {dir_sel} | Todos los servicios")
+        st.plotly_chart(fig_comp, use_container_width=True)
 
+    st.markdown("<div class='section-title'>Detalle por estación</div>", unsafe_allow_html=True)
+    detalle_cols = ["estacion","t_arr_est","t_dep_est","B_embarque","D_bajadas",
+                    "L_in_abordo","L_out_abordo","Capacidad_disponible","R_quedados",
+                    "Q_out_cola","archivo_origen"]
+    detalle_cols = [c for c in detalle_cols if c in perfil_servicio.columns]
+    detalle = perfil_servicio[detalle_cols].copy()
+
+    fmt_map = {
+        "t_arr_est": ("Llegada",  lambda s: pd.to_datetime(s, errors="coerce").dt.strftime("%H:%M:%S").fillna("-")),
+        "t_dep_est": ("Salida",   lambda s: pd.to_datetime(s, errors="coerce").dt.strftime("%H:%M:%S").fillna("-")),
+        "B_embarque":("Suben",    lambda s: s.apply(fmt_pax)),
+        "D_bajadas": ("Bajan",    lambda s: s.apply(fmt_pax)),
+        "L_in_abordo":("A bordo entrada", lambda s: s.apply(fmt_pax)),
+        "L_out_abordo":("A bordo salida", lambda s: s.apply(fmt_pax)),
+        "Capacidad_disponible":("Cap. disponible", lambda s: s.apply(fmt_pax)),
+        "R_quedados":("Quedados", lambda s: s.apply(fmt_pax)),
+        "Q_out_cola":("Cola salida", lambda s: s.apply(fmt_pax)),
+        "archivo_origen":("Archivo", lambda s: s),
+    }
+    for raw_col, (new_col, fn) in fmt_map.items():
+        if raw_col in detalle.columns:
+            detalle[new_col] = fn(detalle[raw_col])
+
+    show_cols = ["estacion"] + [v[0] for k,v in fmt_map.items() if k in detalle.columns]
+    show_cols = [c for c in show_cols if c in detalle.columns]
+    st.dataframe(detalle[show_cols].rename(columns={"estacion":"Estación"}),
+                 use_container_width=True, hide_index=True)
     st.markdown("</div></div>", unsafe_allow_html=True)
+
 
 
 def render_od_estaciones():
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>OD Estaciones — Biotren</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='section-subtitle'>Análisis centrado en una estación: comportamiento horario, perfil de entradas/salidas y distribución espacial de viajes dentro del periodo seleccionado. Carpeta: <b>od_bt</b>.</div>",
+        "<div class='section-subtitle'>Análisis espacial y horario de entradas, salidas y relaciones "
+        "origen-destino por estación. Carpeta: <b>od_bt</b>.</div>",
         unsafe_allow_html=True)
 
     od_df, od_path, od_missing, od_files, od_status = load_od_service_data("Biotren", str(data_path))
     folder_name = OD_SERVICE_CONFIG["Biotren"]["folder_candidates"][0]
 
     st.markdown(
-        "<div class='map-note'><b>Enfoque:</b> la pestaña prioriza la lectura de la estación seleccionada. "
-        "Se mantienen bloques horarios múltiples, pero la interpretación se apoya en el perfil horario de la estación, "
-        "la distribución de destinos/orígenes por estación y mapas de burbujas completos sin líneas OD.</div>",
+        "<div class='map-note'><b>Enfoque:</b> entradas, salidas y relaciones OD por estación y "
+        "tramo horario. Los buckets temporales se calculan una sola vez por render.</div>",
         unsafe_allow_html=True)
 
     if od_status == "no_data" or od_df.empty:
-        st.info(f"No se encontraron archivos CSV en <b>{folder_name}</b>. Ruta buscada: <b>{od_path}</b>.", icon="ℹ️")
+        st.info(f"No se encontraron archivos CSV en <b>{folder_name}</b>. "
+                f"Ruta buscada: <b>{od_path}</b>.", icon="ℹ️")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
     if od_status == "unsupported_format" or od_missing:
@@ -2436,241 +2618,202 @@ def render_od_estaciones():
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    fechas_set = set(fechas_disponibles)
-    fecha_default = fechas_disponibles[-1]
-    fecha_key = "od_bt_fecha_cal"
-    fecha_prev = st.session_state.get(fecha_key)
+    fechas_set   = set(fechas_disponibles)
+    fecha_default= fechas_disponibles[-1]
+    fecha_key    = "od_bt_fecha_cal"
+    fecha_prev   = st.session_state.get(fecha_key)
     if isinstance(fecha_prev, date):
-        fecha_default = fecha_prev if fecha_prev in fechas_set else min(fechas_disponibles, key=lambda d: abs((d - fecha_prev).days))
+        fecha_default = (fecha_prev if fecha_prev in fechas_set
+                         else min(fechas_disponibles, key=lambda d: abs((d-fecha_prev).days)))
 
-    fecha_input = st.date_input(
-        "📅 Fecha",
-        value=fecha_default,
-        min_value=fechas_disponibles[0],
-        max_value=fechas_disponibles[-1],
-        format="DD/MM/YYYY",
-        key=fecha_key,
-    )
+    row_f1a, row_f1b, row_f1c = st.columns([1.0, 1.1, 1.5])
+    with row_f1a:
+        fecha_input = st.date_input("📅 Fecha", value=fecha_default,
+                                     min_value=fechas_disponibles[0],
+                                     max_value=fechas_disponibles[-1],
+                                     format="DD/MM/YYYY", key=fecha_key)
 
     fecha_sel = fecha_input
     if fecha_sel not in fechas_set:
-        fecha_sel = min(fechas_disponibles, key=lambda d: abs((d - fecha_sel).days))
-        st.info(f"Fecha sin datos. Se usa la más cercana: {pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}.")
+        fecha_sel = min(fechas_disponibles, key=lambda d: abs((d-fecha_sel).days))
+        st.info(f"Fecha sin datos. Se usa la más cercana: "
+                f"{pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}.")
 
-    od_fecha = od_df[od_df["fecha"] == fecha_sel].copy()
-    if od_fecha.empty:
-        st.warning("No existen datos para la fecha seleccionada.")
+    od_fecha     = od_df[od_df["fecha"] == fecha_sel].copy()
+    lineas_disp  = sorted([x for x in od_fecha["linea"].dropna().astype(str).unique() if x])
+
+    with row_f1b:
+        linea_sel = option_selector("Línea", lineas_disp, key="od_linea_selector",
+                                    default=lineas_disp[0] if lineas_disp else None)
+
+    with row_f1c:
+        granularity_sel = option_selector(
+            "Segmentación temporal",
+            ["Periodos operacionales","Bloques de 1 hora","Bloques de 2 horas"],
+            key="od_granularity_selector", default="Bloques de 1 hora")
+
+    od_linea = (od_fecha[od_fecha["linea"].astype(str) == str(linea_sel)].copy()
+                if linea_sel else od_fecha.iloc[0:0].copy())
+
+    if od_linea.empty:
+        st.warning("No existen datos para la combinación de fecha y línea seleccionada.")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    granularity_sel = "Bloques de 1 hora"
-    od_fecha["entry_bucket"] = get_time_bucket_series(od_fecha["t_entrada_viaje"], granularity_sel)
-    od_fecha["exit_bucket"] = get_time_bucket_series(od_fecha["t_salida_viaje"], granularity_sel)
+    # ── PRECÁLCULO ÚNICO de buckets (evita 4+ llamadas redundantes) ──────────
+    od_linea["entry_bucket"] = get_time_bucket_series(od_linea["t_entrada_viaje"], granularity_sel)
+    od_linea["exit_bucket"]  = get_time_bucket_series(od_linea["t_salida_viaje"],  granularity_sel)
     bucket_order = get_bucket_order(
-        od_fecha["entry_bucket"].dropna().tolist() + od_fecha["exit_bucket"].dropna().tolist(),
+        od_linea["entry_bucket"].dropna().tolist() + od_linea["exit_bucket"].dropna().tolist(),
         granularity_sel,
     )
-    if not bucket_order:
-        st.warning("No existen bloques horarios válidos para la fecha seleccionada.")
-        st.markdown("</div></div>", unsafe_allow_html=True)
-        return
+    # ─────────────────────────────────────────────────────────────────────────
 
-    bucket_display_map = {b: b.replace("-", " a ") for b in bucket_order}
-    default_blocks = st.session_state.get("od_bloques_selector_multi")
-    if not isinstance(default_blocks, list) or not default_blocks:
-        default_blocks = [bucket_order[0]]
-    default_blocks = [b for b in default_blocks if b in bucket_order] or [bucket_order[0]]
-
-    st.markdown("<div class='section-title'>Periodo horario de análisis</div>", unsafe_allow_html=True)
-    bloques_sel = st.multiselect(
-        "Bloques horarios de análisis",
-        options=bucket_order,
-        default=default_blocks,
-        format_func=lambda x: bucket_display_map.get(x, x),
-        key="od_bloques_selector_multi",
+    station_ref = prepare_od_station_reference("Biotren", od_linea, estaciones)
+    station_candidates = sorted(
+        set(od_linea["origen"].dropna().astype(str)) |
+        set(od_linea["destino"].dropna().astype(str))
     )
-    if not bloques_sel:
-        st.warning("Seleccione al menos un bloque horario para continuar.")
-        st.markdown("</div></div>", unsafe_allow_html=True)
-        return
-
-    bloques_sel = [b for b in bucket_order if b in bloques_sel]
-    bloques_label = ", ".join(bucket_display_map.get(b, b) for b in bloques_sel)
-
-    bucket_entry_summary = (
-        od_fecha[od_fecha["entry_bucket"].isin(bloques_sel)]
-        .groupby("origen", as_index=False).size()
-        .rename(columns={"origen": "estacion", "size": "entradas"})
-        .sort_values(["entradas", "estacion"], ascending=[False, True])
-    )
-    bucket_exit_summary = (
-        od_fecha[od_fecha["exit_bucket"].isin(bloques_sel)]
-        .groupby("destino", as_index=False).size()
-        .rename(columns={"destino": "estacion", "size": "salidas"})
-        .sort_values(["salidas", "estacion"], ascending=[False, True])
-    )
-
-    top_entry_station = (
-        f"{bucket_entry_summary.iloc[0]['estacion']} ({fmt_pax(bucket_entry_summary.iloc[0]['entradas'])})"
-        if not bucket_entry_summary.empty else "-"
-    )
-    top_exit_station = (
-        f"{bucket_exit_summary.iloc[0]['estacion']} ({fmt_pax(bucket_exit_summary.iloc[0]['salidas'])})"
-        if not bucket_exit_summary.empty else "-"
-    )
-    total_entries_block = int(bucket_entry_summary["entradas"].sum()) if not bucket_entry_summary.empty else 0
-    total_exits_block = int(bucket_exit_summary["salidas"].sum()) if not bucket_exit_summary.empty else 0
-
-    st.markdown(
-        f"<div class='filters-summary'><strong>Bloques seleccionados:</strong> {bloques_label}</div>",
-        unsafe_allow_html=True,
-    )
-    rm1, rm2, rm3, rm4 = st.columns(4)
-    rm1.metric("Entradas período", fmt_pax(total_entries_block))
-    rm2.metric("Salidas período", fmt_pax(total_exits_block))
-    rm3.metric("Mayor entrada", top_entry_station)
-    rm4.metric("Mayor salida", top_exit_station)
-
-    station_ref = prepare_od_station_reference("Biotren", od_fecha, estaciones)
-    station_candidates = sorted(set(od_fecha["origen"].dropna().astype(str)) | set(od_fecha["destino"].dropna().astype(str)))
     default_station = station_candidates[0] if station_candidates else None
     prev_station = st.session_state.get("od_station_selector")
     if prev_station in station_candidates:
         default_station = prev_station
 
-    station_sel = (
-        st.selectbox(
-            "Estación",
-            options=station_candidates,
-            index=(station_candidates.index(default_station) if station_candidates and default_station in station_candidates else 0),
-            key="od_station_selector",
-        )
-        if station_candidates else None
+    station_order_full = resolve_station_order_from_reference(
+        pd.DataFrame({"estacion": station_candidates, "total": 1}) if station_candidates else pd.DataFrame(),
+        station_ref,
     )
 
-    if not station_sel:
-        st.warning("No existen estaciones disponibles para la selección actual.")
+    st.markdown("<div class='section-title'>Comportamiento completo del día por hora</div>",
+                unsafe_allow_html=True)
+    # Pasar od_linea que ya tiene entry_bucket/exit_bucket precalculados
+    fig_hourly = build_station_hourly_overview_chart(od_linea, station_order_full)
+    st.plotly_chart(fig_hourly, use_container_width=True)
+
+    row_f2a, row_f2b = st.columns([1.2, 1.8])
+    with row_f2a:
+        station_sel = (st.selectbox(
+            "Estación para relaciones OD", options=station_candidates,
+            index=(station_candidates.index(default_station)
+                   if station_candidates and default_station in station_candidates else 0),
+            key="od_station_selector")
+            if station_candidates else None)
+    with row_f2b:
+        bucket_sel = (option_selector("Periodo / tramo horario", bucket_order,
+                                       key="od_bucket_selector",
+                                       default=bucket_order[0] if bucket_order else None)
+                      if bucket_order else None)
+
+    if not bucket_sel:
+        st.warning("No existen periodos horarios válidos para la combinación seleccionada.")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    station_entries = (
-        od_fecha[od_fecha["origen"].astype(str) == str(station_sel)]
-        .groupby("entry_bucket", as_index=False).size()
-        .rename(columns={"entry_bucket": "bucket", "size": "cantidad"})
-    )
-    station_entries["tipo"] = "Entradas"
-    station_exits = (
-        od_fecha[od_fecha["destino"].astype(str) == str(station_sel)]
-        .groupby("exit_bucket", as_index=False).size()
-        .rename(columns={"exit_bucket": "bucket", "size": "cantidad"})
-    )
-    station_exits["tipo"] = "Salidas"
-    station_flow = pd.concat([station_entries, station_exits], ignore_index=True)
-    station_flow = station_flow.dropna(subset=["bucket"]).copy()
+    # Usar columnas precalculadas en todas las funciones downstream
+    activity_df = build_station_period_activity(
+        od_linea, "entry_bucket", "exit_bucket", bucket_sel)
 
-    station_bucket_order = get_bucket_order(station_flow["bucket"].dropna().tolist(), "Bloques de 1 hora") or bucket_order
+    if activity_df.empty:
+        st.warning("No existen transacciones para el tramo horario seleccionado.")
+        st.markdown("</div></div>", unsafe_allow_html=True)
+        return
 
-    st.markdown("<div class='section-title'>Perfil horario de la estación seleccionada</div>", unsafe_allow_html=True)
-    st.plotly_chart(
-        build_station_flow_chart(station_flow, station_bucket_order, station_sel, "Bloques de 1 hora"),
-        use_container_width=True,
-    )
+    station_order = resolve_station_order_from_reference(activity_df, station_ref)
 
-    total_entries_day = int(station_entries["cantidad"].sum()) if not station_entries.empty else 0
-    total_exits_day = int(station_exits["cantidad"].sum()) if not station_exits.empty else 0
-    peak_entry_row = station_entries.sort_values(["cantidad", "bucket"], ascending=[False, True]).head(1)
-    peak_exit_row = station_exits.sort_values(["cantidad", "bucket"], ascending=[False, True]).head(1)
-    peak_entry_label = (
-        f"{bucket_display_map.get(peak_entry_row.iloc[0]['bucket'], peak_entry_row.iloc[0]['bucket'])} ({fmt_pax(peak_entry_row.iloc[0]['cantidad'])})"
-        if not peak_entry_row.empty else "-"
-    )
-    peak_exit_label = (
-        f"{bucket_display_map.get(peak_exit_row.iloc[0]['bucket'], peak_exit_row.iloc[0]['bucket'])} ({fmt_pax(peak_exit_row.iloc[0]['cantidad'])})"
-        if not peak_exit_row.empty else "-"
-    )
+    peak_entry_row = activity_df.sort_values(["entradas","estacion"], ascending=[False,True]).head(1)
+    peak_exit_row  = activity_df.sort_values(["salidas","estacion"],  ascending=[False,True]).head(1)
+    peak_entry_label = (f"{peak_entry_row.iloc[0]['estacion']} ({fmt_pax(peak_entry_row.iloc[0]['entradas'])})"
+                        if not peak_entry_row.empty else "-")
+    peak_exit_label  = (f"{peak_exit_row.iloc[0]['estacion']} ({fmt_pax(peak_exit_row.iloc[0]['salidas'])})"
+                        if not peak_exit_row.empty else "-")
 
-    sm1, sm2, sm3, sm4 = st.columns(4)
-    sm1.metric("Entradas día", fmt_pax(total_entries_day))
-    sm2.metric("Salidas día", fmt_pax(total_exits_day))
-    sm3.metric("Hora punta entradas", peak_entry_label)
-    sm4.metric("Hora punta salidas", peak_exit_label)
+    selected_row    = activity_df[activity_df["estacion"].astype(str) == str(station_sel)].copy()
+    selected_entries= int(selected_row["entradas"].iloc[0]) if not selected_row.empty else 0
+    selected_exits  = int(selected_row["salidas"].iloc[0])  if not selected_row.empty else 0
 
-    destinos_df = (
-        od_fecha[(od_fecha["origen"].astype(str) == str(station_sel)) & (od_fecha["entry_bucket"].isin(bloques_sel))]
-        .groupby("destino", as_index=False).size()
-        .rename(columns={"size": "viajes"})
-        .sort_values(["viajes", "destino"], ascending=[False, True])
-    )
-    origenes_df = (
-        od_fecha[(od_fecha["destino"].astype(str) == str(station_sel)) & (od_fecha["exit_bucket"].isin(bloques_sel))]
-        .groupby("origen", as_index=False).size()
-        .rename(columns={"size": "viajes"})
-        .sort_values(["viajes", "origen"], ascending=[False, True])
-    )
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Entradas período", fmt_pax(activity_df["entradas"].sum()))
+    m2.metric("Salidas período",  fmt_pax(activity_df["salidas"].sum()))
+    m3.metric("Mayor entrada",    peak_entry_label)
+    m4.metric("Mayor salida",     peak_exit_label)
 
-    if not destinos_df.empty:
-        destinos_df = destinos_df[destinos_df["destino"].astype(str) != str(station_sel)].copy()
-    if not origenes_df.empty:
-        origenes_df = origenes_df[origenes_df["origen"].astype(str) != str(station_sel)].copy()
-
-    salidas_estacion = int(destinos_df["viajes"].sum()) if not destinos_df.empty else 0
-    llegadas_estacion = int(origenes_df["viajes"].sum()) if not origenes_df.empty else 0
-    principal_destino = (
-        f"{destinos_df.iloc[0]['destino']} ({fmt_pax(destinos_df.iloc[0]['viajes'])})" if not destinos_df.empty else "-"
-    )
-    principal_origen = (
-        f"{origenes_df.iloc[0]['origen']} ({fmt_pax(origenes_df.iloc[0]['viajes'])})" if not origenes_df.empty else "-"
-    )
-
-    st.markdown("<div class='section-title'>Perfil de viajes de la estación en el periodo seleccionado</div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='section-subtitle'><b>{station_sel}</b> · Periodo: {bloques_label} · "
-        f"Salidas desde estación: {fmt_pax(salidas_estacion)} · Llegadas hacia estación: {fmt_pax(llegadas_estacion)}</div>",
-        unsafe_allow_html=True,
-    )
-    dm1, dm2 = st.columns(2)
-    dm1.metric("Principal destino", principal_destino)
-    dm2.metric("Principal origen", principal_origen)
-
-    row_bar1, row_bar2 = st.columns(2)
-    with row_bar1:
-        dest_bar = build_od_station_bar_chart(
-            destinos_df, "destino", station_ref,
-            f"Destinos desde {station_sel} | {bloques_label}", EFE_BLUE
-        )
-        if dest_bar:
-            st.plotly_chart(dest_bar, use_container_width=True)
+    st.markdown("<div class='section-title'>Actividad por estación en el período</div>",
+                unsafe_allow_html=True)
+    top_left, top_right = st.columns([1.15, 1.0])
+    with top_left:
+        st.plotly_chart(build_station_activity_bar_chart(activity_df, station_order, bucket_sel),
+                        use_container_width=True)
+    with top_right:
+        map_fig = build_station_activity_map(activity_df, station_ref, station_sel, bucket_sel)
+        if map_fig:
+            st.plotly_chart(map_fig, use_container_width=True)
         else:
-            st.info("No existen viajes desde la estación en el periodo seleccionado.")
-    with row_bar2:
-        ori_bar = build_od_station_bar_chart(
-            origenes_df, "origen", station_ref,
-            f"Orígenes hacia {station_sel} | {bloques_label}", EFE_RED
-        )
-        if ori_bar:
-            st.plotly_chart(ori_bar, use_container_width=True)
-        else:
-            st.info("No existen viajes hacia la estación en el periodo seleccionado.")
+            st.info("Sin coordenadas válidas para la vista georreferenciada.")
 
-    row_map1, row_map2 = st.columns(2)
-    with row_map1:
-        from_fig = build_od_bubble_map(
-            destinos_df, "destino", station_ref, station_sel,
-            f"Mapa de destinos desde {station_sel} | {bloques_label}", EFE_BLUE,
+    # ── Nuevas vistas analíticas ─────────────────────────────────────────────
+    tab_od, tab_matriz, tab_sankey, tab_cal = st.tabs(
+        ["🔗 Relaciones OD", "📊 Matriz OD completa", "🌊 Sankey OD", "📅 Mapa de demanda semanal"])
+
+    with tab_od:
+        st.markdown(
+            f"<div class='section-subtitle'><b>{station_sel}</b> | {bucket_sel} · "
+            f"Entradas: {fmt_pax(selected_entries)} · Salidas: {fmt_pax(selected_exits)}</div>",
+            unsafe_allow_html=True)
+
+        destinos_df = (
+            od_linea[(od_linea["origen"].astype(str) == str(station_sel)) &
+                     (od_linea["entry_bucket"] == bucket_sel)]
+            .groupby("destino", as_index=False).size()
+            .rename(columns={"size":"viajes"})
+            .sort_values(["viajes","destino"], ascending=[False,True]).head(10)
         )
-        if from_fig:
-            st.plotly_chart(from_fig, use_container_width=True)
-        else:
-            st.info("Sin coordenadas válidas para el mapa de destinos.")
-    with row_map2:
-        to_fig = build_od_bubble_map(
-            origenes_df, "origen", station_ref, station_sel,
-            f"Mapa de orígenes hacia {station_sel} | {bloques_label}", EFE_RED,
+        origenes_df = (
+            od_linea[(od_linea["destino"].astype(str) == str(station_sel)) &
+                     (od_linea["exit_bucket"] == bucket_sel)]
+            .groupby("origen", as_index=False).size()
+            .rename(columns={"size":"viajes"})
+            .sort_values(["viajes","origen"], ascending=[False,True]).head(10)
         )
-        if to_fig:
-            st.plotly_chart(to_fig, use_container_width=True)
-        else:
-            st.info("Sin coordenadas válidas para el mapa de orígenes.")
+
+        bottom_left, bottom_right = st.columns([1.2, 0.8])
+        with bottom_left:
+            conn_fig = build_od_connection_map(destinos_df, origenes_df,
+                                               station_ref, station_sel, bucket_sel)
+            if conn_fig:
+                st.plotly_chart(conn_fig, use_container_width=True)
+            else:
+                st.info("Sin coordenadas para el mapa OD de conexiones.")
+        with bottom_right:
+            dest_fig = build_top_od_bar_chart(destinos_df, "destino",
+                                               f"Principales destinos desde {station_sel}", EFE_BLUE)
+            if dest_fig:
+                st.plotly_chart(dest_fig, use_container_width=True)
+            ori_fig = build_top_od_bar_chart(origenes_df, "origen",
+                                              f"Principales orígenes hacia {station_sel}", EFE_RED)
+            if ori_fig:
+                st.plotly_chart(ori_fig, use_container_width=True)
+
+    with tab_matriz:
+        st.markdown("<div class='section-subtitle'>Volumen de viajes entre cada par origen-destino "
+                    "para la fecha y línea seleccionadas.</div>", unsafe_allow_html=True)
+        fig_matrix = build_full_od_matrix(
+            od_linea, f"Matriz OD completa | {linea_sel} | {pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}")
+        st.plotly_chart(fig_matrix, use_container_width=True)
+
+    with tab_sankey:
+        st.markdown("<div class='section-subtitle'>Top 15 pares OD más frecuentes "
+                    "para la fecha y línea seleccionadas.</div>", unsafe_allow_html=True)
+        fig_sankey = build_sankey_od(
+            od_linea, f"Sankey OD | {linea_sel} | {pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}", top_n=15)
+        st.plotly_chart(fig_sankey, use_container_width=True)
+
+    with tab_cal:
+        st.markdown("<div class='section-subtitle'>Distribución de viajes por hora y día de la semana "
+                    "(toda la base OD cargada).</div>", unsafe_allow_html=True)
+        od_all_linea = od_df[od_df["linea"].astype(str) == str(linea_sel)].copy() if linea_sel else od_df.copy()
+        fig_cal = build_calendar_heatmap(od_all_linea, f"Mapa de demanda semanal | {linea_sel}")
+        st.plotly_chart(fig_cal, use_container_width=True)
+    # ─────────────────────────────────────────────────────────────────────────
 
     if od_files:
         st.caption(f"Archivos OD cargados: {len(od_files)} | carpeta: {od_path}")
@@ -2680,8 +2823,10 @@ def render_od_estaciones():
 # =========================================================
 # DISPATCH
 # =========================================================
-if section_sel == "KPIs por Servicio":
+if section_sel == "Resumen ejecutivo":
     render_resumen_ejecutivo()
+elif section_sel == "KPIs":
+    render_kpis()
 elif section_sel == "Personas":
     render_personas()
 elif section_sel == "Estaciones":
