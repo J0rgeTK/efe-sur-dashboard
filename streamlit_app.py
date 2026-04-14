@@ -616,25 +616,51 @@ OD_SERVICE_CONFIG = {
 
 
 def _resolve_folder(service_name: str, config_dict: dict, data_path: Path) -> tuple[list, str]:
-    """Devuelve (data_files, folder_path_str) buscando candidatos del config."""
+    """Devuelve (data_files, folder_path_str) buscando candidatos del config, con búsqueda robusta."""
     base = Path(__file__).resolve().parent
     config = config_dict.get(service_name, {})
     folder_names = config.get("folder_candidates", [])
     folder_name_default = folder_names[0] if folder_names else "data"
+    valid_suffixes = {".csv", ".xlsx", ".xls"}
 
     def _list_supported_files(folder: Path) -> list:
+        if not folder.exists() or not folder.is_dir():
+            return []
         files = []
-        for pattern in ("*.csv", "*.xlsx", "*.xls"):
-            files.extend(folder.glob(pattern))
+        for p in folder.iterdir():
+            if not p.is_file():
+                continue
+            # Ignorar archivos temporales de Excel y usar extensión case-insensitive
+            if p.name.startswith("~$"):
+                continue
+            if p.suffix.lower() in valid_suffixes:
+                files.append(p)
         return sorted(files)
 
+    def _find_folder_case_insensitive(root: Path, target_name: str) -> Path | None:
+        direct = root / target_name
+        if direct.exists() and direct.is_dir():
+            return direct
+        if not root.exists() or not root.is_dir():
+            return None
+        target_norm = target_name.strip().lower()
+        for child in root.iterdir():
+            if child.is_dir() and child.name.strip().lower() == target_norm:
+                return child
+        return None
+
+    search_roots = []
+    for candidate_root in [base, data_path, base / "data", base / "datos"]:
+        if candidate_root not in search_roots:
+            search_roots.append(candidate_root)
+
     for folder_name in folder_names:
-        for root in [base, data_path]:
-            candidate = root / folder_name
-            if candidate.exists() and candidate.is_dir():
-                files = _list_supported_files(candidate)
+        for root in search_roots:
+            folder = _find_folder_case_insensitive(root, folder_name)
+            if folder is not None:
+                files = _list_supported_files(folder)
                 if files:
-                    return list(files), str(candidate)
+                    return list(files), str(folder)
 
     fallback = data_path / folder_name_default
     return [], str(fallback)
