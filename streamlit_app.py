@@ -774,7 +774,9 @@ def load_profile_service_data(service_name: str, data_path_str: str):
             if col in perfil_df.columns:
                 perfil_df[col] = pd.to_numeric(perfil_df[col], errors="coerce")
 
-        return perfil_df.dropna(subset=["fecha"]).copy(), folder_path, [], loaded, "ok"
+        perfil_df = perfil_df.dropna(subset=["fecha"]).copy()
+        perfil_df.attrs["profile_schema"] = "aggregated"
+        return perfil_df, folder_path, [], loaded, "ok"
 
     if has_tx_schema:
         perfil_df["origen"] = perfil_df["origen"].fillna("").astype(str).str.strip()
@@ -800,7 +802,9 @@ def load_profile_service_data(service_name: str, data_path_str: str):
             if col in perfil_df.columns:
                 perfil_df[col] = pd.to_numeric(perfil_df[col], errors="coerce")
 
-        return perfil_df.dropna(subset=["fecha"]).copy(), folder_path, [], loaded, "ok"
+        perfil_df = perfil_df.dropna(subset=["fecha"]).copy()
+        perfil_df.attrs["profile_schema"] = "transactional"
+        return perfil_df, folder_path, [], loaded, "ok"
 
     missing = [c for c in required_agg_cols if c not in perfil_df.columns]
     if len(missing) == len(required_agg_cols):
@@ -2498,7 +2502,13 @@ def render_perfil_carga():
 
     perfil_df, perfil_path, perfil_missing, perfil_files, perfil_status = load_profile_service_data(
         profile_srv, str(data_path))
-    profile_schema = perfil_df.attrs.get("profile_schema", "aggregated") if isinstance(perfil_df, pd.DataFrame) else "aggregated"
+    if isinstance(perfil_df, pd.DataFrame):
+        profile_schema = perfil_df.attrs.get("profile_schema")
+        if not profile_schema and "profile_schema" in perfil_df.columns and not perfil_df["profile_schema"].dropna().empty:
+            profile_schema = str(perfil_df["profile_schema"].dropna().astype(str).iloc[0]).strip().lower()
+        profile_schema = profile_schema or "aggregated"
+    else:
+        profile_schema = "aggregated"
     folder_name  = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("folder_candidates", ["perfil_carga"])[0]
     service_desc = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("description", "")
 
@@ -2591,6 +2601,9 @@ def render_perfil_carga():
         st.warning("No existen datos para la combinación seleccionada.")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
+
+    if profile_schema not in {"transactional", "aggregated"}:
+        profile_schema = "transactional" if {"origen", "destino", "t_entrada_viaje", "t_salida_viaje"}.issubset(set(perfil_dir.columns)) else "aggregated"
 
     if profile_schema == "transactional":
         perfil_servicio_tx = perfil_dir[perfil_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
