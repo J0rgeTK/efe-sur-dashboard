@@ -2421,7 +2421,12 @@ def render_perfil_carga():
 
     perfil_df, perfil_path, perfil_missing, perfil_files, perfil_status = load_profile_service_data(
         profile_srv, str(data_path))
-    profile_schema = perfil_df.attrs.get("profile_schema", "aggregated") if isinstance(perfil_df, pd.DataFrame) else "aggregated"
+    if isinstance(perfil_df, pd.DataFrame) and "profile_schema" in perfil_df.columns:
+        profile_schema_values = perfil_df["profile_schema"].dropna().astype(str).unique().tolist()
+        profile_schema = "transactional" if "transactional" in profile_schema_values else "aggregated"
+    else:
+        profile_schema = "aggregated"
+
     folder_name  = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("folder_candidates", ["perfil_carga"])[0]
     service_desc = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("description", "")
 
