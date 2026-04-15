@@ -83,9 +83,9 @@ BORDER    = COLORS["BORDER"]
 # =========================================================
 # TIPOGRAFÍA BASE PARA GRÁFICOS
 # =========================================================
-PLOT_FONT_SIZE = 14
-PLOT_TITLE_SIZE = 18
-PLOT_ANNOTATION_SIZE = 11
+PLOT_FONT_SIZE = 15
+PLOT_TITLE_SIZE = 19
+PLOT_ANNOTATION_SIZE = 12
 
 RURAL_SERVICES = ["Laja Talcahuano", "Tren Araucanía", "Llanquihue Puerto Montt"]
 
@@ -315,6 +315,28 @@ def fmt_fuga_pct(value) -> str:
     if pd.isna(value):
         return "-"
     return fmt_pct(maybe_scale_percent(value))
+
+
+PLOTLY_CHART_CONFIG = {
+    "scrollZoom": False,
+    "displayModeBar": False,
+    "doubleClick": False,
+    "showTips": False,
+    "responsive": True,
+}
+
+def show_plot(fig: go.Figure, use_container_width: bool = True, **kwargs):
+    """
+    Wrapper para Streamlit/Plotly:
+    - desactiva zoom con rueda y la barra de herramientas;
+    - fija dragmode en False para reducir capturas de interacción;
+    - mantiene hover y tooltip.
+    """
+    try:
+        fig.update_layout(dragmode=False)
+    except Exception:
+        pass
+    return st.plotly_chart(fig, use_container_width=use_container_width, config=PLOTLY_CHART_CONFIG, **kwargs)
 
 
 def periodo_to_date(value):
@@ -1127,7 +1149,14 @@ def load_service_order_reference(data_path_str: str):
                 if temp.empty:
                     continue
                 temp["tipo_dia_ref"] = sheet_map.get(sheet, str(sheet))
-                temp["orden"] = range(1, len(temp) + 1)
+                if "Orden" in temp.columns:
+                    temp["orden"] = pd.to_numeric(temp["Orden"], errors="coerce")
+                elif "orden" in temp.columns:
+                    temp["orden"] = pd.to_numeric(temp["orden"], errors="coerce")
+                else:
+                    temp["orden"] = range(1, len(temp) + 1)
+                if temp["orden"].isna().all():
+                    temp["orden"] = range(1, len(temp) + 1)
                 frames.append(temp)
             return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         except Exception:
@@ -1795,7 +1824,7 @@ def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure
 
     fig.update_layout(
         title=titulo, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-        margin=dict(l=20,r=20,t=55,b=20), height=500, barmode="group",
+        margin=dict(l=20,r=20,t=55,b=20), height=580, barmode="group",
         font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
@@ -1984,7 +2013,7 @@ def build_service_transport_chart(summary_df: pd.DataFrame, title: str) -> go.Fi
         plot_bgcolor=EFE_WHITE,
         paper_bgcolor=EFE_WHITE,
         margin=dict(l=20, r=20, t=55, b=20),
-        height=430,
+        height=520,
         font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
         title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         showlegend=False,
@@ -2799,7 +2828,7 @@ def render_resumen_ejecutivo():
     hist_plot = hist_sel.groupby("periodo", as_index=False)["valor"].sum()
     fig_trend = build_trend_line_chart(hist_plot, resumen_kpi_sel, unit_hist, resumen_srv)
     fig_trend.update_layout(height=400)
-    st.plotly_chart(fig_trend, use_container_width=True)
+    show_plot(fig_trend, use_container_width=True)
 
     st.markdown("</div></div>", unsafe_allow_html=True)
 
@@ -2831,7 +2860,7 @@ def render_kpis():
                                        f"{kpi_sel} — Biotren", height=340,
                                        unit=unit_col, kpi_name=kpi_sel)
             fig_bt.update_traces(line_color=EFE_BLUE)
-            st.plotly_chart(fig_bt, use_container_width=True)
+            show_plot(fig_bt, use_container_width=True)
     with col_b:
         otros_hist = hist_kpi[hist_kpi["servicio"].isin(RURAL_SERVICES)].copy()
         if otros_hist.empty:
@@ -2841,7 +2870,7 @@ def render_kpis():
                 otros_hist.groupby(["periodo","servicio"], as_index=False)["valor"].sum(),
                 f"{kpi_sel} — Otros servicios", color="servicio",
                 height=340, unit=unit_col, kpi_name=kpi_sel)
-            st.plotly_chart(fig_ot, use_container_width=True)
+            show_plot(fig_ot, use_container_width=True)
 
     st.markdown("<div class='section-title'>Valor vs meta por servicio</div>", unsafe_allow_html=True)
     actual = kpis_f[kpis_f["nombre"] == kpi_sel].copy()
@@ -2875,7 +2904,7 @@ def render_kpis():
                             margin=dict(l=20,r=20,t=50,b=20), height=340,
                             font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
                         )
-                        st.plotly_chart(fig_meta, use_container_width=True)
+                        show_plot(fig_meta, use_container_width=True)
     else:
         st.info("No hay datos para el KPI seleccionado en el período actual.")
 
@@ -2947,7 +2976,7 @@ def render_personas():
                               margin=dict(l=20,r=20,t=50,b=20), height=420,
                               font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE))
             fig.update_xaxes(title="Avance %"); fig.update_yaxes(title="")
-            st.plotly_chart(fig, use_container_width=True)
+            show_plot(fig, use_container_width=True)
     with right_p:
         estado_persona = per_df["estado"].value_counts().reset_index()
         estado_persona.columns = ["estado","cantidad"]
@@ -2960,7 +2989,7 @@ def render_personas():
                                margin=dict(l=20,r=20,t=50,b=20), height=420,
                                font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
                                showlegend=False)
-            st.plotly_chart(fig2, use_container_width=True)
+            show_plot(fig2, use_container_width=True)
 
     st.markdown("<div class='section-title'>Detalle por responsable</div>", unsafe_allow_html=True)
     detalle_cols = ["nombre_iniciativa","servicio","estado","avance_pct",
@@ -3058,7 +3087,7 @@ def render_detalle_servicio():
         if valid_map_df.empty:
             st.warning("No existen coordenadas válidas para graficar.")
         else:
-            st.plotly_chart(build_station_map(valid_map_df), use_container_width=True)
+            show_plot(build_station_map(valid_map_df), use_container_width=True)
     with top_right:
         total_entradas = detail_df["entradas"].sum(min_count=1)
         total_meta     = detail_df["meta_entradas"].sum(min_count=1)
@@ -3087,7 +3116,7 @@ def render_detalle_servicio():
             fig_bar.update_xaxes(title="", tickangle=-90, categoryorder="array",
                                   categoryarray=station_order)
             fig_bar.update_yaxes(title="Pasajeros")
-            st.plotly_chart(fig_bar, use_container_width=True)
+            show_plot(fig_bar, use_container_width=True)
 
     st.markdown("</div></div>", unsafe_allow_html=True)
 
@@ -3318,7 +3347,7 @@ def render_perfil_carga():
     m4.metric("Tramo con máximo a bordo", tramo_max_abordo)
 
     titulo = f"{profile_srv} | {linea_sel} | {dir_sel} | Servicio {servicio_sel}"
-    st.plotly_chart(build_perfil_carga_chart(perfil_servicio, titulo), use_container_width=True)
+    show_plot(build_perfil_carga_chart(perfil_servicio, titulo), use_container_width=True)
 
     cap_msg = None
     if capacidad and pd.notna(max_abordo) and float(capacidad) != 0:
@@ -3344,7 +3373,7 @@ def render_perfil_carga():
             service_summary,
             f"{profile_srv} | {linea_sel} | {dir_sel} | Pasajeros transportados por servicio",
         )
-        st.plotly_chart(fig_transport, use_container_width=True)
+        show_plot(fig_transport, use_container_width=True)
 
     st.markdown("<div class='section-title'>Detalle por servicio</div>", unsafe_allow_html=True)
     if service_summary.empty:
@@ -3558,7 +3587,7 @@ def render_od_estaciones():
     station_bucket_order = get_bucket_order(station_flow["bucket"].dropna().tolist(), "Bloques de 1 hora") or bucket_order
 
     st.markdown("<div class='section-title'>Perfil horario de la estación seleccionada</div>", unsafe_allow_html=True)
-    st.plotly_chart(
+    show_plot(
         build_station_flow_chart(station_flow, station_bucket_order, station_sel, "Bloques de 1 hora"),
         use_container_width=True,
     )
@@ -3626,7 +3655,7 @@ def render_od_estaciones():
             f"Destinos desde {station_sel} | {bloques_label}", EFE_BLUE
         )
         if dest_bar:
-            st.plotly_chart(dest_bar, use_container_width=True)
+            show_plot(dest_bar, use_container_width=True)
         else:
             st.info("No existen viajes desde la estación en el periodo seleccionado.")
     with row_bar2:
@@ -3635,7 +3664,7 @@ def render_od_estaciones():
             f"Orígenes hacia {station_sel} | {bloques_label}", EFE_RED
         )
         if ori_bar:
-            st.plotly_chart(ori_bar, use_container_width=True)
+            show_plot(ori_bar, use_container_width=True)
         else:
             st.info("No existen viajes hacia la estación en el periodo seleccionado.")
 
@@ -3646,7 +3675,7 @@ def render_od_estaciones():
             f"Mapa de destinos desde {station_sel} | {bloques_label}", EFE_BLUE,
         )
         if from_fig:
-            st.plotly_chart(from_fig, use_container_width=True)
+            show_plot(from_fig, use_container_width=True)
         else:
             st.info("Sin coordenadas válidas para el mapa de destinos.")
     with row_map2:
@@ -3655,7 +3684,7 @@ def render_od_estaciones():
             f"Mapa de orígenes hacia {station_sel} | {bloques_label}", EFE_RED,
         )
         if to_fig:
-            st.plotly_chart(to_fig, use_container_width=True)
+            show_plot(to_fig, use_container_width=True)
         else:
             st.info("Sin coordenadas válidas para el mapa de orígenes.")
 
