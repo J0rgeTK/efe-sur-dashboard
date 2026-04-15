@@ -1117,11 +1117,12 @@ def enrich_service_summary_with_itinerary(summary_df: pd.DataFrame,
 
 
 @st.cache_data
+
 def load_service_order_reference(data_path_str: str):
     """
     Carga el orden operativo de servicios para usarlo en el selector y en el eje X.
-    Prioriza el archivo que traiga un campo explícito de orden y evita usar la hora
-    como criterio principal cuando existe esa referencia.
+    Prioriza una columna explícita de orden cuando existe. Si el archivo no trae esa
+    columna, usa estrictamente el orden de las filas del archivo como respaldo.
     """
     data_path = Path(data_path_str)
     base = Path(__file__).resolve().parent
@@ -1131,7 +1132,10 @@ def load_service_order_reference(data_path_str: str):
 
     def _safe_read_csv(path: Path):
         try:
-            return pd.read_csv(path, low_memory=False)
+            temp = pd.read_csv(path, low_memory=False)
+            temp["__sheet_seq"] = 0
+            temp["__row_seq"] = np.arange(1, len(temp) + 1)
+            return temp
         except Exception:
             return pd.DataFrame()
 
@@ -1143,17 +1147,13 @@ def load_service_order_reference(data_path_str: str):
                 "Lun a Vie": "Lunes a Viernes",
                 "Sabado y Domingo": "Sabado y Domingo",
             }
-            for sheet in xl.sheet_names:
+            for sheet_idx, sheet in enumerate(xl.sheet_names):
                 temp = pd.read_excel(path, sheet_name=sheet)
                 if temp.empty:
                     continue
                 temp["tipo_dia_ref"] = sheet_map.get(sheet, str(sheet))
-                if "Orden" in temp.columns:
-                    temp["orden"] = pd.to_numeric(temp["Orden"], errors="coerce")
-                elif "orden" in temp.columns:
-                    temp["orden"] = pd.to_numeric(temp["orden"], errors="coerce")
-                else:
-                    temp["orden"] = np.nan
+                temp["__sheet_seq"] = sheet_idx
+                temp["__row_seq"] = np.arange(1, len(temp) + 1)
                 frames.append(temp)
             return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         except Exception:
@@ -1169,6 +1169,7 @@ def load_service_order_reference(data_path_str: str):
             temp = reader(file_path)
             if temp.empty:
                 continue
+
             rename_map = {}
             for c in temp.columns:
                 nc = normalize_text(c)
@@ -1183,10 +1184,23 @@ def load_service_order_reference(data_path_str: str):
                 elif nc == "orden":
                     rename_map[c] = "orden"
             temp = temp.rename(columns=rename_map)
+
             has_required = {"servicio", "linea", "direccion"}.issubset(set(temp.columns))
             if not has_required:
                 continue
-            explicit_order_count = int(pd.to_numeric(temp.get("orden"), errors="coerce").notna().sum()) if "orden" in temp.columns else 0
+
+            if "orden" in temp.columns:
+                temp["orden"] = pd.to_numeric(temp["orden"], errors="coerce")
+            else:
+                temp["orden"] = np.nan
+
+            temp["__sheet_seq"] = pd.to_numeric(temp.get("__sheet_seq"), errors="coerce").fillna(0).astype(int)
+            temp["__row_seq"] = pd.to_numeric(temp.get("__row_seq"), errors="coerce")
+            if temp["__row_seq"].isna().all():
+                temp["__row_seq"] = np.arange(1, len(temp) + 1)
+            temp["__row_seq"] = temp["__row_seq"].astype(int)
+
+            explicit_order_count = int(temp["orden"].notna().sum())
             candidates.append({
                 "df": temp.copy(),
                 "root": str(root),
@@ -1210,29 +1224,37 @@ def load_service_order_reference(data_path_str: str):
 
     if "tipo_dia_ref" not in order_df.columns:
         order_df["tipo_dia_ref"] = "Lunes a Viernes"
-    if "orden" not in order_df.columns:
-        order_df["orden"] = range(1, len(order_df) + 1)
+
+    # Si no existe orden explícito, usar estrictamente el orden de filas del archivo
+    if order_df["orden"].isna().all():
+        order_df["orden"] = np.arange(1, len(order_df) + 1)
+    else:
+        # para filas sin orden explícito, usar el orden físico del archivo como respaldo
+        missing_mask = order_df["orden"].isna()
+        if missing_mask.any():
+            fallback_base = int(order_df["orden"].dropna().max())
+            order_df.loc[missing_mask, "orden"] = np.arange(fallback_base + 1, fallback_base + 1 + int(missing_mask.sum()))
 
     order_df["servicio_label"] = order_df["servicio"].apply(format_service_id)
     order_df["linea"] = order_df["linea"].fillna("").astype(str).str.strip()
     order_df["direccion"] = order_df["direccion"].fillna("").astype(str).str.strip()
     order_df["tipo_dia_ref"] = order_df["tipo_dia_ref"].fillna("").astype(str).str.strip()
     order_df["orden"] = pd.to_numeric(order_df["orden"], errors="coerce")
-    if order_df["orden"].isna().all():
-        order_df["orden"] = range(1, len(order_df) + 1)
     order_df = order_df.dropna(subset=["orden"]).copy()
     order_df["orden"] = order_df["orden"].astype(int)
 
     order_df = (
-        order_df.sort_values(["tipo_dia_ref", "linea", "direccion", "orden", "servicio_label"], kind="stable")
+        order_df.sort_values(["tipo_dia_ref", "linea", "direccion", "orden", "__sheet_seq", "__row_seq"], kind="stable")
         .drop_duplicates(subset=["tipo_dia_ref", "linea", "direccion", "servicio_label"], keep="first")
         .reset_index(drop=True)
     )
     return order_df, found_path, found_files, "ok"
 
 
+
 def infer_service_order_day_filter(fecha_sel: date) -> str:
     return "sabado y domingo" if fecha_sel.weekday() >= 5 else "lunes a viernes"
+
 
 
 def apply_service_order_and_labels(summary_df: pd.DataFrame,
@@ -1267,26 +1289,29 @@ def apply_service_order_and_labels(summary_df: pd.DataFrame,
 
         temp_day = temp_day[temp_day["linea_norm"] == normalize_text(linea_sel)].copy()
         temp_day = temp_day[temp_day["direccion_norm"] == normalize_text(dir_sel)].copy()
+
         if not temp_day.empty:
+            temp_day["__file_seq"] = np.arange(len(temp_day))
             temp_day = (
-                temp_day.sort_values(["orden", "servicio_label"], kind="stable")
+                temp_day.sort_values(["orden", "__file_seq"], kind="stable")
                 .drop_duplicates(subset=["servicio_label"], keep="first")
                 .reset_index(drop=True)
             )
-            order_map = temp_day.set_index("servicio_label")["orden"].to_dict()
+            # Usar el orden del archivo / columna Orden, no el número del servicio ni la hora
+            temp_day["servicio_orden_idx"] = np.arange(1, len(temp_day) + 1)
+            order_map = temp_day.set_index("servicio_label")["servicio_orden_idx"].to_dict()
             enriched["servicio_orden_idx"] = enriched["servicio_label"].map(order_map)
 
     # Respaldo SOLO para servicios ausentes del archivo de orden.
-    # No usa hora de salida como criterio principal para evitar alterar el orden solicitado.
+    # No usar número de servicio ni hora como criterio principal.
     missing_mask = enriched["servicio_orden_idx"].isna()
     if missing_mask.any():
         explicit_orders = pd.to_numeric(enriched["servicio_orden_idx"], errors="coerce").dropna()
         fallback_base = int(explicit_orders.max()) if not explicit_orders.empty else 0
         fallback_services = (
-            enriched.loc[missing_mask, ["servicio_label"]]
-            .drop_duplicates(subset=["servicio_label"])
-            .assign(_serv_num=lambda d: pd.to_numeric(d["servicio_label"], errors="coerce"))
-            .sort_values(["_serv_num", "servicio_label"], na_position="last", kind="stable")
+            enriched.loc[missing_mask, ["servicio_label", "__input_order"]]
+            .drop_duplicates(subset=["servicio_label"], keep="first")
+            .sort_values(["__input_order"], kind="stable")
             .reset_index(drop=True)
         )
         fallback_map = {
@@ -1314,6 +1339,8 @@ def apply_service_order_and_labels(summary_df: pd.DataFrame,
     if "__input_order" in enriched.columns:
         enriched = enriched.drop(columns="__input_order")
     return enriched
+
+
 
 # =========================================================
 # GRÁFICOS — KPIs y evolución
