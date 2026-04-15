@@ -1071,7 +1071,177 @@ def enrich_service_summary_with_itinerary(summary_df: pd.DataFrame,
         enriched['hora_salida'] = it_ts.where(it_ts.notna(), enriched['hora_salida'])
     enriched['hora_salida'] = pd.to_datetime(enriched['hora_salida'], errors='coerce')
     enriched['hora_salida_fmt'] = enriched['hora_salida'].dt.strftime('%H:%M:%S').fillna('-')
+
     enriched = enriched.sort_values(['hora_salida', 'servicio_label'], na_position='last').reset_index(drop=True)
+    return enriched
+
+
+@st.cache_data
+def load_service_order_reference(data_path_str: str):
+    """
+    Carga el orden operativo de servicios para usarlo en el selector y en el eje X.
+    Prioriza un CSV simple y, como respaldo, acepta el XLSX adjunto por el usuario.
+    """
+    data_path = Path(data_path_str)
+    base = Path(__file__).resolve().parent
+    search_roots = [base / "itinerarios", data_path / "itinerarios", base, data_path, base / "data", base / "datos"]
+
+    order_df = pd.DataFrame()
+    found_path = None
+    found_files = []
+
+    def _safe_read_csv(path: Path):
+        try:
+            return pd.read_csv(path, low_memory=False)
+        except Exception:
+            return pd.DataFrame()
+
+    def _safe_read_xlsx(path: Path):
+        try:
+            xl = pd.ExcelFile(path)
+            frames = []
+            sheet_map = {
+                "Lun a Vie": "Lunes a Viernes",
+                "Sabado y Domingo": "Sabado y Domingo",
+            }
+            for sheet in xl.sheet_names:
+                temp = pd.read_excel(path, sheet_name=sheet)
+                if temp.empty:
+                    continue
+                temp["tipo_dia_ref"] = sheet_map.get(sheet, str(sheet))
+                temp["orden"] = range(1, len(temp) + 1)
+                frames.append(temp)
+            return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
+
+    for root in search_roots:
+        if not root.exists():
+            continue
+        csv_path = root / "itinerario_orden.csv"
+        xlsx_path = root / "itinerario_orden.xlsx"
+
+        temp = pd.DataFrame()
+        temp_files = []
+        if csv_path.exists():
+            temp = _safe_read_csv(csv_path)
+            if not temp.empty:
+                temp_files.append(csv_path.name)
+        if temp.empty and xlsx_path.exists():
+            temp = _safe_read_xlsx(xlsx_path)
+            if not temp.empty:
+                temp_files.append(xlsx_path.name)
+
+        if not temp.empty:
+            order_df = temp.copy()
+            found_path = str(root)
+            found_files = temp_files
+            break
+
+    if order_df.empty:
+        return pd.DataFrame(), found_path or "", found_files, "no_data"
+
+    rename_map = {}
+    for c in order_df.columns:
+        nc = normalize_text(c)
+        if nc == "servicio":
+            rename_map[c] = "servicio"
+        elif nc == "linea":
+            rename_map[c] = "linea"
+        elif nc == "sentido":
+            rename_map[c] = "direccion"
+        elif nc in {"tipo dia", "tipo_dia", "tipodia", "tipo dia ref", "tipo_dia_ref"}:
+            rename_map[c] = "tipo_dia_ref"
+        elif nc == "orden":
+            rename_map[c] = "orden"
+    order_df = order_df.rename(columns=rename_map)
+
+    required = {"servicio", "linea", "direccion"}
+    if not required.issubset(set(order_df.columns)):
+        return pd.DataFrame(), found_path or "", found_files, "unsupported_format"
+
+    if "tipo_dia_ref" not in order_df.columns:
+        order_df["tipo_dia_ref"] = "Lunes a Viernes"
+    if "orden" not in order_df.columns:
+        order_df["orden"] = range(1, len(order_df) + 1)
+
+    order_df["servicio_label"] = order_df["servicio"].apply(format_service_id)
+    order_df["linea"] = order_df["linea"].fillna("").astype(str).str.strip()
+    order_df["direccion"] = order_df["direccion"].fillna("").astype(str).str.strip()
+    order_df["tipo_dia_ref"] = order_df["tipo_dia_ref"].fillna("").astype(str).str.strip()
+    order_df["orden"] = pd.to_numeric(order_df["orden"], errors="coerce")
+    order_df = order_df.dropna(subset=["orden"]).copy()
+    order_df["orden"] = order_df["orden"].astype(int)
+
+    # Mantener el primer orden declarado por servicio dentro de cada grupo
+    order_df = (
+        order_df.sort_values(["tipo_dia_ref", "linea", "direccion", "orden", "servicio_label"])
+        .drop_duplicates(subset=["tipo_dia_ref", "linea", "direccion", "servicio_label"], keep="first")
+        .reset_index(drop=True)
+    )
+    return order_df, found_path or "", found_files, "ok"
+
+
+def infer_service_order_day_filter(fecha_sel: date) -> str:
+    return "sabado y domingo" if fecha_sel.weekday() >= 5 else "lunes a viernes"
+
+
+def apply_service_order_and_labels(summary_df: pd.DataFrame,
+                                   order_df: pd.DataFrame,
+                                   profile_service: str,
+                                   linea_sel: str,
+                                   dir_sel: str,
+                                   fecha_sel: date) -> pd.DataFrame:
+    if summary_df.empty:
+        return summary_df.copy()
+
+    enriched = summary_df.copy()
+    enriched["servicio_label"] = enriched["servicio_label"].astype(str).str.strip()
+    enriched["hora_salida"] = pd.to_datetime(enriched["hora_salida"], errors="coerce")
+    enriched["hora_salida_fmt"] = enriched["hora_salida"].dt.strftime("%H:%M:%S").fillna("-")
+    enriched["hora_salida_corta"] = enriched["hora_salida_fmt"].astype(str).str.slice(0, 5).replace({"-": "s/h"})
+    enriched["estacion_origen"] = enriched["estacion_origen"].fillna("-").astype(str).str.strip().replace({"": "-"})
+
+    enriched["servicio_orden_idx"] = np.nan
+
+    if not order_df.empty and normalize_text(profile_service) == "biotren":
+        temp = order_df.copy()
+        day_filter = infer_service_order_day_filter(fecha_sel)
+        temp = temp[normalize_series(temp["tipo_dia_ref"]).str.contains(day_filter, regex=False)].copy()
+        temp = temp[normalize_series(temp["linea"]) == normalize_text(linea_sel)].copy()
+        temp = temp[normalize_series(temp["direccion"]) == normalize_text(dir_sel)].copy()
+        if not temp.empty:
+            order_map = temp.set_index("servicio_label")["orden"].to_dict()
+            enriched["servicio_orden_idx"] = enriched["servicio_label"].map(order_map)
+
+    # Fallback estable para servicios que no aparezcan en el archivo de orden
+    missing_mask = enriched["servicio_orden_idx"].isna()
+    if missing_mask.any():
+        fallback_base = int(pd.to_numeric(enriched["servicio_orden_idx"], errors="coerce").dropna().max()) if enriched["servicio_orden_idx"].notna().any() else 0
+        fallback_order = (
+            enriched.loc[missing_mask, ["servicio_label", "hora_salida"]]
+            .sort_values(["hora_salida", "servicio_label"], na_position="last")
+            .reset_index(drop=True)
+        )
+        fallback_map = {row["servicio_label"]: fallback_base + idx + 1 for idx, (_, row) in enumerate(fallback_order.iterrows())}
+        enriched.loc[missing_mask, "servicio_orden_idx"] = enriched.loc[missing_mask, "servicio_label"].map(fallback_map)
+
+    enriched["servicio_orden_idx"] = pd.to_numeric(enriched["servicio_orden_idx"], errors="coerce").fillna(999999).astype(int)
+    enriched = enriched.sort_values(["servicio_orden_idx", "hora_salida", "servicio_label"], na_position="last").reset_index(drop=True)
+
+    enriched["servicio_display_label"] = (
+        enriched["servicio_label"].astype(str)
+        + " | " + enriched["hora_salida_corta"].astype(str)
+        + " | " + enriched["estacion_origen"].astype(str)
+    )
+
+    dup_rank = enriched.groupby("servicio_display_label").cumcount() + 1
+    dup_total = enriched.groupby("servicio_display_label")["servicio_display_label"].transform("size")
+    enriched["servicio_display_label"] = np.where(
+        dup_total > 1,
+        enriched["servicio_display_label"] + " (" + dup_rank.astype(str) + ")",
+        enriched["servicio_display_label"],
+    )
     return enriched
 
 # =========================================================
@@ -1737,26 +1907,36 @@ def build_service_transport_chart(summary_df: pd.DataFrame, title: str) -> go.Fi
     plot_df["servicio_label"] = plot_df["servicio_label"].astype(str).str.strip()
     plot_df["hora_salida_fmt"] = plot_df["hora_salida_fmt"].fillna("-").astype(str)
     plot_df["estacion_origen"] = plot_df["estacion_origen"].fillna("-").astype(str)
+    label_col = "servicio_display_label" if "servicio_display_label" in plot_df.columns else None
 
-    # Etiqueta del eje X con servicio y hora de salida para una lectura más directa.
-    # Si existieran duplicados exactos, se agrega un correlativo estable.
-    plot_df["hora_salida_corta"] = plot_df["hora_salida_fmt"].astype(str).str.slice(0, 5)
-    dup_rank = plot_df.groupby(["servicio_label", "hora_salida_corta"]).cumcount() + 1
-    dup_total = plot_df.groupby(["servicio_label", "hora_salida_corta"])["servicio_label"].transform("size")
-    plot_df["servicio_eje"] = plot_df["servicio_label"].astype(str) + " | " + plot_df["hora_salida_corta"].replace({"-": "s/h"})
-    plot_df["servicio_eje"] = np.where(
-        dup_total > 1,
-        plot_df["servicio_eje"] + " (" + dup_rank.astype(str) + ")",
-        plot_df["servicio_eje"],
-    )
+    if not label_col:
+        plot_df["hora_salida_corta"] = plot_df["hora_salida_fmt"].astype(str).str.slice(0, 5)
+        dup_rank = plot_df.groupby(["servicio_label", "hora_salida_corta"]).cumcount() + 1
+        dup_total = plot_df.groupby(["servicio_label", "hora_salida_corta"])["servicio_label"].transform("size")
+        plot_df["servicio_display_label"] = (
+            plot_df["servicio_label"].astype(str) + " | "
+            + plot_df["hora_salida_corta"].replace({"-": "s/h"}) + " | "
+            + plot_df["estacion_origen"].astype(str)
+        )
+        plot_df["servicio_display_label"] = np.where(
+            dup_total > 1,
+            plot_df["servicio_display_label"] + " (" + dup_rank.astype(str) + ")",
+            plot_df["servicio_display_label"],
+        )
+        label_col = "servicio_display_label"
 
-    service_order = plot_df["servicio_eje"].tolist()
+    if "servicio_orden_idx" in plot_df.columns:
+        plot_df = plot_df.sort_values(["servicio_orden_idx", "hora_salida", "servicio_label"], na_position="last").reset_index(drop=True)
+    else:
+        plot_df = plot_df.sort_values(["hora_salida", "servicio_label"], na_position="last").reset_index(drop=True)
+
+    service_order = plot_df[label_col].tolist()
     plot_df["pasajeros_label"] = plot_df["pasajeros_transportados"].apply(fmt_pax)
     plot_df["max_abordo_label"] = plot_df["max_abordo"].apply(fmt_pax)
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=plot_df["servicio_eje"],
+        x=plot_df[label_col],
         y=plot_df["pasajeros_transportados"],
         marker_color=EFE_BLUE,
         text=plot_df["pasajeros_label"],
@@ -1782,7 +1962,7 @@ def build_service_transport_chart(summary_df: pd.DataFrame, title: str) -> go.Fi
         showlegend=False,
     )
     fig.update_xaxes(
-        title="Servicio | Hora de salida",
+        title="Servicio | Hora de salida | Estación origen",
         tickangle=-90,
         tickfont=dict(size=PLOT_FONT_SIZE),
         categoryorder="array",
@@ -2984,17 +3164,8 @@ def render_perfil_carga():
 
     perfil_dir = (perfil_linea[perfil_linea["direccion"].astype(str) == str(dir_sel)].copy()
                   if dir_sel else perfil_linea.iloc[0:0].copy())
-    servicios_disp = sorted(perfil_dir["servicio_label"].dropna().astype(str).unique(),
-                             key=lambda x: (len(x), x))
 
-    with row_sel_2c:
-        servicio_sel = (st.selectbox("Servicio específico", options=servicios_disp,
-                                      index=0 if servicios_disp else None,
-                                      placeholder="Sin servicios disponibles",
-                                      key=f"perfil_servicio_selector_{profile_srv}")
-                        if servicios_disp else None)
-
-    if perfil_dir.empty or not servicio_sel:
+    if perfil_dir.empty:
         st.warning("No existen datos para la combinación seleccionada.")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
@@ -3003,6 +3174,68 @@ def render_perfil_carga():
         profile_schema = "transactional" if {"origen", "destino", "t_entrada_viaje", "t_salida_viaje"}.issubset(set(perfil_dir.columns)) else "aggregated"
 
     itinerary_summary_df, itinerary_detail_df, itinerary_path, itinerary_files, itinerary_status = load_itinerary_reference(str(data_path))
+    service_order_df, service_order_path, service_order_files, service_order_status = load_service_order_reference(str(data_path))
+
+    service_summary = build_service_level_summary(perfil_dir, profile_schema)
+    service_summary = enrich_service_summary_with_itinerary(
+        service_summary,
+        itinerary_summary_df,
+        profile_srv,
+        linea_sel,
+        dir_sel,
+        fecha_sel,
+    )
+    service_summary = apply_service_order_and_labels(
+        service_summary,
+        service_order_df,
+        profile_srv,
+        linea_sel,
+        dir_sel,
+        fecha_sel,
+    )
+
+    if not service_summary.empty:
+        option_df = service_summary[["servicio_label", "servicio_display_label", "servicio_orden_idx"]].drop_duplicates(subset=["servicio_label"], keep="first").copy()
+        option_df = option_df.sort_values(["servicio_orden_idx", "servicio_label"])
+        option_labels = option_df["servicio_display_label"].astype(str).tolist()
+        label_to_service = dict(zip(option_df["servicio_display_label"].astype(str), option_df["servicio_label"].astype(str)))
+        prev_service = st.session_state.get(f"perfil_servicio_selector_{profile_srv}")
+        default_label = option_labels[0] if option_labels else None
+        if prev_service in set(option_df["servicio_label"].astype(str)):
+            default_label = option_df.loc[option_df["servicio_label"].astype(str) == str(prev_service), "servicio_display_label"].iloc[0]
+
+        with row_sel_2c:
+            servicio_label_sel = (
+                st.selectbox(
+                    "Servicio específico",
+                    options=option_labels,
+                    index=(option_labels.index(default_label) if option_labels and default_label in option_labels else 0),
+                    placeholder="Sin servicios disponibles",
+                    key=f"perfil_servicio_selector_label_{profile_srv}",
+                )
+                if option_labels else None
+            )
+        servicio_sel = label_to_service.get(servicio_label_sel) if servicio_label_sel else None
+        if servicio_sel:
+            st.session_state[f"perfil_servicio_selector_{profile_srv}"] = servicio_sel
+    else:
+        servicios_disp = sorted(perfil_dir["servicio_label"].dropna().astype(str).unique(), key=lambda x: (len(x), x))
+        with row_sel_2c:
+            servicio_sel = (
+                st.selectbox(
+                    "Servicio específico",
+                    options=servicios_disp,
+                    index=0 if servicios_disp else None,
+                    placeholder="Sin servicios disponibles",
+                    key=f"perfil_servicio_selector_{profile_srv}",
+                )
+                if servicios_disp else None
+            )
+
+    if not servicio_sel:
+        st.warning("No existen servicios disponibles para la selección actual.")
+        st.markdown("</div></div>", unsafe_allow_html=True)
+        return
 
     if profile_schema == "transactional":
         perfil_servicio_tx = perfil_dir[perfil_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
@@ -3032,16 +3265,6 @@ def render_perfil_carga():
     capacidad      = (float(capacidad_col.dropna().iloc[0])
                       if "capacidad_tren" in perfil_servicio.columns
                       and perfil_servicio["capacidad_tren"].dropna().any() else None)
-
-    service_summary = build_service_level_summary(perfil_dir, profile_schema)
-    service_summary = enrich_service_summary_with_itinerary(
-        service_summary,
-        itinerary_summary_df,
-        profile_srv,
-        linea_sel,
-        dir_sel,
-        fecha_sel,
-    )
 
     servicios_realizados = int(len(service_summary)) if not service_summary.empty else int(perfil_dir["servicio_label"].nunique())
     pasajeros_transportados = total_bajadas
@@ -3079,6 +3302,8 @@ def render_perfil_carga():
         ref_parts.append(f"Itinerario: {len(itinerary_files)} archivo(s) en {itinerary_path}")
     elif itinerary_status == 'no_data':
         ref_parts.append("Itinerario no encontrado; se usa hora/origen inferidos desde las transacciones")
+    if service_order_status == 'ok' and service_order_files:
+        ref_parts.append(f"Orden servicios: {len(service_order_files)} archivo(s) en {service_order_path}")
     caption_parts = [x for x in [cap_msg] + ref_parts if x]
     if caption_parts:
         st.caption(" · ".join(caption_parts))
@@ -3098,6 +3323,7 @@ def render_perfil_carga():
         st.info("No existen detalles de servicios para el día seleccionado.")
     else:
         detalle_servicios = service_summary.copy()
+        detalle_servicios = detalle_servicios.sort_values(["servicio_orden_idx", "hora_salida", "servicio_label"], na_position="last").copy() if "servicio_orden_idx" in detalle_servicios.columns else detalle_servicios.sort_values(["hora_salida", "servicio_label"], na_position="last").copy()
         detalle_servicios["Hora salida"] = detalle_servicios["hora_salida_fmt"]
         detalle_servicios["Servicio"] = detalle_servicios["servicio_label"]
         detalle_servicios["Estación origen"] = detalle_servicios["estacion_origen"]
