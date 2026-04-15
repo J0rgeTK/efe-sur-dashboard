@@ -3565,6 +3565,13 @@ def render_perfil_carga():
                 for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]:
                     if col not in service_summary.columns:
                         service_summary[col] = np.nan
+                service_summary["tarifa_media_aprox"] = pd.to_numeric(service_summary.get("tarifa_media_aprox"), errors="coerce")
+                service_summary["pasajeros_transportados"] = pd.to_numeric(service_summary.get("pasajeros_transportados"), errors="coerce")
+                service_summary["recaudacion_aprox"] = np.where(
+                    service_summary["tarifa_media_aprox"].notna() & service_summary["pasajeros_transportados"].notna(),
+                    service_summary["tarifa_media_aprox"] * service_summary["pasajeros_transportados"],
+                    np.nan,
+                )
 
     if not service_summary.empty:
         option_df = service_summary[["servicio_label", "servicio_display_label", "servicio_orden_idx"]].drop_duplicates(subset=["servicio_label"], keep="first").copy()
@@ -3664,15 +3671,11 @@ def render_perfil_carga():
     selected_service_row = service_summary[service_summary["servicio_label"].astype(str) == str(servicio_sel)].head(1) if not service_summary.empty else pd.DataFrame()
     tarifa_media_sel = pd.to_numeric(selected_service_row["tarifa_media_aprox"], errors="coerce").iloc[0] if not selected_service_row.empty and "tarifa_media_aprox" in selected_service_row.columns else np.nan
     recaudacion_sel = pd.to_numeric(selected_service_row["recaudacion_aprox"], errors="coerce").iloc[0] if not selected_service_row.empty and "recaudacion_aprox" in selected_service_row.columns else np.nan
-    tx_cruzadas_sel = pd.to_numeric(selected_service_row["tx_cruzadas"], errors="coerce").iloc[0] if not selected_service_row.empty and "tx_cruzadas" in selected_service_row.columns else np.nan
-    cobertura_sel = (float(tx_cruzadas_sel) / float(pasajeros_transportados) * 100.0) if pd.notna(tx_cruzadas_sel) and pd.notna(pasajeros_transportados) and float(pasajeros_transportados) > 0 else np.nan
-    tx_cruzadas_total = int(pd.to_numeric(service_summary.get("tx_cruzadas"), errors="coerce").fillna(0).sum()) if not service_summary.empty and "tx_cruzadas" in service_summary.columns else 0
 
-    fm1, fm2, fm3, fm4 = st.columns(4)
-    fm1.metric("Tx cruzadas (línea | dirección)", fmt_pax(tx_cruzadas_total))
-    fm2.metric("Tarifa media aprox. servicio", fmt_number(tarifa_media_sel, "CLP") if pd.notna(tarifa_media_sel) else "-")
-    fm3.metric("Recaudación aprox. servicio", fmt_number(recaudacion_sel, "CLP") if pd.notna(recaudacion_sel) else "-")
-    fm4.metric("Cobertura cruce servicio", fmt_pct(cobertura_sel) if pd.notna(cobertura_sel) else "-")
+    fm1, fm2 = st.columns(2)
+    fm1.metric("Tarifa media aprox. servicio", fmt_number(tarifa_media_sel, "CLP") if pd.notna(tarifa_media_sel) else "-")
+    fm2.metric("Recaudación aprox. servicio", fmt_number(recaudacion_sel, "CLP") if pd.notna(recaudacion_sel) else "-")
+    st.caption("La recaudación aproximada se calcula como tarifa media aproximada × pasajeros transportados del servicio seleccionado.")
 
     titulo = f"{profile_srv} | {linea_sel} | {dir_sel} | Servicio {servicio_sel}"
     show_plot(build_perfil_carga_chart(perfil_servicio, titulo), use_container_width=True)
