@@ -62,6 +62,13 @@ WARNING   = COLORS["WARNING"]
 DANGER    = COLORS["DANGER"]
 BORDER    = COLORS["BORDER"]
 
+# =========================================================
+# TIPOGRAFÍA BASE PARA GRÁFICOS
+# =========================================================
+PLOT_FONT_SIZE = 14
+PLOT_TITLE_SIZE = 18
+PLOT_ANNOTATION_SIZE = 11
+
 RURAL_SERVICES = ["Laja Talcahuano", "Tren Araucanía", "Llanquihue Puerto Montt"]
 
 # =========================================================
@@ -1096,7 +1103,7 @@ def build_line_chart(df: pd.DataFrame, title: str, color=None, line_dash=None,
     fig.update_layout(
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20, r=20, t=55, b=20), height=height,
-        legend_title_text="", font=dict(color=TEXT_MAIN),
+        legend_title_text="", font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
         title_font=dict(size=16, color=EFE_BLUE), hovermode="x unified",
     )
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
@@ -1114,7 +1121,7 @@ def build_line_chart(df: pd.DataFrame, title: str, color=None, line_dash=None,
             fig.add_annotation(
                 x=row["periodo_label"], y=row["valor"], text=row["valor_label"],
                 showarrow=False, yshift=18, xshift=xshift,
-                font=dict(size=10, color=EFE_BLUE),
+                font=dict(size=PLOT_ANNOTATION_SIZE, color=EFE_BLUE),
                 bgcolor="rgba(255,255,255,0.92)", bordercolor=BORDER,
                 borderwidth=1, borderpad=3, align="center",
             )
@@ -1159,7 +1166,7 @@ def build_trend_line_chart(df: pd.DataFrame, kpi_name: str, unit: str | None,
         title=f"{kpi_name} — {service_name} · Tendencia: {direction}",
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20, r=20, t=55, b=20), height=370,
-        font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
@@ -1213,7 +1220,7 @@ def detect_anomalies(df: pd.DataFrame, kpi_name: str, service_name: str,
         title=f"Detección de anomalías — {kpi_name} ({service_name})",
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20, r=20, t=55, b=20), height=340,
-        font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
@@ -1262,7 +1269,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
         mode="markers+text",
         text=plot_df["label_mapa"],
         textposition="top right",
-        textfont=dict(size=12, color=EFE_BLUE, family="Arial, sans-serif"),
+        textfont=dict(size=13, color=EFE_BLUE, family="Arial, sans-serif"),
         marker=dict(size=plot_df["marker_size"], color=EFE_BLUE,
                     opacity=0.88, sizemode="diameter"),
         customdata=plot_df[["estacion","entradas","meta_entradas"]].fillna(""),
@@ -1580,7 +1587,7 @@ def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure
             text=fmt_pax(row["L_out_abordo"]),
             showarrow=False,
             yshift=18,
-            font=dict(size=10, color=SUCCESS),
+            font=dict(size=PLOT_ANNOTATION_SIZE, color=SUCCESS),
             bgcolor="rgba(255,255,255,0.96)",
             bordercolor=SUCCESS,
             borderwidth=1,
@@ -1591,12 +1598,12 @@ def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure
     fig.update_layout(
         title=titulo, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20,r=20,t=55,b=20), height=500, barmode="group",
-        font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
                      categoryarray=station_order or None)
-    fig.update_yaxes(title="Pasajeros")
+    fig.update_yaxes(title="Pasajeros", tickfont=dict(size=PLOT_FONT_SIZE))
     return fig
 
 
@@ -1631,13 +1638,13 @@ def build_perfil_abordo_comparativo_chart(day_df: pd.DataFrame, titulo: str) -> 
     fig.update_layout(
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20,r=20,t=55,b=20), height=560,
-        font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         legend_title_text="Servicio", hovermode="x unified",
         legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.01),
     )
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
                      categoryarray=station_order or None)
-    fig.update_yaxes(title="Pasajeros a bordo")
+    fig.update_yaxes(title="Pasajeros a bordo", tickfont=dict(size=PLOT_FONT_SIZE))
     return fig
 
 
@@ -1731,15 +1738,16 @@ def build_service_transport_chart(summary_df: pd.DataFrame, title: str) -> go.Fi
     plot_df["hora_salida_fmt"] = plot_df["hora_salida_fmt"].fillna("-").astype(str)
     plot_df["estacion_origen"] = plot_df["estacion_origen"].fillna("-").astype(str)
 
-    # Etiqueta unitaria del eje X para diferenciar claramente cada servicio.
-    # Si existieran servicios repetidos, se agrega un correlativo estable.
-    dup_rank = plot_df.groupby("servicio_label").cumcount() + 1
-    dup_total = plot_df.groupby("servicio_label")["servicio_label"].transform("size")
-    plot_df["servicio_base"] = "Srv. " + plot_df["servicio_label"]
+    # Etiqueta del eje X con servicio y hora de salida para una lectura más directa.
+    # Si existieran duplicados exactos, se agrega un correlativo estable.
+    plot_df["hora_salida_corta"] = plot_df["hora_salida_fmt"].astype(str).str.slice(0, 5)
+    dup_rank = plot_df.groupby(["servicio_label", "hora_salida_corta"]).cumcount() + 1
+    dup_total = plot_df.groupby(["servicio_label", "hora_salida_corta"])["servicio_label"].transform("size")
+    plot_df["servicio_eje"] = plot_df["servicio_label"].astype(str) + " | " + plot_df["hora_salida_corta"].replace({"-": "s/h"})
     plot_df["servicio_eje"] = np.where(
         dup_total > 1,
-        plot_df["servicio_base"] + " (" + dup_rank.astype(str) + ")",
-        plot_df["servicio_base"],
+        plot_df["servicio_eje"] + " (" + dup_rank.astype(str) + ")",
+        plot_df["servicio_eje"],
     )
 
     service_order = plot_df["servicio_eje"].tolist()
@@ -1769,17 +1777,18 @@ def build_service_transport_chart(summary_df: pd.DataFrame, title: str) -> go.Fi
         paper_bgcolor=EFE_WHITE,
         margin=dict(l=20, r=20, t=55, b=20),
         height=430,
-        font=dict(color=TEXT_MAIN),
-        title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         showlegend=False,
     )
     fig.update_xaxes(
-        title="Servicio",
+        title="Servicio | Hora de salida",
         tickangle=-90,
+        tickfont=dict(size=PLOT_FONT_SIZE),
         categoryorder="array",
         categoryarray=service_order,
     )
-    fig.update_yaxes(title="Pasajeros transportados")
+    fig.update_yaxes(title="Pasajeros transportados", tickfont=dict(size=PLOT_FONT_SIZE))
     return fig
 
 # =========================================================
@@ -1886,7 +1895,7 @@ def build_station_hourly_overview_chart(day_df: pd.DataFrame, station_order=None
         title="Movimientos por hora y estación",
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20,r=20,t=55,b=20), height=440,
-        font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     fig.update_xaxes(title="Hora", tickangle=-90, categoryorder="array",
@@ -1930,7 +1939,7 @@ def build_od_heatmap(events_df: pd.DataFrame, bucket_order: list,
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20,r=20,t=55,b=20),
         height=max(420, 120 + 26*len(pivot.index)),
-        font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
     )
     return fig
 
@@ -1962,7 +1971,7 @@ def build_full_od_matrix(day_df: pd.DataFrame, title: str) -> go.Figure:
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20,r=20,t=55,b=20),
         height=max(500, 80 + 22*len(origs)),
-        font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         xaxis_title="Destino", yaxis_title="Origen",
     )
     return fig
@@ -2001,7 +2010,7 @@ def build_calendar_heatmap(day_df: pd.DataFrame, title: str) -> go.Figure:
     fig.update_layout(
         title=title, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20,r=20,t=55,b=20), height=380,
-        font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         xaxis_title="Hora del día", yaxis_title="Día de la semana",
     )
     return fig
@@ -2038,7 +2047,7 @@ def build_sankey_od(day_df: pd.DataFrame, title: str, top_n: int = 15) -> go.Fig
     fig.update_layout(
         title=title, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20,r=20,t=55,b=20), height=480,
-        font=dict(color=TEXT_MAIN, size=11), title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=11), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
     )
     return fig
 
@@ -2069,7 +2078,7 @@ def build_station_flow_chart(flow_df: pd.DataFrame, bucket_order: list,
     fig.update_layout(
         title=f"{station_name} | {granularity}", plot_bgcolor=EFE_WHITE,
         paper_bgcolor=EFE_WHITE, margin=dict(l=20,r=20,t=55,b=20), height=430,
-        barmode="group", font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+        barmode="group", font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
@@ -2096,7 +2105,7 @@ def build_station_activity_bar_chart(activity_df: pd.DataFrame, station_order: l
         title=f"Entradas y salidas por estación | {bucket_label}",
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20,r=20,t=55,b=20), height=430, barmode="group",
-        font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
@@ -2147,7 +2156,7 @@ def build_station_activity_map(activity_df: pd.DataFrame, station_ref: pd.DataFr
         fig.add_trace(go.Scattermapbox(
             lat=base_df["latitud"].astype(float), lon=base_df["longitud"].astype(float),
             mode="markers+text", text=base_df["label_mapa"], textposition="top right",
-            textfont=dict(size=11, color=EFE_BLUE, family="Arial, sans-serif"),
+            textfont=dict(size=13, color=EFE_BLUE, family="Arial, sans-serif"),
             marker=dict(size=base_df["marker_size"], color=base_df["balance"],
                         colorscale="RdBu", cmin=cmin, cmax=cmax, opacity=0.9, sizemode="diameter",
                         colorbar=dict(title="Balance<br>Entradas - Salidas")),
@@ -2165,7 +2174,7 @@ def build_station_activity_map(activity_df: pd.DataFrame, station_ref: pd.DataFr
         fig.add_trace(go.Scattermapbox(
             lat=sel_df["latitud"].astype(float), lon=sel_df["longitud"].astype(float),
             mode="markers+text", text=sel_df["label_mapa"], textposition="top right",
-            textfont=dict(size=12, color=EFE_BLUE, family="Arial, sans-serif"),
+            textfont=dict(size=13, color=EFE_BLUE, family="Arial, sans-serif"),
             marker=dict(size=(sel_df["marker_size"]+5).tolist(), color=WARNING,
                         opacity=0.95, sizemode="diameter"),
             customdata=sel_df[["estacion","entradas","salidas","total","balance_label"]].values,
@@ -2187,8 +2196,8 @@ def build_station_activity_map(activity_df: pd.DataFrame, station_ref: pd.DataFr
                         south=lat_min-lat_pad, north=lat_max+lat_pad),
         ),
         margin=dict(l=0,r=0,t=45,b=0), height=430,
-        paper_bgcolor=EFE_WHITE, font=dict(color=TEXT_MAIN),
-        title_font=dict(color=EFE_BLUE, size=16),
+        paper_bgcolor=EFE_WHITE, font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
     )
     return fig
 
@@ -2255,7 +2264,7 @@ def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
             mode="markers+text",
             text=plot_df["estacion"].astype(str),
             textposition="top right",
-            textfont=dict(size=11, color=EFE_BLUE),
+            textfont=dict(size=13, color=EFE_BLUE),
             marker=dict(size=plot_df["marker_size"], color=bubble_color, opacity=0.72, sizemode="diameter"),
             customdata=plot_df[["estacion", "viajes"]].values,
             hovertemplate="<b>%{customdata[0]}</b><br>Viajes: %{customdata[1]:,.0f}<extra></extra>",
@@ -2268,7 +2277,7 @@ def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
         mode="markers+text",
         text=[str(selected_station)],
         textposition="top right",
-        textfont=dict(size=12, color=EFE_BLUE),
+        textfont=dict(size=13, color=EFE_BLUE),
         marker=dict(size=18, color=WARNING, opacity=0.95, sizemode="diameter"),
         hovertemplate=f"<b>{selected_station}</b><extra></extra>",
         showlegend=False,
@@ -2293,8 +2302,8 @@ def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
         margin=dict(l=0, r=0, t=45, b=0),
         height=460,
         paper_bgcolor=EFE_WHITE,
-        font=dict(color=TEXT_MAIN),
-        title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
     )
     return fig
 
@@ -2339,8 +2348,8 @@ def build_od_station_bar_chart(flow_df: pd.DataFrame, category_col: str,
         paper_bgcolor=EFE_WHITE,
         margin=dict(l=20, r=20, t=50, b=20),
         height=340,
-        font=dict(color=TEXT_MAIN),
-        title_font=dict(color=EFE_BLUE, size=16),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         showlegend=False,
     )
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=station_order or None)
@@ -2656,7 +2665,7 @@ def render_kpis():
                             title=f"{servicio} — {periodo_sel}",
                             plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
                             margin=dict(l=20,r=20,t=50,b=20), height=340,
-                            font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+                            font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
                         )
                         st.plotly_chart(fig_meta, use_container_width=True)
     else:
@@ -2728,7 +2737,7 @@ def render_personas():
             fig.update_traces(marker_color=EFE_BLUE)
             fig.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
                               margin=dict(l=20,r=20,t=50,b=20), height=420,
-                              font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16))
+                              font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE))
             fig.update_xaxes(title="Avance %"); fig.update_yaxes(title="")
             st.plotly_chart(fig, use_container_width=True)
     with right_p:
@@ -2741,7 +2750,7 @@ def render_personas():
                                               "Atrasada":EFE_RED,"Finalizada":SUCCESS,"Pausada":WARNING})
             fig2.update_layout(plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
                                margin=dict(l=20,r=20,t=50,b=20), height=420,
-                               font=dict(color=TEXT_MAIN), title_font=dict(color=EFE_BLUE, size=16),
+                               font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
                                showlegend=False)
             st.plotly_chart(fig2, use_container_width=True)
 
@@ -2863,8 +2872,8 @@ def render_detalle_servicio():
                 title="Afluencia vs meta por estación",
                 plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
                 margin=dict(l=20,r=20,t=50,b=20), height=465,
-                barmode="group", font=dict(color=TEXT_MAIN),
-                title_font=dict(color=EFE_BLUE, size=16),
+                barmode="group", font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+                title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             )
             fig_bar.update_xaxes(title="", tickangle=-90, categoryorder="array",
