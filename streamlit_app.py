@@ -35,6 +35,24 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+
+PLOTLY_CHART_CONFIG = {
+    "scrollZoom": False,
+    "displayModeBar": False,
+    "doubleClick": "reset",
+    "responsive": True,
+}
+
+_ORIGINAL_ST_PLOTLY_CHART = st.plotly_chart
+
+def _plotly_chart_without_scroll(*args, **kwargs):
+    config = kwargs.pop("config", None) or {}
+    merged_config = dict(PLOTLY_CHART_CONFIG)
+    merged_config.update(config)
+    return _ORIGINAL_ST_PLOTLY_CHART(*args, config=merged_config, **kwargs)
+
+st.plotly_chart = _plotly_chart_without_scroll
+
 # =========================================================
 # PALETA DE COLORES (definida UNA sola vez)
 # =========================================================
@@ -1207,19 +1225,29 @@ def apply_service_order_and_labels(summary_df: pd.DataFrame,
     if not order_df.empty and normalize_text(profile_service) == "biotren":
         temp = order_df.copy()
         day_filter = infer_service_order_day_filter(fecha_sel)
-        temp = temp[normalize_series(temp["tipo_dia_ref"]).str.contains(day_filter, regex=False)].copy()
-        temp = temp[normalize_series(temp["linea"]) == normalize_text(linea_sel)].copy()
-        temp = temp[normalize_series(temp["direccion"]) == normalize_text(dir_sel)].copy()
-        if not temp.empty:
-            order_map = temp.set_index("servicio_label")["orden"].to_dict()
+        temp["tipo_dia_ref_norm"] = normalize_series(temp["tipo_dia_ref"])
+        temp["linea_norm"] = normalize_series(temp["linea"])
+        temp["direccion_norm"] = normalize_series(temp["direccion"])
+
+        temp_day = temp[temp["tipo_dia_ref_norm"].str.contains(day_filter, regex=False, na=False)].copy()
+        if temp_day.empty:
+            temp_day = temp.copy()
+
+        temp_day = temp_day[temp_day["linea_norm"] == normalize_text(linea_sel)].copy()
+        temp_day = temp_day[temp_day["direccion_norm"] == normalize_text(dir_sel)].copy()
+        if not temp_day.empty:
+            temp_day = temp_day.sort_values(["orden", "servicio_label"]).drop_duplicates(subset=["servicio_label"], keep="first")
+            order_map = temp_day.set_index("servicio_label")["orden"].to_dict()
             enriched["servicio_orden_idx"] = enriched["servicio_label"].map(order_map)
 
     # Fallback estable para servicios que no aparezcan en el archivo de orden
     missing_mask = enriched["servicio_orden_idx"].isna()
     if missing_mask.any():
-        fallback_base = int(pd.to_numeric(enriched["servicio_orden_idx"], errors="coerce").dropna().max()) if enriched["servicio_orden_idx"].notna().any() else 0
+        explicit_orders = pd.to_numeric(enriched["servicio_orden_idx"], errors="coerce").dropna()
+        fallback_base = int(explicit_orders.max()) if not explicit_orders.empty else 0
         fallback_order = (
             enriched.loc[missing_mask, ["servicio_label", "hora_salida"]]
+            .drop_duplicates(subset=["servicio_label"])
             .sort_values(["hora_salida", "servicio_label"], na_position="last")
             .reset_index(drop=True)
         )
