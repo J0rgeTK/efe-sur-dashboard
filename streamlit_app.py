@@ -1120,15 +1120,14 @@ def enrich_service_summary_with_itinerary(summary_df: pd.DataFrame,
 def load_service_order_reference(data_path_str: str):
     """
     Carga el orden operativo de servicios para usarlo en el selector y en el eje X.
-    Prioriza un CSV simple y, como respaldo, acepta el XLSX adjunto por el usuario.
+    Prioriza el archivo que traiga un campo explícito de orden y evita usar la hora
+    como criterio principal cuando existe esa referencia.
     """
     data_path = Path(data_path_str)
     base = Path(__file__).resolve().parent
     search_roots = [base / "itinerarios", data_path / "itinerarios", base, data_path, base / "data", base / "datos"]
 
-    order_df = pd.DataFrame()
-    found_path = None
-    found_files = []
+    candidates = []
 
     def _safe_read_csv(path: Path):
         try:
@@ -1154,9 +1153,7 @@ def load_service_order_reference(data_path_str: str):
                 elif "orden" in temp.columns:
                     temp["orden"] = pd.to_numeric(temp["orden"], errors="coerce")
                 else:
-                    temp["orden"] = range(1, len(temp) + 1)
-                if temp["orden"].isna().all():
-                    temp["orden"] = range(1, len(temp) + 1)
+                    temp["orden"] = np.nan
                 frames.append(temp)
             return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         except Exception:
@@ -1165,47 +1162,51 @@ def load_service_order_reference(data_path_str: str):
     for root in search_roots:
         if not root.exists():
             continue
-        csv_path = root / "itinerario_orden.csv"
-        xlsx_path = root / "itinerario_orden.xlsx"
+        for filename, reader in [("itinerario_orden.xlsx", _safe_read_xlsx), ("itinerario_orden.csv", _safe_read_csv)]:
+            file_path = root / filename
+            if not file_path.exists():
+                continue
+            temp = reader(file_path)
+            if temp.empty:
+                continue
+            rename_map = {}
+            for c in temp.columns:
+                nc = normalize_text(c)
+                if nc == "servicio":
+                    rename_map[c] = "servicio"
+                elif nc == "linea":
+                    rename_map[c] = "linea"
+                elif nc == "sentido":
+                    rename_map[c] = "direccion"
+                elif nc in {"tipo dia", "tipo_dia", "tipodia", "tipo dia ref", "tipo_dia_ref"}:
+                    rename_map[c] = "tipo_dia_ref"
+                elif nc == "orden":
+                    rename_map[c] = "orden"
+            temp = temp.rename(columns=rename_map)
+            has_required = {"servicio", "linea", "direccion"}.issubset(set(temp.columns))
+            if not has_required:
+                continue
+            explicit_order_count = int(pd.to_numeric(temp.get("orden"), errors="coerce").notna().sum()) if "orden" in temp.columns else 0
+            candidates.append({
+                "df": temp.copy(),
+                "root": str(root),
+                "file": filename,
+                "explicit_order_count": explicit_order_count,
+                "is_xlsx": int(filename.lower().endswith(".xlsx")),
+            })
 
-        temp = pd.DataFrame()
-        temp_files = []
-        if csv_path.exists():
-            temp = _safe_read_csv(csv_path)
-            if not temp.empty:
-                temp_files.append(csv_path.name)
-        if temp.empty and xlsx_path.exists():
-            temp = _safe_read_xlsx(xlsx_path)
-            if not temp.empty:
-                temp_files.append(xlsx_path.name)
+    if not candidates:
+        return pd.DataFrame(), "", [], "no_data"
 
-        if not temp.empty:
-            order_df = temp.copy()
-            found_path = str(root)
-            found_files = temp_files
-            break
-
-    if order_df.empty:
-        return pd.DataFrame(), found_path or "", found_files, "no_data"
-
-    rename_map = {}
-    for c in order_df.columns:
-        nc = normalize_text(c)
-        if nc == "servicio":
-            rename_map[c] = "servicio"
-        elif nc == "linea":
-            rename_map[c] = "linea"
-        elif nc == "sentido":
-            rename_map[c] = "direccion"
-        elif nc in {"tipo dia", "tipo_dia", "tipodia", "tipo dia ref", "tipo_dia_ref"}:
-            rename_map[c] = "tipo_dia_ref"
-        elif nc == "orden":
-            rename_map[c] = "orden"
-    order_df = order_df.rename(columns=rename_map)
-
-    required = {"servicio", "linea", "direccion"}
-    if not required.issubset(set(order_df.columns)):
-        return pd.DataFrame(), found_path or "", found_files, "unsupported_format"
+    candidates = sorted(
+        candidates,
+        key=lambda x: (x["explicit_order_count"], x["is_xlsx"]),
+        reverse=True,
+    )
+    best = candidates[0]
+    order_df = best["df"].copy()
+    found_path = best["root"]
+    found_files = [best["file"]]
 
     if "tipo_dia_ref" not in order_df.columns:
         order_df["tipo_dia_ref"] = "Lunes a Viernes"
@@ -1217,16 +1218,17 @@ def load_service_order_reference(data_path_str: str):
     order_df["direccion"] = order_df["direccion"].fillna("").astype(str).str.strip()
     order_df["tipo_dia_ref"] = order_df["tipo_dia_ref"].fillna("").astype(str).str.strip()
     order_df["orden"] = pd.to_numeric(order_df["orden"], errors="coerce")
+    if order_df["orden"].isna().all():
+        order_df["orden"] = range(1, len(order_df) + 1)
     order_df = order_df.dropna(subset=["orden"]).copy()
     order_df["orden"] = order_df["orden"].astype(int)
 
-    # Mantener el primer orden declarado por servicio dentro de cada grupo
     order_df = (
-        order_df.sort_values(["tipo_dia_ref", "linea", "direccion", "orden", "servicio_label"])
+        order_df.sort_values(["tipo_dia_ref", "linea", "direccion", "orden", "servicio_label"], kind="stable")
         .drop_duplicates(subset=["tipo_dia_ref", "linea", "direccion", "servicio_label"], keep="first")
         .reset_index(drop=True)
     )
-    return order_df, found_path or "", found_files, "ok"
+    return order_df, found_path, found_files, "ok"
 
 
 def infer_service_order_day_filter(fecha_sel: date) -> str:
@@ -1243,6 +1245,7 @@ def apply_service_order_and_labels(summary_df: pd.DataFrame,
         return summary_df.copy()
 
     enriched = summary_df.copy()
+    enriched["__input_order"] = np.arange(len(enriched))
     enriched["servicio_label"] = enriched["servicio_label"].astype(str).str.strip()
     enriched["hora_salida"] = pd.to_datetime(enriched["hora_salida"], errors="coerce")
     enriched["hora_salida_fmt"] = enriched["hora_salida"].dt.strftime("%H:%M:%S").fillna("-")
@@ -1265,26 +1268,35 @@ def apply_service_order_and_labels(summary_df: pd.DataFrame,
         temp_day = temp_day[temp_day["linea_norm"] == normalize_text(linea_sel)].copy()
         temp_day = temp_day[temp_day["direccion_norm"] == normalize_text(dir_sel)].copy()
         if not temp_day.empty:
-            temp_day = temp_day.sort_values(["orden", "servicio_label"]).drop_duplicates(subset=["servicio_label"], keep="first")
+            temp_day = (
+                temp_day.sort_values(["orden", "servicio_label"], kind="stable")
+                .drop_duplicates(subset=["servicio_label"], keep="first")
+                .reset_index(drop=True)
+            )
             order_map = temp_day.set_index("servicio_label")["orden"].to_dict()
             enriched["servicio_orden_idx"] = enriched["servicio_label"].map(order_map)
 
-    # Fallback estable para servicios que no aparezcan en el archivo de orden
+    # Respaldo SOLO para servicios ausentes del archivo de orden.
+    # No usa hora de salida como criterio principal para evitar alterar el orden solicitado.
     missing_mask = enriched["servicio_orden_idx"].isna()
     if missing_mask.any():
         explicit_orders = pd.to_numeric(enriched["servicio_orden_idx"], errors="coerce").dropna()
         fallback_base = int(explicit_orders.max()) if not explicit_orders.empty else 0
-        fallback_order = (
-            enriched.loc[missing_mask, ["servicio_label", "hora_salida"]]
+        fallback_services = (
+            enriched.loc[missing_mask, ["servicio_label"]]
             .drop_duplicates(subset=["servicio_label"])
-            .sort_values(["hora_salida", "servicio_label"], na_position="last")
+            .assign(_serv_num=lambda d: pd.to_numeric(d["servicio_label"], errors="coerce"))
+            .sort_values(["_serv_num", "servicio_label"], na_position="last", kind="stable")
             .reset_index(drop=True)
         )
-        fallback_map = {row["servicio_label"]: fallback_base + idx + 1 for idx, (_, row) in enumerate(fallback_order.iterrows())}
+        fallback_map = {
+            row["servicio_label"]: fallback_base + idx + 1
+            for idx, (_, row) in enumerate(fallback_services.iterrows())
+        }
         enriched.loc[missing_mask, "servicio_orden_idx"] = enriched.loc[missing_mask, "servicio_label"].map(fallback_map)
 
     enriched["servicio_orden_idx"] = pd.to_numeric(enriched["servicio_orden_idx"], errors="coerce").fillna(999999).astype(int)
-    enriched = enriched.sort_values(["servicio_orden_idx", "hora_salida", "servicio_label"], na_position="last").reset_index(drop=True)
+    enriched = enriched.sort_values(["servicio_orden_idx", "__input_order"], kind="stable").reset_index(drop=True)
 
     enriched["servicio_display_label"] = (
         enriched["servicio_label"].astype(str)
@@ -1299,6 +1311,8 @@ def apply_service_order_and_labels(summary_df: pd.DataFrame,
         enriched["servicio_display_label"] + " (" + dup_rank.astype(str) + ")",
         enriched["servicio_display_label"],
     )
+    if "__input_order" in enriched.columns:
+        enriched = enriched.drop(columns="__input_order")
     return enriched
 
 # =========================================================
@@ -1983,9 +1997,9 @@ def build_service_transport_chart(summary_df: pd.DataFrame, title: str) -> go.Fi
         label_col = "servicio_display_label"
 
     if "servicio_orden_idx" in plot_df.columns:
-        plot_df = plot_df.sort_values(["servicio_orden_idx", "hora_salida", "servicio_label"], na_position="last").reset_index(drop=True)
+        plot_df = plot_df.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
     else:
-        plot_df = plot_df.sort_values(["hora_salida", "servicio_label"], na_position="last").reset_index(drop=True)
+        plot_df = plot_df.sort_values(["servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
 
     service_order = plot_df[label_col].tolist()
     plot_df["pasajeros_label"] = plot_df["pasajeros_transportados"].apply(fmt_pax)
@@ -3380,7 +3394,7 @@ def render_perfil_carga():
         st.info("No existen detalles de servicios para el día seleccionado.")
     else:
         detalle_servicios = service_summary.copy()
-        detalle_servicios = detalle_servicios.sort_values(["servicio_orden_idx", "hora_salida", "servicio_label"], na_position="last").copy() if "servicio_orden_idx" in detalle_servicios.columns else detalle_servicios.sort_values(["hora_salida", "servicio_label"], na_position="last").copy()
+        detalle_servicios = detalle_servicios.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").copy() if "servicio_orden_idx" in detalle_servicios.columns else detalle_servicios.sort_values(["servicio_label"], kind="stable", na_position="last").copy()
         detalle_servicios["Hora salida"] = detalle_servicios["hora_salida_fmt"]
         detalle_servicios["Servicio"] = detalle_servicios["servicio_label"]
         detalle_servicios["Estación origen"] = detalle_servicios["estacion_origen"]
