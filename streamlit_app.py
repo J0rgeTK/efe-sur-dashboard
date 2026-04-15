@@ -1035,15 +1035,17 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
     """
     Cruza transacciones de torniquete con viajes del perfil usando:
     - tarjeta_id exacto
-    - cercanía temporal a t_entrada_viaje dentro de una tolerancia configurable.
+    - cercanía temporal al evento más próximo del viaje:
+      * t_entrada_viaje
+      * t_salida_viaje
 
-    El cruce se hace por tarjeta y luego se selecciona la coincidencia temporal más cercana
-    para cada transacción de torniquete.
+    En la práctica, para la base cruda de torniquetes Biotren, FECHA_TRANSACCION puede quedar
+    más cerca de la salida que de la entrada. Por eso el match usa el evento con menor diferencia.
     """
     empty_summary = pd.DataFrame(columns=[
         "linea", "direccion", "servicio_label", "tx_cruzadas",
         "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox",
-        "desviacion_tarifa_aprox", "diff_mediana_min"
+        "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"
     ])
     empty_stats = {
         "turnstile_total": 0,
@@ -1051,6 +1053,8 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
         "match_pct": np.nan,
         "diff_mediana_min": np.nan,
         "tolerance_minutes": tolerance_minutes,
+        "pct_match_entrada": np.nan,
+        "pct_match_salida": np.nan,
     }
     if turnstile_df.empty or profile_tx_df.empty:
         return pd.DataFrame(), empty_summary, empty_stats
@@ -1061,14 +1065,31 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
     tx["tarjeta_id"] = pd.to_numeric(tx["tarjeta_id"], errors="coerce")
     prof["tarjeta_id"] = pd.to_numeric(prof["tarjeta_id"], errors="coerce")
     tx["fecha_transaccion"] = pd.to_datetime(tx["fecha_transaccion"], errors="coerce")
-    prof["t_entrada_viaje"] = pd.to_datetime(prof["t_entrada_viaje"], errors="coerce")
+    if "t_entrada_viaje" in prof.columns:
+        prof["t_entrada_viaje"] = pd.to_datetime(prof["t_entrada_viaje"], errors="coerce")
+    if "t_salida_viaje" in prof.columns:
+        prof["t_salida_viaje"] = pd.to_datetime(prof["t_salida_viaje"], errors="coerce")
 
-    keep_prof = [c for c in ["tarjeta_id", "t_entrada_viaje", "servicio_label", "linea", "direccion", "servicio_final", "viaje_idx"] if c in prof.columns]
-    if not {"tarjeta_id", "t_entrada_viaje", "servicio_label"}.issubset(set(keep_prof)):
+    keep_prof = [c for c in [
+        "tarjeta_id", "t_entrada_viaje", "t_salida_viaje", "servicio_label",
+        "linea", "direccion", "servicio_final", "viaje_idx", "origen", "destino"
+    ] if c in prof.columns]
+    if not {"tarjeta_id", "servicio_label"}.issubset(set(keep_prof)):
+        return pd.DataFrame(), empty_summary, empty_stats
+    if not any(c in keep_prof for c in ["t_entrada_viaje", "t_salida_viaje"]):
         return pd.DataFrame(), empty_summary, empty_stats
 
     tx = tx.dropna(subset=["tarjeta_id", "fecha_transaccion", "monto_transaccion"]).copy()
-    prof = prof[keep_prof].dropna(subset=["tarjeta_id", "t_entrada_viaje", "servicio_label"]).copy()
+    prof = prof[keep_prof].copy()
+    prof = prof.dropna(subset=["tarjeta_id", "servicio_label"], how="any").copy()
+    # conservar filas que tengan al menos una referencia temporal
+    valid_time_mask = False
+    if "t_entrada_viaje" in prof.columns:
+        valid_time_mask = valid_time_mask | prof["t_entrada_viaje"].notna()
+    if "t_salida_viaje" in prof.columns:
+        valid_time_mask = valid_time_mask | prof["t_salida_viaje"].notna()
+    prof = prof[valid_time_mask].copy()
+
     empty_stats["turnstile_total"] = int(len(tx))
     if tx.empty or prof.empty:
         return pd.DataFrame(), empty_summary, empty_stats
@@ -1082,13 +1103,38 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
     if merged.empty:
         return pd.DataFrame(), empty_summary, empty_stats
 
-    merged["match_diff_min"] = (merged["fecha_transaccion"] - merged["t_entrada_viaje"]).abs().dt.total_seconds() / 60.0
+    # Diferencia contra entrada y salida
+    if "t_entrada_viaje" in merged.columns:
+        merged["diff_entrada_min"] = (merged["fecha_transaccion"] - merged["t_entrada_viaje"]).abs().dt.total_seconds() / 60.0
+    else:
+        merged["diff_entrada_min"] = np.nan
+
+    if "t_salida_viaje" in merged.columns:
+        merged["diff_salida_min"] = (merged["fecha_transaccion"] - merged["t_salida_viaje"]).abs().dt.total_seconds() / 60.0
+    else:
+        merged["diff_salida_min"] = np.nan
+
+    merged["match_diff_min"] = merged[["diff_entrada_min", "diff_salida_min"]].min(axis=1, skipna=True)
+    merged["match_ref"] = np.where(
+        merged["diff_salida_min"].fillna(np.inf) < merged["diff_entrada_min"].fillna(np.inf),
+        "salida",
+        "entrada",
+    )
+
+    # timestamp de referencia efectivamente usado
+    merged["match_timestamp"] = np.where(
+        merged["match_ref"] == "salida",
+        merged.get("t_salida_viaje"),
+        merged.get("t_entrada_viaje"),
+    )
+    merged["match_timestamp"] = pd.to_datetime(merged["match_timestamp"], errors="coerce")
+
     merged = merged[merged["match_diff_min"] <= float(tolerance_minutes)].copy()
     if merged.empty:
         return pd.DataFrame(), empty_summary, empty_stats
 
     matched_df = (
-        merged.sort_values(["turnstile_tx_id", "match_diff_min", "t_entrada_viaje"], kind="stable")
+        merged.sort_values(["turnstile_tx_id", "match_diff_min", "match_timestamp"], kind="stable")
         .drop_duplicates(subset=["turnstile_tx_id"], keep="first")
         .reset_index(drop=True)
     )
@@ -1099,6 +1145,8 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
         "match_pct": (float(len(matched_df)) / float(len(tx)) * 100.0) if len(tx) else np.nan,
         "diff_mediana_min": float(matched_df["match_diff_min"].median()) if not matched_df.empty else np.nan,
         "tolerance_minutes": tolerance_minutes,
+        "pct_match_entrada": (float((matched_df["match_ref"] == "entrada").mean()) * 100.0) if not matched_df.empty else np.nan,
+        "pct_match_salida": (float((matched_df["match_ref"] == "salida").mean()) * 100.0) if not matched_df.empty else np.nan,
     }
 
     summary = (
@@ -1112,6 +1160,22 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
             diff_mediana_min=("match_diff_min", "median"),
         )
     )
+    # referencia temporal predominante por servicio
+    if not matched_df.empty:
+        ref_summary = (
+            matched_df.groupby(["linea", "direccion", "servicio_label", "match_ref"], as_index=False)
+            .size().rename(columns={"size": "n"})
+            .sort_values(["linea", "direccion", "servicio_label", "n", "match_ref"], ascending=[True, True, True, False, True])
+            .drop_duplicates(subset=["linea", "direccion", "servicio_label"], keep="first")
+            .rename(columns={"match_ref": "match_ref_principal"})
+        )
+        summary = summary.merge(
+            ref_summary[["linea", "direccion", "servicio_label", "match_ref_principal"]],
+            how="left",
+            on=["linea", "direccion", "servicio_label"],
+        )
+    else:
+        summary["match_ref_principal"] = np.nan
     return matched_df, summary, stats
 
 
@@ -3369,7 +3433,7 @@ def render_perfil_carga():
 
     schema_note = "Esquema detectado: transaccional por viaje." if profile_schema == "transactional" else "Esquema detectado: agregado por estación."
     itinerary_note = "Itinerario de referencia: carpeta recomendada <b>itinerarios/</b> con los archivos <b>itinerario_resumen_servicios.csv</b> y opcionalmente <b>itinerario_detalle_estaciones.csv</b>. También se acepta el consolidado <b>itinerario_efe_sur_extraido.xlsx</b>."
-    turnstile_note = "Cruce tarifario: carpeta recomendada <b>transacciones_bt/</b> con archivos CSV/XLSX que incluyan <b>FECHA_TRANSACCION</b>, <b>NUMERO_TARJETA</b> y <b>MONTO_TRANSACCION</b>."
+    turnstile_note = "Cruce tarifario: carpeta recomendada <b>transacciones_bt/</b> con archivos CSV/XLSX que incluyan <b>FECHA_TRANSACCION</b>, <b>NUMERO_TARJETA</b> y <b>MONTO_TRANSACCION</b>. El match se realiza por tarjeta y por cercanía al evento temporal más próximo del viaje (entrada o salida)."
     with info_col:
         st.markdown(f"<div class='map-note'><b>Carpeta perfil:</b> {folder_name}<br>{service_desc}<br>{schema_note}<br><br>{itinerary_note}<br><br>{turnstile_note}</div>",
                     unsafe_allow_html=True)
@@ -3483,7 +3547,7 @@ def render_perfil_carga():
         fecha_sel,
     )
     if not service_summary.empty:
-        for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min"]:
+        for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]:
             if col not in service_summary.columns:
                 service_summary[col] = np.nan
         if not service_fare_summary.empty:
@@ -3495,10 +3559,10 @@ def render_perfil_carga():
             if not fare_sel.empty:
                 service_summary = service_summary.drop(columns=[c for c in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min"] if c in service_summary.columns], errors="ignore")
                 service_summary = service_summary.merge(
-                    fare_sel[["servicio_label", "tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min"]],
+                    fare_sel[["servicio_label", "tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]],
                     how="left", on="servicio_label"
                 )
-                for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min"]:
+                for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]:
                     if col not in service_summary.columns:
                         service_summary[col] = np.nan
 
@@ -3632,6 +3696,10 @@ def render_perfil_carga():
                 turnstile_msg += f" · match día: {fmt_pct(turnstile_stats.get('match_pct')) if pd.notna(turnstile_stats.get('match_pct')) else '-'}"
                 if pd.notna(turnstile_stats.get('diff_mediana_min')):
                     turnstile_msg += f" · diferencia mediana: {turnstile_stats.get('diff_mediana_min'):.1f} min"
+                if pd.notna(turnstile_stats.get('pct_match_salida')) or pd.notna(turnstile_stats.get('pct_match_entrada')):
+                    pct_salida = turnstile_stats.get('pct_match_salida')
+                    pct_entrada = turnstile_stats.get('pct_match_entrada')
+                    turnstile_msg += f" · ref. salida: {pct_salida:.1f}% · ref. entrada: {pct_entrada:.1f}%"
             ref_parts.append(turnstile_msg)
         elif turnstile_status == 'no_data':
             ref_parts.append("Torniquetes no encontrados; cree la carpeta transacciones_bt/")
