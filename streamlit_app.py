@@ -1638,7 +1638,7 @@ def build_line_chart(df: pd.DataFrame, title: str, color=None, line_dash=None,
 def build_trend_line_chart(df: pd.DataFrame, kpi_name: str, unit: str | None,
                             service_name: str) -> go.Figure:
     """
-    Nuevo: evolución histórica con línea de tendencia via regresión lineal (numpy.polyfit).
+    Evolución histórica con línea de tendencia y etiquetas del valor mensual.
     """
     plot_df = df.copy()
     plot_df["periodo_date"]  = plot_df["periodo"].apply(periodo_to_date)
@@ -1653,13 +1653,16 @@ def build_trend_line_chart(df: pd.DataFrame, kpi_name: str, unit: str | None,
     coeffs = np.polyfit(x_num, y_vals, 1)
     trend  = np.polyval(coeffs, x_num)
     plot_df["tendencia"] = trend
+    plot_df["valor_label"] = plot_df["valor"].apply(lambda v: fmt_number(v, unit or "", kpi_name))
 
     category_order = list(dict.fromkeys(plot_df["periodo_label"].dropna().tolist()))
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=plot_df["periodo_label"], y=plot_df["valor"],
-        mode="lines+markers", name="Valor real",
+        mode="lines+markers+text", name="Valor real",
         line=dict(color=EFE_BLUE, width=3), marker=dict(size=9),
+        text=plot_df["valor_label"], textposition="top center",
+        textfont=dict(size=max(PLOT_FONT_SIZE - 1, 10), color=EFE_BLUE),
         hovertemplate="<b>%{x}</b><br>Valor: %{y:,.2f}<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
@@ -1672,7 +1675,7 @@ def build_trend_line_chart(df: pd.DataFrame, kpi_name: str, unit: str | None,
     fig.update_layout(
         title=f"{kpi_name} — {service_name} · Tendencia: {direction}",
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-        margin=dict(l=20, r=20, t=55, b=20), height=370,
+        margin=dict(l=20, r=20, t=55, b=20), height=400,
         font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -2835,8 +2838,7 @@ def build_od_station_bar_chart(flow_df: pd.DataFrame, category_col: str,
                                station_ref: pd.DataFrame, title: str,
                                bar_color: str) -> go.Figure | None:
     """
-    Distribución de viajes por estación mostrando todas las estaciones relevantes
-    y usando orden de trazado cuando exista.
+    Distribución de viajes por estación ordenada de mayor a menor, tipo Pareto.
     """
     if flow_df is None or flow_df.empty:
         return None
@@ -2847,11 +2849,8 @@ def build_od_station_bar_chart(flow_df: pd.DataFrame, category_col: str,
     if plot_df.empty:
         return None
 
-    order_input = plot_df.rename(columns={category_col: "estacion", "viajes": "total"})[["estacion", "total"]].copy()
-    station_order = resolve_station_order_from_reference(order_input, station_ref)
-    if station_order:
-        plot_df[category_col] = pd.Categorical(plot_df[category_col], categories=station_order, ordered=True)
-        plot_df = plot_df.sort_values(category_col)
+    plot_df = plot_df.sort_values(["viajes", category_col], ascending=[False, True]).reset_index(drop=True)
+    station_order = plot_df[category_col].astype(str).tolist()
 
     total_viajes = float(plot_df["viajes"].sum()) if not plot_df.empty else 0.0
     plot_df["participacion"] = np.where(total_viajes > 0, plot_df["viajes"] / total_viajes * 100, 0.0)
@@ -2875,7 +2874,7 @@ def build_od_station_bar_chart(flow_df: pd.DataFrame, category_col: str,
         title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         showlegend=False,
     )
-    fig.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=station_order or None)
+    fig.update_xaxes(title="", tickangle=-90, categoryorder="array", categoryarray=station_order)
     fig.update_yaxes(title="Viajes")
     return fig
 
