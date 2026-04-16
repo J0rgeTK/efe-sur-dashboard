@@ -2962,7 +2962,7 @@ estados_ini  = sorted(iniciativas["estado"].dropna().astype(str).unique().tolist
 prioridades  = sorted(iniciativas["prioridad"].dropna().astype(str).unique().tolist())
 responsables = sorted(iniciativas["responsable"].dropna().astype(str).unique().tolist())
 
-servicios_sel    = servicios_lista
+servicios_sel = servicios_lista
 estados_ini_sel  = estados_ini
 prioridades_sel  = prioridades
 responsables_sel = responsables
@@ -2972,8 +2972,6 @@ with toolbar_right:
     popover_ctx = st.popover if hasattr(st, "popover") else st.expander
     pop_kwargs  = {} if hasattr(st, "popover") else {"expanded": False}
     with popover_ctx("Filtros", **pop_kwargs):
-        servicios_sel = st.multiselect(
-            "Servicio", options=servicios_lista, default=servicios_lista, key="servicios_body_filter")
         estados_ini_sel = st.multiselect(
             "Estado iniciativa", options=estados_ini, default=estados_ini, key="estado_body_filter")
         prioridades_sel = st.multiselect(
@@ -2981,15 +2979,13 @@ with toolbar_right:
         responsables_sel = st.multiselect(
             "Responsable", options=responsables, default=responsables, key="responsable_body_filter")
         if st.button("Restablecer filtros", key="reset_filters_btn", use_container_width=True):
-            for k, v in [("servicios_body_filter", servicios_lista),
-                         ("estado_body_filter", estados_ini),
+            for k, v in [("estado_body_filter", estados_ini),
                          ("prioridad_body_filter", prioridades),
                          ("responsable_body_filter", responsables)]:
                 st.session_state[k] = v
             st.rerun()
         st.caption(f"Origen de datos: {data_path}")
 
-servicios_sel    = servicios_sel    or servicios_lista
 estados_ini_sel  = estados_ini_sel  or estados_ini
 prioridades_sel  = prioridades_sel  or prioridades
 responsables_sel = responsables_sel or responsables
@@ -3009,8 +3005,7 @@ with toolbar_left:
 # FILTRADO PRINCIPAL
 # =========================================================
 kpis_f = kpis[
-    (kpis["periodo"].astype(str) == str(periodo_sel)) &
-    (kpis["servicio"].isin(servicios_sel))
+    (kpis["periodo"].astype(str) == str(periodo_sel))
 ].copy()
 
 iniciativas_f = iniciativas[
@@ -3020,7 +3015,7 @@ iniciativas_f = iniciativas[
     iniciativas["responsable"].isin(responsables_sel)
 ].copy()
 
-kpis_hist = kpis[kpis["servicio"].isin(servicios_sel)].copy()
+kpis_hist = kpis.copy()
 
 if "orden" in kpis_f.columns:
     kpis_f = kpis_f.sort_values(["orden","servicio","nombre"])
@@ -3030,14 +3025,34 @@ else:
 # =========================================================
 # NAVEGACIÓN
 # =========================================================
+SERVICE_NAV_OPTIONS = ["Biotren", "Tren Araucanía", "Laja Talcahuano", "Llanquihue Puerto Montt", "Personas"]
+BIOTREN_DETAIL_PAGES = ["KPIs", "Perfil de Carga", "Análisis por Estación"]
+STANDARD_SERVICE_PAGES = ["KPIs"]
+
 with st.container():
     st.markdown("<span class='sticky-nav-anchor'></span>", unsafe_allow_html=True)
     st.markdown("<div class='nav-panel'>", unsafe_allow_html=True)
-    section_sel = option_selector(
-        "Navegación",
-        ["KPIs por Servicio","Personas","Estaciones","Perfil de Carga","OD Estaciones"],
-        key="main_nav_selector", default="KPIs por Servicio", horizontal=True,
+    root_sel = option_selector(
+        "Servicio / vista",
+        SERVICE_NAV_OPTIONS,
+        key="main_root_selector", default="Biotren", horizontal=True,
     )
+    if root_sel == "Personas":
+        section_sel = "Personas"
+    else:
+        service_subpages = BIOTREN_DETAIL_PAGES if root_sel == "Biotren" else STANDARD_SERVICE_PAGES
+        section_label = option_selector(
+            "Navegación",
+            service_subpages,
+            key="main_service_page_selector",
+            default=service_subpages[0], horizontal=True,
+        )
+        section_map = {
+            "KPIs": "KPIs por Servicio",
+            "Perfil de Carga": "Perfil de Carga",
+            "Análisis por Estación": "OD Estaciones",
+        }
+        section_sel = section_map.get(section_label, "KPIs por Servicio")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -3045,22 +3060,24 @@ with st.container():
 # SECCIONES
 # =========================================================
 
-def render_resumen_ejecutivo():
+def render_resumen_ejecutivo(target_service: str | None = None):
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>KPIs por Servicio</div>", unsafe_allow_html=True)
     st.markdown("<div class='section-subtitle'>KPIs del período por servicio y evolución histórica del indicador seleccionado.</div>",
                 unsafe_allow_html=True)
 
-    servicios_con_datos = [s for s in servicios_sel
-                           if s in kpis_f["servicio"].astype(str).unique().tolist()]
+    servicios_con_datos = sorted(kpis_f["servicio"].dropna().astype(str).unique().tolist())
+    if target_service:
+        servicios_con_datos = [s for s in servicios_con_datos if s == str(target_service)]
     if kpis_f.empty or not servicios_con_datos:
         st.warning("No existen KPIs para los filtros seleccionados.")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    resumen_srv = option_selector("Servicio visible", servicios_con_datos,
-                                   key="resumen_servicio_selector",
-                                   default=servicios_con_datos[0], horizontal=True)
+    resumen_srv = str(target_service) if target_service else option_selector(
+        "Servicio visible", servicios_con_datos,
+        key="resumen_servicio_selector",
+        default=servicios_con_datos[0], horizontal=True)
 
     servicio_df = kpis_f[kpis_f["servicio"].astype(str) == str(resumen_srv)].copy()
     if "orden" in servicio_df.columns:
@@ -3406,17 +3423,23 @@ def render_detalle_servicio():
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
-def render_perfil_carga():
+def render_perfil_carga(default_service: str | None = None):
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Perfil de Carga</div>", unsafe_allow_html=True)
     st.markdown("<div class='section-subtitle'>Reconstrucción del perfil de carga por servicio a partir de transacciones OD: embarques, bajadas y pasajeros a bordo por estación.</div>",
                 unsafe_allow_html=True)
 
     service_options = list(PROFILE_SERVICE_CONFIG.keys())
+    if default_service and default_service in service_options:
+        service_options = [default_service]
     sel_service_col, sel_date_col, info_col = st.columns([1.15, 1.05, 1.8])
     with sel_service_col:
-        profile_srv = st.selectbox("Servicio de perfil", options=service_options,
-                                    index=0, key="profile_service_root_selector")
+        if default_service and default_service in PROFILE_SERVICE_CONFIG:
+            profile_srv = default_service
+            st.markdown(f"<div class='map-note'><b>Servicio:</b> {profile_srv}</div>", unsafe_allow_html=True)
+        else:
+            profile_srv = st.selectbox("Servicio de perfil", options=service_options,
+                                        index=0, key="profile_service_root_selector")
 
     perfil_df, perfil_path, perfil_missing, perfil_files, perfil_status = load_profile_service_data(
         profile_srv, str(data_path))
@@ -4049,14 +4072,16 @@ def render_od_estaciones():
 # =========================================================
 # DISPATCH
 # =========================================================
+selected_service_context = root_sel if root_sel != "Personas" else None
+
 if section_sel == "KPIs por Servicio":
-    render_resumen_ejecutivo()
+    render_resumen_ejecutivo(target_service=selected_service_context)
 elif section_sel == "Personas":
     render_personas()
 elif section_sel == "Estaciones":
     render_detalle_servicio()
 elif section_sel == "Perfil de Carga":
-    render_perfil_carga()
+    render_perfil_carga(default_service=selected_service_context)
 elif section_sel == "OD Estaciones":
     render_od_estaciones()
 
