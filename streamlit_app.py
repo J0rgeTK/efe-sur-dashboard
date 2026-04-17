@@ -107,9 +107,7 @@ def build_runtime_css(theme_mode: str, colors: dict) -> str:
                 linear-gradient(180deg, #020617 0%, #0B1220 100%) !important;
             color: {colors['TEXT_MAIN']} !important;
         }}
-        .hero-minimal {{ padding: 0.0rem 0 0.25rem; margin-bottom: 0.15rem; }}
-        .top-logo-wrap {{ display:flex; align-items:flex-start; justify-content:flex-start; margin:0 0 0.15rem 0; }}
-        .top-logo-wrap img {{ max-width: 180px; width: 100%; height: auto; display:block; }}
+        .hero-minimal {{ padding: 0.05rem 0 0.35rem; margin-bottom: 0.2rem; }}
         .main-title {{ color: {colors['TEXT_MAIN']} !important; margin-top: -0.1rem !important; }}
         .subtitle, .hero-side-note {{ color: {colors['TEXT_MUTED']} !important; }}
         .section-shell, .nav-panel, .efe-card, .map-note, .toolbar-panel,
@@ -133,9 +131,7 @@ def build_runtime_css(theme_mode: str, colors: dict) -> str:
         """
     return f"""
     <style>
-    .hero-minimal {{ padding: 0.0rem 0 0.25rem; margin-bottom: 0.15rem; }}
-    .top-logo-wrap {{ display:flex; align-items:flex-start; justify-content:flex-start; margin:0 0 0.15rem 0; }}
-    .top-logo-wrap img {{ max-width: 180px; width: 100%; height: auto; display:block; }}
+    .hero-minimal {{ padding: 0.0rem 0 0.3rem; margin-bottom: 0.2rem; }}
     .main-title {{ margin-top: -0.12rem !important; }}
     .section-shell, .nav-panel, div[data-testid="stPlotlyChart"] {{ box-shadow: 0 10px 24px rgba(0,40,87,0.05) !important; }}
     </style>
@@ -3018,7 +3014,7 @@ default_period_index = len(periodos) - 1 if periodos else 0
 # =========================================================
 st.session_state.setdefault("dashboard_theme_mode", "☀️ Claro")
 
-header_left, header_right = st.columns([5.4, 1.1])
+header_left, header_right = st.columns([5.2, 1.2])
 with header_right:
     theme_mode = option_selector(
         "Tema",
@@ -3034,15 +3030,16 @@ st.markdown(build_runtime_css("Oscuro" if "Oscuro" in st.session_state["dashboar
 
 with header_left:
     st.markdown("<div class='hero-minimal'>", unsafe_allow_html=True)
-    for logo_path in [Path(__file__).resolve().parent / "assets" / "logoefe-azul.png",
-                      Path(__file__).resolve().parent / "logoefe-azul.png"]:
-        if logo_path.exists():
-            st.markdown("<div class='top-logo-wrap'>", unsafe_allow_html=True)
-            st.image(str(logo_path), width=180)
-            st.markdown("</div>", unsafe_allow_html=True)
-            break
-    st.markdown("<div class='main-title'>KPIs e Iniciativas — Gerencia de Pasajeros</div>", unsafe_allow_html=True)
-    st.markdown("<div class='subtitle'>Panel ejecutivo para monitorear desempeño, perfiles de carga y análisis por estación.</div>", unsafe_allow_html=True)
+    logo_col, title_col = st.columns([0.72, 5.0])
+    with logo_col:
+        for logo_path in [Path(__file__).resolve().parent / "assets" / "logoefe-azul.png",
+                          Path(__file__).resolve().parent / "logoefe-azul.png"]:
+            if logo_path.exists():
+                st.image(str(logo_path), use_container_width=True)
+                break
+    with title_col:
+        st.markdown("<div class='main-title'>KPIs e Iniciativas — Gerencia de Pasajeros</div>", unsafe_allow_html=True)
+        st.markdown("<div class='subtitle'>Panel ejecutivo para monitorear desempeño, perfiles de carga y análisis por estación.</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================================================
