@@ -69,6 +69,74 @@ COLORS = {
     "DANGER":    "#B91C1C",
 }
 
+LIGHT_COLORS = dict(COLORS)
+DARK_COLORS = {
+    "EFE_BLUE":  "#8CB7FF",
+    "EFE_RED":   "#FF7A86",
+    "EFE_WHITE": "#0F172A",
+    "BG_LIGHT":  "#020617",
+    "BORDER":    "#334155",
+    "TEXT_MAIN": "#E5E7EB",
+    "TEXT_MUTED":"#94A3B8",
+    "SUCCESS":   "#34D399",
+    "WARNING":   "#FBBF24",
+    "DANGER":    "#FB7185",
+}
+
+def apply_runtime_palette(palette: dict):
+    global COLORS, EFE_BLUE, EFE_RED, EFE_WHITE, TEXT_MAIN, TEXT_MUTED, SUCCESS, WARNING, DANGER, BORDER
+    COLORS = dict(palette)
+    EFE_BLUE = COLORS["EFE_BLUE"]
+    EFE_RED = COLORS["EFE_RED"]
+    EFE_WHITE = COLORS["EFE_WHITE"]
+    TEXT_MAIN = COLORS["TEXT_MAIN"]
+    TEXT_MUTED = COLORS["TEXT_MUTED"]
+    SUCCESS = COLORS["SUCCESS"]
+    WARNING = COLORS["WARNING"]
+    DANGER = COLORS["DANGER"]
+    BORDER = COLORS["BORDER"]
+
+
+def build_runtime_css(theme_mode: str, colors: dict) -> str:
+    if theme_mode == "Oscuro":
+        return f"""
+        <style>
+        .stApp {{
+            background:
+                radial-gradient(circle at top left, rgba(140,183,255,0.10) 0%, rgba(140,183,255,0.00) 22%),
+                linear-gradient(180deg, #020617 0%, #0B1220 100%) !important;
+            color: {colors['TEXT_MAIN']} !important;
+        }}
+        .hero-minimal {{ padding: 0.05rem 0 0.35rem; margin-bottom: 0.2rem; }}
+        .main-title {{ color: {colors['TEXT_MAIN']} !important; margin-top: -0.1rem !important; }}
+        .subtitle, .hero-side-note {{ color: {colors['TEXT_MUTED']} !important; }}
+        .section-shell, .nav-panel, .efe-card, .map-note, .toolbar-panel,
+        div[data-testid="stMetric"], div[data-testid="stPlotlyChart"] {{
+            background: #111827 !important;
+            border-color: {colors['BORDER']} !important;
+            box-shadow: 0 8px 22px rgba(0,0,0,0.28) !important;
+        }}
+        .section-title, .service-title, .efe-card-value, .efe-card-delta, .efe-card-meta,
+        .efe-card-title, .map-note, .filters-summary, .filter-chip {{ color: {colors['TEXT_MAIN']} !important; }}
+        .section-subtitle {{ color: {colors['TEXT_MUTED']} !important; }}
+        .filter-chip {{ background: #0F172A !important; border-color: {colors['BORDER']} !important; }}
+        .stButton > button, .stDownloadButton > button {{
+            background: #111827 !important; color: {colors['TEXT_MAIN']} !important; border-color: {colors['BORDER']} !important;
+        }}
+        div[data-baseweb="select"] > div {{
+            background: #111827 !important; border-color: {colors['BORDER']} !important; color: {colors['TEXT_MAIN']} !important;
+        }}
+        .stMarkdown, .stCaption, label, .stRadio, .stMultiSelect, .stSelectbox {{ color: {colors['TEXT_MAIN']} !important; }}
+        </style>
+        """
+    return f"""
+    <style>
+    .hero-minimal {{ padding: 0.0rem 0 0.3rem; margin-bottom: 0.2rem; }}
+    .main-title {{ margin-top: -0.12rem !important; }}
+    .section-shell, .nav-panel, div[data-testid="stPlotlyChart"] {{ box-shadow: 0 10px 24px rgba(0,40,87,0.05) !important; }}
+    </style>
+    """
+
 # Aliases locales para compatibilidad con plotly
 EFE_BLUE  = COLORS["EFE_BLUE"]
 EFE_RED   = COLORS["EFE_RED"]
@@ -329,11 +397,18 @@ def show_plot(fig: go.Figure, use_container_width: bool = True, **kwargs):
     """
     Wrapper para Streamlit/Plotly:
     - desactiva zoom con rueda y la barra de herramientas;
-    - fija dragmode en False para reducir capturas de interacción;
-    - mantiene hover y tooltip.
+    - fija dragmode en False;
+    - bloquea zoom/pan de ejes para que la rueda del mouse desplace la página.
     """
     try:
         fig.update_layout(dragmode=False)
+        layout_keys = list(fig.layout)
+        for key in layout_keys:
+            if str(key).startswith("xaxis") or str(key).startswith("yaxis"):
+                try:
+                    fig.layout[key].fixedrange = True
+                except Exception:
+                    pass
     except Exception:
         pass
     return st.plotly_chart(fig, use_container_width=use_container_width, config=PLOTLY_CHART_CONFIG, **kwargs)
@@ -1659,10 +1734,8 @@ def build_trend_line_chart(df: pd.DataFrame, kpi_name: str, unit: str | None,
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=plot_df["periodo_label"], y=plot_df["valor"],
-        mode="lines+markers+text", name="Valor real",
+        mode="lines+markers", name="Valor real",
         line=dict(color=EFE_BLUE, width=3), marker=dict(size=9),
-        text=plot_df["valor_label"], textposition="top center",
-        textfont=dict(size=max(PLOT_FONT_SIZE - 1, 10), color=EFE_BLUE),
         hovertemplate="<b>%{x}</b><br>Valor: %{y:,.2f}<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
@@ -1675,7 +1748,7 @@ def build_trend_line_chart(df: pd.DataFrame, kpi_name: str, unit: str | None,
     fig.update_layout(
         title=f"{kpi_name} — {service_name} · Tendencia: {direction}",
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-        margin=dict(l=20, r=20, t=55, b=20), height=400,
+        margin=dict(l=20, r=20, t=55, b=20), height=460,
         font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -1683,6 +1756,14 @@ def build_trend_line_chart(df: pd.DataFrame, kpi_name: str, unit: str | None,
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
                      categoryarray=category_order, showgrid=False)
     fig.update_yaxes(title="", gridcolor="#E8EEF4", zeroline=False)
+    for i, row in plot_df.iterrows():
+        fig.add_annotation(
+            x=row["periodo_label"], y=row["valor"], text=row["valor_label"],
+            showarrow=False, yshift=18 if i % 2 == 0 else 30,
+            font=dict(size=max(PLOT_ANNOTATION_SIZE, 11), color=EFE_BLUE),
+            bgcolor="rgba(255,255,255,0.96)" if COLORS.get("EFE_WHITE") == "#FFFFFF" else "rgba(15,23,42,0.92)",
+            bordercolor=BORDER, borderwidth=1, borderpad=4, align="center",
+        )
     return fig
 
 
@@ -2931,11 +3012,25 @@ default_period_index = len(periodos) - 1 if periodos else 0
 # =========================================================
 # ENCABEZADO
 # =========================================================
-st.markdown("<div class='hero-shell'>", unsafe_allow_html=True)
-hero_left, hero_right = st.columns([4.8, 1.55])
+st.session_state.setdefault("dashboard_theme_mode", "☀️ Claro")
 
-with hero_left:
-    logo_col, title_col = st.columns([0.9, 4.6])
+header_left, header_right = st.columns([5.2, 1.2])
+with header_right:
+    theme_mode = option_selector(
+        "Tema",
+        ["☀️ Claro", "🌙 Oscuro"],
+        key="dashboard_theme_mode_selector",
+        default=st.session_state.get("dashboard_theme_mode", "☀️ Claro"),
+        horizontal=True,
+    ) or st.session_state.get("dashboard_theme_mode", "☀️ Claro")
+    st.session_state["dashboard_theme_mode"] = theme_mode
+
+apply_runtime_palette(DARK_COLORS if "Oscuro" in st.session_state["dashboard_theme_mode"] else LIGHT_COLORS)
+st.markdown(build_runtime_css("Oscuro" if "Oscuro" in st.session_state["dashboard_theme_mode"] else "Claro", COLORS), unsafe_allow_html=True)
+
+with header_left:
+    st.markdown("<div class='hero-minimal'>", unsafe_allow_html=True)
+    logo_col, title_col = st.columns([0.72, 5.0])
     with logo_col:
         for logo_path in [Path(__file__).resolve().parent / "assets" / "logoefe-azul.png",
                           Path(__file__).resolve().parent / "logoefe-azul.png"]:
@@ -2943,17 +3038,9 @@ with hero_left:
                 st.image(str(logo_path), use_container_width=True)
                 break
     with title_col:
-        st.markdown("<div class='hero-kicker'>Seguimiento ejecutivo</div>", unsafe_allow_html=True)
         st.markdown("<div class='main-title'>KPIs e Iniciativas — Gerencia de Pasajeros</div>", unsafe_allow_html=True)
-        st.markdown("<div class='subtitle'>Panel ejecutivo para monitorear desempeño, gestión de iniciativas, estaciones y perfiles de carga por servicio.</div>", unsafe_allow_html=True)
-
-with hero_right:
-    periodo_sel = st.selectbox("Período de análisis", options=periodos,
-                                index=default_period_index, key="periodo_top")
-    st.markdown("<div class='hero-side-note'>Vista ejecutiva para seguimiento y lectura rápida.</div>",
-                unsafe_allow_html=True)
-
-st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("<div class='subtitle'>Panel ejecutivo para monitorear desempeño, perfiles de carga y análisis por estación.</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================================================
 # FILTROS
@@ -2962,51 +3049,19 @@ estados_ini  = sorted(iniciativas["estado"].dropna().astype(str).unique().tolist
 prioridades  = sorted(iniciativas["prioridad"].dropna().astype(str).unique().tolist())
 responsables = sorted(iniciativas["responsable"].dropna().astype(str).unique().tolist())
 
+st.session_state.setdefault("estado_body_filter", estados_ini)
+st.session_state.setdefault("prioridad_body_filter", prioridades)
+st.session_state.setdefault("responsable_body_filter", responsables)
+
 servicios_sel = servicios_lista
-estados_ini_sel  = estados_ini
-prioridades_sel  = prioridades
-responsables_sel = responsables
-
-toolbar_left, toolbar_right = st.columns([4.6, 1.0])
-with toolbar_right:
-    popover_ctx = st.popover if hasattr(st, "popover") else st.expander
-    pop_kwargs  = {} if hasattr(st, "popover") else {"expanded": False}
-    with popover_ctx("Filtros", **pop_kwargs):
-        estados_ini_sel = st.multiselect(
-            "Estado iniciativa", options=estados_ini, default=estados_ini, key="estado_body_filter")
-        prioridades_sel = st.multiselect(
-            "Prioridad", options=prioridades, default=prioridades, key="prioridad_body_filter")
-        responsables_sel = st.multiselect(
-            "Responsable", options=responsables, default=responsables, key="responsable_body_filter")
-        if st.button("Restablecer filtros", key="reset_filters_btn", use_container_width=True):
-            for k, v in [("estado_body_filter", estados_ini),
-                         ("prioridad_body_filter", prioridades),
-                         ("responsable_body_filter", responsables)]:
-                st.session_state[k] = v
-            st.rerun()
-        st.caption(f"Origen de datos: {data_path}")
-
-estados_ini_sel  = estados_ini_sel  or estados_ini
-prioridades_sel  = prioridades_sel  or prioridades
-responsables_sel = responsables_sel or responsables
-
-with toolbar_left:
-    summary = summarize_active_filters(servicios_sel, servicios_lista, estados_ini_sel,
-                                        estados_ini, prioridades_sel, prioridades,
-                                        responsables_sel, responsables)
-    chips   = build_filter_chip_row(servicios_sel, servicios_lista, estados_ini_sel,
-                                    estados_ini, prioridades_sel, prioridades,
-                                    responsables_sel, responsables)
-    st.markdown(f"<div class='toolbar-panel'>"
-                f"<div class='filters-summary'><strong>Filtros activos:</strong> {summary}</div>"
-                f"{chips}</div>", unsafe_allow_html=True)
+estados_ini_sel = st.session_state.get("estado_body_filter", estados_ini) or estados_ini
+prioridades_sel = st.session_state.get("prioridad_body_filter", prioridades) or prioridades
+responsables_sel = st.session_state.get("responsable_body_filter", responsables) or responsables
 
 # =========================================================
 # FILTRADO PRINCIPAL
 # =========================================================
-kpis_f = kpis[
-    (kpis["periodo"].astype(str) == str(periodo_sel))
-].copy()
+kpis_f = kpis.copy()
 
 iniciativas_f = iniciativas[
     iniciativas["servicio"].isin(servicios_sel) &
@@ -3062,14 +3117,21 @@ with st.container():
 
 def render_resumen_ejecutivo(target_service: str | None = None):
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>KPIs por Servicio</div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-subtitle'>KPIs del período por servicio y evolución histórica del indicador seleccionado.</div>",
-                unsafe_allow_html=True)
+    top_title_col, top_period_col = st.columns([4.5, 1.2])
+    with top_title_col:
+        st.markdown("<div class='section-title'>KPIs por Servicio</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-subtitle'>KPIs del período por servicio y evolución histórica del indicador seleccionado.</div>",
+                    unsafe_allow_html=True)
+    with top_period_col:
+        period_key = f"periodo_kpi_selector_{target_service or 'general'}"
+        periodo_sel_local = st.selectbox("Período de análisis", options=periodos,
+                                         index=default_period_index, key=period_key)
 
-    servicios_con_datos = sorted(kpis_f["servicio"].dropna().astype(str).unique().tolist())
+    kpis_periodo = kpis[kpis["periodo"].astype(str) == str(periodo_sel_local)].copy()
+    servicios_con_datos = sorted(kpis_periodo["servicio"].dropna().astype(str).unique().tolist())
     if target_service:
         servicios_con_datos = [s for s in servicios_con_datos if s == str(target_service)]
-    if kpis_f.empty or not servicios_con_datos:
+    if kpis_periodo.empty or not servicios_con_datos:
         st.warning("No existen KPIs para los filtros seleccionados.")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
@@ -3079,7 +3141,7 @@ def render_resumen_ejecutivo(target_service: str | None = None):
         key="resumen_servicio_selector",
         default=servicios_con_datos[0], horizontal=True)
 
-    servicio_df = kpis_f[kpis_f["servicio"].astype(str) == str(resumen_srv)].copy()
+    servicio_df = kpis_periodo[kpis_periodo["servicio"].astype(str) == str(resumen_srv)].copy()
     if "orden" in servicio_df.columns:
         servicio_df = servicio_df.sort_values(["orden","nombre","categoria"])
     else:
@@ -3129,7 +3191,7 @@ def render_resumen_ejecutivo(target_service: str | None = None):
 
     hist_plot = hist_sel.groupby("periodo", as_index=False)["valor"].sum()
     fig_trend = build_trend_line_chart(hist_plot, resumen_kpi_sel, unit_hist, resumen_srv)
-    fig_trend.update_layout(height=400)
+    fig_trend.update_layout(height=470)
     show_plot(fig_trend, use_container_width=True)
 
     st.markdown("</div></div>", unsafe_allow_html=True)
@@ -3201,7 +3263,7 @@ def render_kpis():
                             textposition="outside", showlegend=False,
                         ))
                         fig_meta.update_layout(
-                            title=f"{servicio} — {periodo_sel}",
+                            title=f"{servicio}",
                             plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
                             margin=dict(l=20,r=20,t=50,b=20), height=340,
                             font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
@@ -3233,21 +3295,42 @@ def render_kpis():
 
 def render_personas():
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>Vista por persona</div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-subtitle'>Seguimiento de iniciativas, avance y estado por responsable.</div>",
-                unsafe_allow_html=True)
+    title_col, filter_col = st.columns([4.6, 1.2])
+    with title_col:
+        st.markdown("<div class='section-title'>Vista por persona</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-subtitle'>Seguimiento de iniciativas, avance y estado por responsable.</div>",
+                    unsafe_allow_html=True)
+    with filter_col:
+        popover_ctx = st.popover if hasattr(st, "popover") else st.expander
+        pop_kwargs  = {} if hasattr(st, "popover") else {"expanded": False}
+        with popover_ctx("Filtros", **pop_kwargs):
+            st.multiselect("Estado iniciativa", options=estados_ini, default=estados_ini_sel, key="estado_body_filter")
+            st.multiselect("Prioridad", options=prioridades, default=prioridades_sel, key="prioridad_body_filter")
+            st.multiselect("Responsable", options=responsables, default=responsables_sel, key="responsable_body_filter")
+            if st.button("Restablecer", key="reset_personas_filters", use_container_width=True):
+                st.session_state["estado_body_filter"] = estados_ini
+                st.session_state["prioridad_body_filter"] = prioridades
+                st.session_state["responsable_body_filter"] = responsables
+                st.rerun()
 
-    total_ini   = len(iniciativas_f)
-    en_curso    = int((iniciativas_f["estado"] == "En curso").sum())
-    atrasadas   = int((iniciativas_f["estado"] == "Atrasada").sum())
-    finalizadas = int((iniciativas_f["estado"] == "Finalizada").sum())
+    iniciativas_local = iniciativas[
+        iniciativas["servicio"].isin(servicios_lista) &
+        iniciativas["estado"].isin(st.session_state.get("estado_body_filter", estados_ini) or estados_ini) &
+        iniciativas["prioridad"].isin(st.session_state.get("prioridad_body_filter", prioridades) or prioridades) &
+        iniciativas["responsable"].isin(st.session_state.get("responsable_body_filter", responsables) or responsables)
+    ].copy()
+
+    total_ini   = len(iniciativas_local)
+    en_curso    = int((iniciativas_local["estado"] == "En curso").sum())
+    atrasadas   = int((iniciativas_local["estado"] == "Atrasada").sum())
+    finalizadas = int((iniciativas_local["estado"] == "Finalizada").sum())
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total iniciativas", total_ini)
     m2.metric("En curso", en_curso)
     m3.metric("Atrasadas", atrasadas)
     m4.metric("Finalizadas", finalizadas)
 
-    personas_opts = sorted(iniciativas_f["responsable"].dropna().astype(str).unique().tolist())
+    personas_opts = sorted(iniciativas_local["responsable"].dropna().astype(str).unique().tolist())
     persona_sel = option_selector("Seleccione responsable", personas_opts,
                                    key="persona_selector",
                                    default=personas_opts[0] if personas_opts else None)
@@ -3256,7 +3339,7 @@ def render_personas():
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    per_df = iniciativas_f[iniciativas_f["responsable"] == persona_sel].copy()
+    per_df = iniciativas_local[iniciativas_local["responsable"] == persona_sel].copy()
     avance_prom = float(per_df["avance_pct"].mean()) if not per_df.empty else 0
 
     p1, p2, p3, p4 = st.columns(4)
@@ -3348,7 +3431,7 @@ def render_detalle_servicio():
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    default_per = str(periodo_sel) if str(periodo_sel) in periodos_detalle else periodos_detalle[-1]
+    default_per = periodos_detalle[-1]
     with sel_col2:
         detalle_per = option_selector("Período de detalle", periodos_detalle,
                                        key="detalle_periodo_selector", default=default_per)
