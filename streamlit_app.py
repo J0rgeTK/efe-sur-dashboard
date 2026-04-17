@@ -3868,33 +3868,6 @@ def render_perfil_carga(default_service: str | None = None):
         visible_cols = [c for c in visible_cols if c in detalle_servicios.columns]
         st.dataframe(detalle_servicios[visible_cols], use_container_width=True, hide_index=True)
 
-    st.markdown("<div class='section-title'>Detalle por estación del servicio seleccionado</div>", unsafe_allow_html=True)
-    detalle_cols = ["estacion","t_arr_est","t_dep_est","B_embarque","D_bajadas",
-                    "L_in_abordo","L_out_abordo","Capacidad_disponible","R_quedados",
-                    "Q_out_cola","archivo_origen"]
-    detalle_cols = [c for c in detalle_cols if c in perfil_servicio.columns]
-    detalle = perfil_servicio[detalle_cols].copy()
-
-    fmt_map = {
-        "t_arr_est": ("Llegada",  lambda s: pd.to_datetime(s, errors="coerce").dt.strftime("%H:%M:%S").fillna("-")),
-        "t_dep_est": ("Salida",   lambda s: pd.to_datetime(s, errors="coerce").dt.strftime("%H:%M:%S").fillna("-")),
-        "B_embarque":("Suben",    lambda s: s.apply(fmt_pax)),
-        "D_bajadas": ("Bajan",    lambda s: s.apply(fmt_pax)),
-        "L_in_abordo":("A bordo entrada", lambda s: s.apply(fmt_pax)),
-        "L_out_abordo":("A bordo salida", lambda s: s.apply(fmt_pax)),
-        "Capacidad_disponible":("Cap. disponible", lambda s: s.apply(fmt_pax)),
-        "R_quedados":("Quedados", lambda s: s.apply(fmt_pax)),
-        "Q_out_cola":("Cola salida", lambda s: s.apply(fmt_pax)),
-        "archivo_origen":("Archivo", lambda s: s),
-    }
-    for raw_col, (new_col, fn) in fmt_map.items():
-        if raw_col in detalle.columns:
-            detalle[new_col] = fn(detalle[raw_col])
-
-    show_cols = ["estacion"] + [v[0] for k,v in fmt_map.items() if k in detalle.columns]
-    show_cols = [c for c in show_cols if c in detalle.columns]
-    st.dataframe(detalle[show_cols].rename(columns={"estacion":"Estación"}),
-                 use_container_width=True, hide_index=True)
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
