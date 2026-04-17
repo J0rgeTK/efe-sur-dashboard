@@ -3767,29 +3767,40 @@ def render_perfil_carga(default_service: str | None = None):
             else:
                 tramo_max_abordo = est_max
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric(f"Servicios realizados ({linea_sel} | {dir_sel})", servicios_realizados)
-    m2.metric("Pasajeros transportados", fmt_pax(pasajeros_transportados))
-    m3.metric("Máximo a bordo", fmt_pax(max_abordo))
-    m4.metric("Tramo con máximo a bordo", tramo_max_abordo)
-
     selected_service_row = service_summary[service_summary["servicio_label"].astype(str) == str(servicio_sel)].head(1) if not service_summary.empty else pd.DataFrame()
     tarifa_media_sel = pd.to_numeric(selected_service_row["tarifa_media_aprox"], errors="coerce").iloc[0] if not selected_service_row.empty and "tarifa_media_aprox" in selected_service_row.columns else np.nan
     recaudacion_sel = pd.to_numeric(selected_service_row["recaudacion_aprox"], errors="coerce").iloc[0] if not selected_service_row.empty and "recaudacion_aprox" in selected_service_row.columns else np.nan
 
     capacidad_referencia_linea = 605.0
     ocupacion_general_pct = np.nan
+    ocupacion_servicio_pct = np.nan
     if not service_summary.empty and servicios_realizados > 0:
         pasajeros_linea_total = pd.to_numeric(service_summary.get("pasajeros_transportados"), errors="coerce").fillna(0).sum()
         denominador_ocupacion = float(servicios_realizados) * capacidad_referencia_linea
         if denominador_ocupacion > 0:
             ocupacion_general_pct = (float(pasajeros_linea_total) / denominador_ocupacion) * 100.0
+    if pd.notna(pasajeros_transportados) and float(capacidad_referencia_linea) > 0:
+        ocupacion_servicio_pct = (float(pasajeros_transportados) / float(capacidad_referencia_linea)) * 100.0
 
-    fm1, fm2, fm3 = st.columns(3)
-    fm1.metric("Tarifa media aprox. servicio", fmt_number(tarifa_media_sel, "CLP") if pd.notna(tarifa_media_sel) else "-")
-    fm2.metric("Recaudación aprox. servicio", fmt_number(recaudacion_sel, "CLP") if pd.notna(recaudacion_sel) else "-")
-    fm3.metric(f"Tasa de ocupación general {linea_sel}", fmt_pct(ocupacion_general_pct) if pd.notna(ocupacion_general_pct) else "-")
-    st.caption(f"La recaudación aproximada se calcula como tarifa media aproximada × pasajeros transportados del servicio seleccionado. La tasa de ocupación general se calcula como pasajeros transportados totales de la línea / (servicios realizados × {int(capacidad_referencia_linea)} pasajeros).")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric(f"Servicios realizados ({linea_sel} | {dir_sel})", servicios_realizados)
+        st.metric(f"Tasa de ocupación línea ({linea_sel} | {dir_sel})", fmt_pct(ocupacion_general_pct) if pd.notna(ocupacion_general_pct) else "-")
+    with col2:
+        st.metric("Pasajeros transportados", fmt_pax(pasajeros_transportados))
+        st.metric(f"Tasa de ocupación servicio {servicio_sel}", fmt_pct(ocupacion_servicio_pct) if pd.notna(ocupacion_servicio_pct) else "-")
+    with col3:
+        st.metric("Máximo a bordo", fmt_pax(max_abordo))
+        st.metric("Tramo con máximo a bordo", tramo_max_abordo)
+    with col4:
+        st.metric("Tarifa media aprox. servicio", fmt_number(tarifa_media_sel, "CLP") if pd.notna(tarifa_media_sel) else "-")
+        st.metric("Recaudación aprox. servicio", fmt_number(recaudacion_sel, "CLP") if pd.notna(recaudacion_sel) else "-")
+
+    st.caption(
+        f"La recaudación aproximada se calcula como tarifa media aproximada × pasajeros transportados del servicio seleccionado. "
+        f"La tasa de ocupación de línea se calcula como pasajeros transportados totales de la línea / (servicios realizados × {int(capacidad_referencia_linea)} pasajeros). "
+        f"La tasa de ocupación del servicio seleccionado se calcula como pasajeros transportados del servicio / {int(capacidad_referencia_linea)} pasajeros."
+    )
 
     titulo = f"{profile_srv} | {linea_sel} | {dir_sel} | Servicio {servicio_sel}"
     show_plot(build_perfil_carga_chart(perfil_servicio, titulo), use_container_width=True)
