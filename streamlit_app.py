@@ -3777,10 +3777,19 @@ def render_perfil_carga(default_service: str | None = None):
     tarifa_media_sel = pd.to_numeric(selected_service_row["tarifa_media_aprox"], errors="coerce").iloc[0] if not selected_service_row.empty and "tarifa_media_aprox" in selected_service_row.columns else np.nan
     recaudacion_sel = pd.to_numeric(selected_service_row["recaudacion_aprox"], errors="coerce").iloc[0] if not selected_service_row.empty and "recaudacion_aprox" in selected_service_row.columns else np.nan
 
-    fm1, fm2 = st.columns(2)
+    capacidad_referencia_linea = 605.0
+    ocupacion_general_pct = np.nan
+    if not service_summary.empty and servicios_realizados > 0:
+        pasajeros_linea_total = pd.to_numeric(service_summary.get("pasajeros_transportados"), errors="coerce").fillna(0).sum()
+        denominador_ocupacion = float(servicios_realizados) * capacidad_referencia_linea
+        if denominador_ocupacion > 0:
+            ocupacion_general_pct = (float(pasajeros_linea_total) / denominador_ocupacion) * 100.0
+
+    fm1, fm2, fm3 = st.columns(3)
     fm1.metric("Tarifa media aprox. servicio", fmt_number(tarifa_media_sel, "CLP") if pd.notna(tarifa_media_sel) else "-")
     fm2.metric("Recaudación aprox. servicio", fmt_number(recaudacion_sel, "CLP") if pd.notna(recaudacion_sel) else "-")
-    st.caption("La recaudación aproximada se calcula como tarifa media aproximada × pasajeros transportados del servicio seleccionado.")
+    fm3.metric(f"Tasa de ocupación general {linea_sel}", fmt_pct(ocupacion_general_pct) if pd.notna(ocupacion_general_pct) else "-")
+    st.caption(f"La recaudación aproximada se calcula como tarifa media aproximada × pasajeros transportados del servicio seleccionado. La tasa de ocupación general se calcula como pasajeros transportados totales de la línea / (servicios realizados × {int(capacidad_referencia_linea)} pasajeros).")
 
     titulo = f"{profile_srv} | {linea_sel} | {dir_sel} | Servicio {servicio_sel}"
     show_plot(build_perfil_carga_chart(perfil_servicio, titulo), use_container_width=True)
