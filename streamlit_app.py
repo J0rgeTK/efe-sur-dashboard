@@ -1930,6 +1930,27 @@ def _normalize_direction_key(value: str) -> str:
     return raw.strip("-")
 
 
+def filter_profile_by_line_direction(df: pd.DataFrame, linea: str | None = None, direccion: str | None = None) -> pd.DataFrame:
+    """
+    Filtra de forma robusta por línea y/o dirección, normalizando variantes como
+    CW-CC, CW / CC, cc→cw, etc. Si alguno de los filtros es None, no se aplica.
+    """
+    if df is None or df.empty:
+        return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
+    out = df.copy()
+
+    if linea is not None and "linea" in out.columns:
+        out = out[normalize_series(out["linea"]).eq(normalize_text(linea))].copy()
+
+    if direccion is not None and "direccion" in out.columns:
+        out = out[
+            out["direccion"].fillna("").astype(str).map(_normalize_direction_key).eq(_normalize_direction_key(direccion))
+        ].copy()
+
+    return out
+
+
 def get_configured_station_order(linea: str, direccion: str, stations_present: list[str] | None = None) -> list:
     line_key = normalize_text(linea).replace(" ", "")
     dir_key = _normalize_direction_key(direccion)
