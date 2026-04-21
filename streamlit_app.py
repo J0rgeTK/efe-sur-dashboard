@@ -379,6 +379,12 @@ def fmt_pax(value) -> str:
     return f"{float(value):,.0f}".replace(",", ".")
 
 
+def fmt_avg_pax(value) -> str:
+    if pd.isna(value):
+        return "-"
+    return f"{float(value):,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def fmt_fuga_pct(value) -> str:
     if pd.isna(value):
         return "-"
@@ -3506,6 +3512,149 @@ def render_detalle_servicio():
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
+def classify_profile_day_type(fecha_value) -> str | None:
+    if pd.isna(fecha_value):
+        return None
+    ts = pd.Timestamp(fecha_value)
+    wd = int(ts.weekday())
+    if wd < 5:
+        return "Laboral"
+    if wd == 5:
+        return "Sábado"
+    return "Domingo"
+
+
+def month_label_es(fecha_value) -> str:
+    if pd.isna(fecha_value):
+        return "-"
+    ts = pd.Timestamp(fecha_value)
+    meses = {1:"enero",2:"febrero",3:"marzo",4:"abril",5:"mayo",6:"junio",7:"julio",8:"agosto",9:"septiembre",10:"octubre",11:"noviembre",12:"diciembre"}
+    return f"{meses.get(int(ts.month), str(ts.month))} {int(ts.year)}"
+
+
+def build_monthly_profile_tables(perfil_df: pd.DataFrame,
+                                 profile_schema: str,
+                                 profile_srv: str,
+                                 fecha_sel: date,
+                                 linea_sel: str,
+                                 dir_sel: str,
+                                 itinerary_summary_df: pd.DataFrame,
+                                 service_order_df: pd.DataFrame,
+                                 turnstile_df: pd.DataFrame,
+                                 turnstile_status: str) -> dict:
+    if perfil_df.empty:
+        return {}
+
+    fecha_series = pd.to_datetime(perfil_df["fecha"], errors="coerce")
+    month_mask = fecha_series.dt.to_period("M") == pd.Timestamp(fecha_sel).to_period("M")
+    perfil_month_all = perfil_df.loc[month_mask].copy()
+    if perfil_month_all.empty:
+        return {}
+
+    perfil_month_sel = perfil_month_all[
+        (perfil_month_all["linea"].astype(str).str.strip() == str(linea_sel)) &
+        (perfil_month_all["direccion"].astype(str).str.strip() == str(dir_sel))
+    ].copy()
+    if perfil_month_sel.empty:
+        return {}
+
+    daily_rows = []
+    fechas_mes = sorted([x for x in perfil_month_sel["fecha"].dropna().unique().tolist() if pd.notna(x)])
+    for fecha_day in fechas_mes:
+        perfil_day_sel = perfil_month_sel[perfil_month_sel["fecha"] == fecha_day].copy()
+        if perfil_day_sel.empty:
+            continue
+
+        daily_summary = build_service_level_summary(perfil_day_sel, profile_schema)
+        if daily_summary.empty:
+            continue
+
+        daily_summary = enrich_service_summary_with_itinerary(
+            daily_summary, itinerary_summary_df, profile_srv, linea_sel, dir_sel, fecha_day
+        )
+        daily_summary = apply_service_order_and_labels(
+            daily_summary, service_order_df, profile_srv, linea_sel, dir_sel, fecha_day
+        )
+
+        for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]:
+            if col not in daily_summary.columns:
+                daily_summary[col] = np.nan
+
+        if normalize_text(profile_srv) == "biotren" and profile_schema == "transactional" and turnstile_status == "ok" and not turnstile_df.empty:
+            turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_day].copy()
+            perfil_day_all = perfil_month_all[perfil_month_all["fecha"] == fecha_day].copy()
+            if not turnstile_day.empty and not perfil_day_all.empty:
+                _, fare_day, _ = match_turnstile_transactions_to_profile(turnstile_day, perfil_day_all, tolerance_minutes=20)
+                if not fare_day.empty:
+                    fare_day = fare_day[
+                        (fare_day["linea"].astype(str).str.strip() == str(linea_sel)) &
+                        (fare_day["direccion"].astype(str).str.strip() == str(dir_sel))
+                    ].copy()
+                    if not fare_day.empty:
+                        daily_summary = daily_summary.drop(columns=[c for c in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"] if c in daily_summary.columns], errors="ignore")
+                        daily_summary = daily_summary.merge(
+                            fare_day[["servicio_label", "tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]],
+                            how="left", on="servicio_label"
+                        )
+                        daily_summary["tarifa_media_aprox"] = pd.to_numeric(daily_summary.get("tarifa_media_aprox"), errors="coerce")
+                        daily_summary["pasajeros_transportados"] = pd.to_numeric(daily_summary.get("pasajeros_transportados"), errors="coerce")
+                        daily_summary["recaudacion_aprox"] = np.where(
+                            daily_summary["tarifa_media_aprox"].notna() & daily_summary["pasajeros_transportados"].notna(),
+                            daily_summary["tarifa_media_aprox"] * daily_summary["pasajeros_transportados"],
+                            np.nan,
+                        )
+
+        daily_summary["fecha"] = fecha_day
+        daily_summary["tipo_dia"] = classify_profile_day_type(fecha_day)
+        daily_rows.append(daily_summary)
+
+    if not daily_rows:
+        return {}
+
+    monthly_daily = pd.concat(daily_rows, ignore_index=True)
+    monthly_daily["pasajeros_transportados"] = pd.to_numeric(monthly_daily.get("pasajeros_transportados"), errors="coerce")
+    monthly_daily["tarifa_media_aprox"] = pd.to_numeric(monthly_daily.get("tarifa_media_aprox"), errors="coerce")
+    monthly_daily["tx_cruzadas"] = pd.to_numeric(monthly_daily.get("tx_cruzadas"), errors="coerce")
+
+    result = {}
+    for tipo_dia in ["Laboral", "Sábado", "Domingo"]:
+        temp = monthly_daily[monthly_daily["tipo_dia"] == tipo_dia].copy()
+        if temp.empty:
+            result[tipo_dia] = pd.DataFrame()
+            continue
+
+        rows = []
+        temp = temp.sort_values(["servicio_orden_idx", "fecha", "servicio_label"], na_position="last")
+        for servicio_label, g in temp.groupby("servicio_label", sort=False):
+            g = g.copy()
+            tx_sum = pd.to_numeric(g.get("tx_cruzadas"), errors="coerce").fillna(0).sum()
+            tarifa_vals = pd.to_numeric(g.get("tarifa_media_aprox"), errors="coerce")
+            if tx_sum > 0 and tarifa_vals.notna().any():
+                tarifa_mes = (tarifa_vals.fillna(0) * pd.to_numeric(g.get("tx_cruzadas"), errors="coerce").fillna(0)).sum() / tx_sum
+            else:
+                tarifa_mes = tarifa_vals.mean(skipna=True)
+
+            first_valid = g.sort_values(["servicio_orden_idx", "fecha"], na_position="last").iloc[0]
+            rows.append({
+                "servicio_label": str(servicio_label),
+                "servicio_display_label": first_valid.get("servicio_display_label", str(servicio_label)),
+                "servicio_orden_idx": pd.to_numeric(first_valid.get("servicio_orden_idx"), errors="coerce"),
+                "hora_salida_fmt": first_valid.get("hora_salida_fmt", "-"),
+                "estacion_origen": first_valid.get("estacion_origen", "-"),
+                "dias_considerados": int(pd.Series(g["fecha"]).nunique()),
+                "pasajeros_transportados_prom_mes": pd.to_numeric(g.get("pasajeros_transportados"), errors="coerce").mean(skipna=True),
+                "tarifa_media_mes": tarifa_mes,
+            })
+
+        result_df = pd.DataFrame(rows)
+        if not result_df.empty:
+            result_df["servicio_orden_idx"] = pd.to_numeric(result_df["servicio_orden_idx"], errors="coerce")
+            result_df = result_df.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
+        result[tipo_dia] = result_df
+
+    return result
+
+
 def render_perfil_carga(default_service: str | None = None):
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Perfil de Carga</div>", unsafe_allow_html=True)
@@ -3867,6 +4016,44 @@ def render_perfil_carga(default_service: str | None = None):
         visible_cols = ["Servicio", "Hora salida", "Estación origen", "Pasajeros transportados", "Máximo a bordo", "Tx cruzadas", "Tarifa media aprox.", "Recaudación aprox."]
         visible_cols = [c for c in visible_cols if c in detalle_servicios.columns]
         st.dataframe(detalle_servicios[visible_cols], use_container_width=True, hide_index=True)
+
+    st.markdown("<div class='section-title'>Promedios mensuales por tipo de día</div>", unsafe_allow_html=True)
+    tablas_mensuales = build_monthly_profile_tables(
+        perfil_df,
+        profile_schema,
+        profile_srv,
+        fecha_sel,
+        linea_sel,
+        dir_sel,
+        itinerary_summary_df,
+        service_order_df,
+        turnstile_df,
+        turnstile_status,
+    )
+    mes_label = month_label_es(fecha_sel)
+    st.markdown(
+        f"<div class='section-subtitle'>Mes analizado: <b>{mes_label}</b> · Filtros activos: <b>{profile_srv}</b> · <b>{linea_sel}</b> · <b>{dir_sel}</b>. Los pasajeros corresponden al promedio diario del mes dentro de cada tipo de día; la tarifa media mensual se calcula a partir del cruce tarifario disponible para ese mismo tipo de día.</div>",
+        unsafe_allow_html=True,
+    )
+    tabs = st.tabs(["Laboral", "Sábado", "Domingo"])
+    for tipo_dia, tab in zip(["Laboral", "Sábado", "Domingo"], tabs):
+        with tab:
+            tabla_tipo = tablas_mensuales.get(tipo_dia, pd.DataFrame()) if isinstance(tablas_mensuales, dict) else pd.DataFrame()
+            if tabla_tipo is None or tabla_tipo.empty:
+                st.info(f"No existen datos mensuales para {tipo_dia.lower()} con los filtros activos.")
+            else:
+                tabla_show = tabla_tipo.copy()
+                tabla_show["Servicio"] = tabla_show["servicio_display_label"].fillna(tabla_show["servicio_label"])
+                tabla_show["Hora salida"] = tabla_show["hora_salida_fmt"].fillna("-")
+                tabla_show["Estación origen"] = tabla_show["estacion_origen"].fillna("-")
+                tabla_show["Días considerados"] = pd.to_numeric(tabla_show["dias_considerados"], errors="coerce").fillna(0).astype(int)
+                tabla_show["Pasajeros promedio mes"] = pd.to_numeric(tabla_show["pasajeros_transportados_prom_mes"], errors="coerce").apply(fmt_avg_pax)
+                tabla_show["Tarifa media mes"] = pd.to_numeric(tabla_show["tarifa_media_mes"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
+                st.dataframe(
+                    tabla_show[["Servicio", "Hora salida", "Estación origen", "Días considerados", "Pasajeros promedio mes", "Tarifa media mes"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
     st.markdown("</div></div>", unsafe_allow_html=True)
 
