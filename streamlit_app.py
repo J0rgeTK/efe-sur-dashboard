@@ -3664,12 +3664,13 @@ def render_perfil_carga(default_service: str | None = None):
     service_options = list(PROFILE_SERVICE_CONFIG.keys())
     if default_service and default_service in service_options:
         service_options = [default_service]
-    sel_service_col, sel_date_col, info_col = st.columns([1.15, 1.05, 1.8])
-    with sel_service_col:
-        if default_service and default_service in PROFILE_SERVICE_CONFIG:
-            profile_srv = default_service
-            st.markdown(f"<div class='map-note'><b>Servicio:</b> {profile_srv}</div>", unsafe_allow_html=True)
-        else:
+
+    if default_service and default_service in PROFILE_SERVICE_CONFIG:
+        profile_srv = default_service
+        sel_date_col = st.columns([1])[0]
+    else:
+        sel_service_col, sel_date_col = st.columns([1.15, 1.05])
+        with sel_service_col:
             profile_srv = st.selectbox("Servicio de perfil", options=service_options,
                                         index=0, key="profile_service_root_selector")
 
@@ -3683,14 +3684,6 @@ def render_perfil_carga(default_service: str | None = None):
     else:
         profile_schema = "aggregated"
     folder_name  = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("folder_candidates", ["perfil_carga"])[0]
-    service_desc = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("description", "")
-
-    schema_note = "Esquema detectado: transaccional por viaje." if profile_schema == "transactional" else "Esquema detectado: agregado por estación."
-    itinerary_note = "Itinerario de referencia: carpeta recomendada <b>itinerarios/</b> con los archivos <b>itinerario_resumen_servicios.csv</b> y opcionalmente <b>itinerario_detalle_estaciones.csv</b>. También se acepta el consolidado <b>itinerario_efe_sur_extraido.xlsx</b>."
-    turnstile_note = "Cruce tarifario: carpeta recomendada <b>transacciones_bt/</b> con archivos CSV/XLSX que incluyan <b>FECHA_TRANSACCION</b>, <b>NUMERO_TARJETA</b> y <b>MONTO_TRANSACCION</b>. El match se realiza por tarjeta y por cercanía al evento temporal más próximo del viaje (entrada o salida)."
-    with info_col:
-        st.markdown(f"<div class='map-note'><b>Carpeta perfil:</b> {folder_name}<br>{service_desc}<br>{schema_note}<br><br>{itinerary_note}<br><br>{turnstile_note}</div>",
-                    unsafe_allow_html=True)
 
     if perfil_status in ("no_data",) or perfil_df.empty:
         with sel_date_col:
