@@ -1,19 +1,15 @@
 """
 EFE Sur | KPIs e Iniciativas - Gerencia de Pasajeros
 =====================================================
-Refactorización v2 — optimizaciones de rendimiento adicionales:
-  - PLOTLY_CHART_CONFIG deduplicado (una sola definición canónica)
-  - show_plot: reemplaza iteración sobre fig.layout por update_xaxes/update_yaxes
-  - normalize_text: decorado con @lru_cache(maxsize=4096)
-  - get_time_bucket_series: "Periodos operacionales" vectorizado con np.select
-  - scale_kpi_dataframe_for_display: vectorizado con np.where
-  - build_line_chart / build_trend_line_chart / build_perfil_carga_chart:
-      anotaciones en batch via update_layout(annotations=[...])
-  - apply_service_order_and_labels: iterrows() → zip()
-  - load_turnstile_service_data: rename de columnas vectorizado
-  - match_turnstile_transactions_to_profile: pre-filtro de fecha antes del merge
-  - build_station_hourly_overview_chart: loop de trazas → px.line(color=estacion)
-  - _MESES hoisted a nivel de módulo (evita re-crear dict en cada llamada)
+Refactorización completa:
+  - Eliminadas importaciones y definiciones duplicadas
+  - Precálculo único de entry_bucket / exit_bucket
+  - infer_station_path reemplazado por orden_trazado cuando disponible
+  - normalize_text vectorizado para columnas completas
+  - Bug corregido en classify_status (división por cero)
+  - od_linea no se muta tras el filtrado inicial
+  - Nuevas vistas: Matriz OD, Sankey OD, Tendencia con regresión, Detección de anomalías
+  - CSS centralizado con dict de variables
 """
 
 # =========================================================
@@ -21,7 +17,6 @@ Refactorización v2 — optimizaciones de rendimiento adicionales:
 # =========================================================
 import unicodedata
 from datetime import date
-from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +36,22 @@ st.set_page_config(
 )
 
 
-# PLOTLY_CHART_CONFIG se define más abajo junto a show_plot (sin duplicados)
+PLOTLY_CHART_CONFIG = {
+    "scrollZoom": False,
+    "displayModeBar": False,
+    "doubleClick": "reset",
+    "responsive": True,
+}
+
+_ORIGINAL_ST_PLOTLY_CHART = st.plotly_chart
+
+def _plotly_chart_without_scroll(*args, **kwargs):
+    config = kwargs.pop("config", None) or {}
+    merged_config = dict(PLOTLY_CHART_CONFIG)
+    merged_config.update(config)
+    return _ORIGINAL_ST_PLOTLY_CHART(*args, config=merged_config, **kwargs)
+
+st.plotly_chart = _plotly_chart_without_scroll
 
 # =========================================================
 # PALETA DE COLORES (definida UNA sola vez)
@@ -296,10 +306,8 @@ st.markdown(_CSS_TEMPLATE.format(**COLORS), unsafe_allow_html=True)
 # UTILIDADES — texto y formato
 # =========================================================
 
-@lru_cache(maxsize=4096)
 def normalize_text(text: str) -> str:
-    """Normaliza un string individual eliminando acentos y pasando a minúsculas.
-    Decorado con lru_cache para evitar recomputar el mismo string."""
+    """Normaliza un string individual eliminando acentos y pasando a minúsculas."""
     text = "" if text is None else str(text)
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii").strip().lower()
 
@@ -397,12 +405,16 @@ def show_plot(fig: go.Figure, use_container_width: bool = True, **kwargs):
     - desactiva zoom con rueda y la barra de herramientas;
     - fija dragmode en False;
     - bloquea zoom/pan de ejes para que la rueda del mouse desplace la página.
-    Optimizado: usa update_xaxes/update_yaxes en lugar de iterar sobre fig.layout.
     """
     try:
         fig.update_layout(dragmode=False)
-        fig.update_xaxes(fixedrange=True)
-        fig.update_yaxes(fixedrange=True)
+        layout_keys = list(fig.layout)
+        for key in layout_keys:
+            if str(key).startswith("xaxis") or str(key).startswith("yaxis"):
+                try:
+                    fig.layout[key].fixedrange = True
+                except Exception:
+                    pass
     except Exception:
         pass
     return st.plotly_chart(fig, use_container_width=use_container_width, config=PLOTLY_CHART_CONFIG, **kwargs)
@@ -417,15 +429,13 @@ def periodo_to_date(value):
     return pd.to_datetime(value, errors="coerce")
 
 
-# Constante a nivel de módulo: evita re-crear el dict en cada llamada
-_MESES = {1:"ene",2:"feb",3:"mar",4:"abr",5:"may",6:"jun",
-          7:"jul",8:"ago",9:"sep",10:"oct",11:"nov",12:"dic"}
-
 def periodo_to_label(value) -> str:
+    meses = {1:"ene",2:"feb",3:"mar",4:"abr",5:"may",6:"jun",
+              7:"jul",8:"ago",9:"sep",10:"oct",11:"nov",12:"dic"}
     dt = periodo_to_date(value)
     if pd.isna(dt):
         return str(value)
-    return f"{_MESES.get(int(dt.month), str(dt.month))}-{str(dt.year)[2:]}"
+    return f"{meses.get(int(dt.month), str(dt.month))}-{str(dt.year)[2:]}"
 
 
 def safe_to_datetime(series: pd.Series) -> pd.Series:
@@ -678,14 +688,7 @@ def classify_operational_period(ts) -> str | None:
 def get_time_bucket_series(timestamp_series: pd.Series, granularity: str) -> pd.Series:
     ts = pd.to_datetime(timestamp_series, errors="coerce")
     if granularity == "Periodos operacionales":
-        # Vectorizado con np.select en lugar de .apply() fila a fila
-        h = ts.dt.hour + ts.dt.minute / 60.0
-        result = np.select(
-            [(h >= 6) & (h < 9), (h >= 9) & (h < 17), (h >= 17) & (h < 21)],
-            ["Punta Mañana", "Valle", "Punta Tarde"],
-            default="Fuera de periodo",
-        )
-        return pd.Series(np.where(ts.isna(), None, result), index=ts.index, dtype=object)
+        return ts.apply(classify_operational_period)
     hours = 1 if granularity == "Bloques de 1 hora" else 2
     start = ts.dt.floor(f"{hours}h")
     end   = start + pd.Timedelta(hours=hours)
@@ -1078,18 +1081,15 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
 
     df = pd.concat(frames, ignore_index=True)
 
-    # Vectorizado: normalizar todos los nombres de columnas de una sola vez
-    _turnstile_col_map = {
-        "fecha_transaccion": "FECHA_TRANSACCION",
-        "numero_tarjeta": "NUMERO_TARJETA",
-        "monto_transaccion": "MONTO_TRANSACCION",
-    }
-    col_norms = normalize_series(pd.Series(df.columns.tolist()))
-    rename_map = {
-        orig: _turnstile_col_map[norm]
-        for orig, norm in zip(df.columns, col_norms)
-        if norm in _turnstile_col_map
-    }
+    rename_map = {}
+    for c in df.columns:
+        nc = normalize_text(c)
+        if nc == "fecha_transaccion":
+            rename_map[c] = "FECHA_TRANSACCION"
+        elif nc == "numero_tarjeta":
+            rename_map[c] = "NUMERO_TARJETA"
+        elif nc == "monto_transaccion":
+            rename_map[c] = "MONTO_TRANSACCION"
     df = df.rename(columns=rename_map)
 
     required = ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"]
@@ -1179,17 +1179,6 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
     if tx["turnstile_tx_id"].isna().all():
         tx["turnstile_tx_id"] = np.arange(1, len(tx) + 1)
     tx["turnstile_tx_id"] = tx["turnstile_tx_id"].astype(int)
-
-    # Pre-filtro de fecha antes del merge para reducir el producto cartesiano
-    if "fecha_transaccion" in tx.columns:
-        tx_dates = set(tx["fecha_transaccion"].dt.date.dropna())
-        if tx_dates:
-            prof_date_mask = pd.Series(False, index=prof.index)
-            if "t_entrada_viaje" in prof.columns:
-                prof_date_mask |= pd.to_datetime(prof["t_entrada_viaje"], errors="coerce").dt.date.isin(tx_dates)
-            if "t_salida_viaje" in prof.columns:
-                prof_date_mask |= pd.to_datetime(prof["t_salida_viaje"], errors="coerce").dt.date.isin(tx_dates)
-            prof = prof[prof_date_mask].copy()
 
     merged = tx.merge(prof, how="inner", on="tarjeta_id", suffixes=("", "_perfil"))
     if merged.empty:
@@ -1645,11 +1634,10 @@ def apply_service_order_and_labels(summary_df: pd.DataFrame,
             .sort_values(["__input_order"], kind="stable")
             .reset_index(drop=True)
         )
-        # Usar zip() en lugar de iterrows() — más rápido sin overhead de Series por fila
-        fallback_map = dict(zip(
-            fallback_services["servicio_label"],
-            range(fallback_base + 1, fallback_base + 1 + len(fallback_services)),
-        ))
+        fallback_map = {
+            row["servicio_label"]: fallback_base + idx + 1
+            for idx, (_, row) in enumerate(fallback_services.iterrows())
+        }
         enriched.loc[missing_mask, "servicio_orden_idx"] = enriched.loc[missing_mask, "servicio_label"].map(fallback_map)
 
     enriched["servicio_orden_idx"] = pd.to_numeric(enriched["servicio_orden_idx"], errors="coerce").fillna(999999).astype(int)
@@ -1684,9 +1672,7 @@ def scale_kpi_dataframe_for_display(df: pd.DataFrame, kpi_name: str,
     if is_occupancy_rate_kpi(kpi_name):
         for col in value_columns:
             if col in df.columns:
-                # Vectorizado con np.where en lugar de .apply(maybe_scale_percent) fila a fila
-                s = pd.to_numeric(df[col], errors="coerce")
-                df[col] = np.where(s.isna(), np.nan, np.where(s.abs() <= 1.5, s * 100, s))
+                df[col] = df[col].apply(maybe_scale_percent)
     return df
 
 
@@ -1713,24 +1699,20 @@ def build_line_chart(df: pd.DataFrame, title: str, color=None, line_dash=None,
     fig.update_yaxes(title="", gridcolor="#E8EEF4", zeroline=False)
 
     if boxed_values and not plot_df.empty:
-        # Batch annotations en una sola llamada a update_layout (más eficiente que N add_annotation)
         annot_cols = ["periodo_label","valor","valor_label"]
         if color and color in plot_df.columns:
             annot_cols.append(color)
-        annotations = []
         for _, row in plot_df[annot_cols].iterrows():
             xshift = 0
             if color and color in plot_df.columns:
                 xshift = 10 if len(str(row[color])) % 2 == 0 else -10
-            annotations.append(dict(
+            fig.add_annotation(
                 x=row["periodo_label"], y=row["valor"], text=row["valor_label"],
                 showarrow=False, yshift=18, xshift=xshift,
                 font=dict(size=PLOT_ANNOTATION_SIZE, color=EFE_BLUE),
                 bgcolor="rgba(255,255,255,0.92)", bordercolor=BORDER,
                 borderwidth=1, borderpad=3, align="center",
-                xref="x", yref="y",
-            ))
-        fig.update_layout(annotations=annotations)
+            )
     return fig
 
 
@@ -1780,19 +1762,14 @@ def build_trend_line_chart(df: pd.DataFrame, kpi_name: str, unit: str | None,
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
                      categoryarray=category_order, showgrid=False)
     fig.update_yaxes(title="", gridcolor="#E8EEF4", zeroline=False)
-    # Batch: construir lista y pasar de una vez
-    bg_color = "rgba(255,255,255,0.96)" if COLORS.get("EFE_WHITE") == "#FFFFFF" else "rgba(15,23,42,0.92)"
-    trend_annotations = [
-        dict(
+    for i, row in plot_df.iterrows():
+        fig.add_annotation(
             x=row["periodo_label"], y=row["valor"], text=row["valor_label"],
-            showarrow=False, yshift=18 if (idx % 2 == 0) else 30,
+            showarrow=False, yshift=18 if i % 2 == 0 else 30,
             font=dict(size=max(PLOT_ANNOTATION_SIZE, 11), color=EFE_BLUE),
-            bgcolor=bg_color, bordercolor=BORDER, borderwidth=1, borderpad=4,
-            align="center", xref="x", yref="y",
+            bgcolor="rgba(255,255,255,0.96)" if COLORS.get("EFE_WHITE") == "#FFFFFF" else "rgba(15,23,42,0.92)",
+            bordercolor=BORDER, borderwidth=1, borderpad=4, align="center",
         )
-        for idx, (_, row) in enumerate(plot_df.iterrows())
-    ]
-    fig.update_layout(annotations=trend_annotations)
     return fig
 
 
@@ -2200,23 +2177,20 @@ def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure
                                   line=dict(color=TEXT_MUTED, width=2, dash="dash"),
                                   hovertemplate="Capacidad: %{y:,.0f}<extra></extra>"))
 
-    # Batch annotations a bordo en una sola llamada
-    abordo_rows = plot_df.dropna(subset=["L_out_abordo"])
-    perfil_annotations = [
-        dict(
-            x=row["estacion"], y=row["L_out_abordo"],
+    for _, row in plot_df.dropna(subset=["L_out_abordo"]).iterrows():
+        fig.add_annotation(
+            x=row["estacion"],
+            y=row["L_out_abordo"],
             text=fmt_pax(row["L_out_abordo"]),
-            showarrow=False, yshift=18,
+            showarrow=False,
+            yshift=18,
             font=dict(size=PLOT_ANNOTATION_SIZE, color=SUCCESS),
             bgcolor="rgba(255,255,255,0.96)",
-            bordercolor=SUCCESS, borderwidth=1, borderpad=3, align="center",
-            xref="x", yref="y",
+            bordercolor=SUCCESS,
+            borderwidth=1,
+            borderpad=3,
+            align="center",
         )
-        for _, row in abordo_rows.iterrows()
-    ]
-    if perfil_annotations:
-        existing = list(fig.layout.annotations or [])
-        fig.update_layout(annotations=existing + perfil_annotations)
 
     fig.update_layout(
         title=titulo, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
@@ -2516,32 +2490,25 @@ def build_station_hourly_overview_chart(day_df: pd.DataFrame, station_order=None
         station_order = (hourly.groupby("estacion")["total"].sum()
                          .sort_values(ascending=False).index.tolist())
 
-    # Optimizado: usar px.line con color="estacion" en lugar de un trace por estación
-    if hour_order:
-        hourly["hora"] = pd.Categorical(hourly["hora"], categories=hour_order, ordered=True)
-    if station_order:
-        hourly["estacion"] = pd.Categorical(hourly["estacion"], categories=station_order, ordered=True)
-    hourly = hourly.sort_values(["estacion", "hora"])
+    fig = go.Figure()
+    for estacion in station_order:
+        sdf = hourly[hourly["estacion"].astype(str) == str(estacion)].copy()
+        if sdf.empty:
+            continue
+        if hour_order:
+            sdf["hora"] = pd.Categorical(sdf["hora"], categories=hour_order, ordered=True)
+            sdf = sdf.sort_values("hora")
+        fig.add_trace(go.Scatter(
+            x=sdf["hora"], y=sdf["total"], mode="lines+markers", name=str(estacion),
+            line=dict(width=2), marker=dict(size=6),
+            hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>Movimientos: %{y:,.0f}<extra></extra>",
+        ))
 
-    fig = px.line(
-        hourly, x="hora", y="total", color="estacion",
-        markers=True,
-        category_orders={
-            "hora": hour_order or [],
-            "estacion": station_order or [],
-        },
-        title="Movimientos por hora y estación",
-    )
-    fig.update_traces(
-        line=dict(width=2), marker=dict(size=6),
-        hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>Movimientos: %{y:,.0f}<extra></extra>",
-    )
     fig.update_layout(
+        title="Movimientos por hora y estación",
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20,r=20,t=55,b=20), height=440,
-        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
-        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
-        legend_title_text="Estación",
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     fig.update_xaxes(title="Hora", tickangle=-90, categoryorder="array",
@@ -3545,6 +3512,7 @@ def render_detalle_servicio():
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
+
 def classify_profile_day_type(fecha_value) -> str | None:
     if pd.isna(fecha_value):
         return None
@@ -3557,136 +3525,133 @@ def classify_profile_day_type(fecha_value) -> str | None:
     return "Domingo"
 
 
-def month_label_es(fecha_value) -> str:
-    if pd.isna(fecha_value):
+def month_period_to_label(period_value) -> str:
+    if period_value is None or pd.isna(period_value):
         return "-"
-    ts = pd.Timestamp(fecha_value)
+    ts = pd.Timestamp(str(period_value))
     meses = {1:"enero",2:"febrero",3:"marzo",4:"abril",5:"mayo",6:"junio",7:"julio",8:"agosto",9:"septiembre",10:"octubre",11:"noviembre",12:"diciembre"}
     return f"{meses.get(int(ts.month), str(ts.month))} {int(ts.year)}"
 
 
-def build_monthly_profile_tables(perfil_df: pd.DataFrame,
-                                 profile_schema: str,
-                                 profile_srv: str,
-                                 fecha_sel: date,
-                                 linea_sel: str,
-                                 dir_sel: str,
-                                 itinerary_summary_df: pd.DataFrame,
-                                 service_order_df: pd.DataFrame,
-                                 turnstile_df: pd.DataFrame,
-                                 turnstile_status: str) -> dict:
-    if perfil_df.empty:
-        return {}
+def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
+                                              profile_schema: str,
+                                              profile_srv: str,
+                                              month_period: str,
+                                              linea_sel: str,
+                                              itinerary_summary_df: pd.DataFrame,
+                                              service_order_df: pd.DataFrame,
+                                              turnstile_df: pd.DataFrame,
+                                              turnstile_status: str) -> tuple[dict, list]:
+    if perfil_df.empty or not month_period or not linea_sel:
+        return {}, []
 
     fecha_series = pd.to_datetime(perfil_df["fecha"], errors="coerce")
-    month_mask = fecha_series.dt.to_period("M") == pd.Timestamp(fecha_sel).to_period("M")
-    perfil_month_all = perfil_df.loc[month_mask].copy()
-    if perfil_month_all.empty:
-        return {}
+    month_mask = fecha_series.dt.to_period("M").astype(str) == str(month_period)
+    perfil_mes = perfil_df.loc[month_mask].copy()
+    if perfil_mes.empty:
+        return {}, []
 
-    perfil_month_sel = perfil_month_all[
-        (perfil_month_all["linea"].astype(str).str.strip() == str(linea_sel)) &
-        (perfil_month_all["direccion"].astype(str).str.strip() == str(dir_sel))
-    ].copy()
-    if perfil_month_sel.empty:
-        return {}
+    perfil_mes = perfil_mes[perfil_mes["linea"].astype(str).str.strip() == str(linea_sel)].copy()
+    if perfil_mes.empty:
+        return {}, []
+
+    directions = [x for x in list(dict.fromkeys(perfil_mes["direccion"].dropna().astype(str).str.strip().tolist())) if x]
+    if not directions:
+        return {}, []
 
     daily_rows = []
-    fechas_mes = sorted([x for x in perfil_month_sel["fecha"].dropna().unique().tolist() if pd.notna(x)])
+    fechas_mes = sorted([x for x in perfil_mes["fecha"].dropna().unique().tolist() if pd.notna(x)])
     for fecha_day in fechas_mes:
-        perfil_day_sel = perfil_month_sel[perfil_month_sel["fecha"] == fecha_day].copy()
-        if perfil_day_sel.empty:
+        perfil_day_all = perfil_mes[perfil_mes["fecha"] == fecha_day].copy()
+        if perfil_day_all.empty:
             continue
 
-        daily_summary = build_service_level_summary(perfil_day_sel, profile_schema)
-        if daily_summary.empty:
-            continue
-
-        daily_summary = enrich_service_summary_with_itinerary(
-            daily_summary, itinerary_summary_df, profile_srv, linea_sel, dir_sel, fecha_day
-        )
-        daily_summary = apply_service_order_and_labels(
-            daily_summary, service_order_df, profile_srv, linea_sel, dir_sel, fecha_day
-        )
-
-        for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]:
-            if col not in daily_summary.columns:
-                daily_summary[col] = np.nan
-
+        fare_day_all = pd.DataFrame()
         if normalize_text(profile_srv) == "biotren" and profile_schema == "transactional" and turnstile_status == "ok" and not turnstile_df.empty:
             turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_day].copy()
-            perfil_day_all = perfil_month_all[perfil_month_all["fecha"] == fecha_day].copy()
-            if not turnstile_day.empty and not perfil_day_all.empty:
-                _, fare_day, _ = match_turnstile_transactions_to_profile(turnstile_day, perfil_day_all, tolerance_minutes=20)
-                if not fare_day.empty:
-                    fare_day = fare_day[
-                        (fare_day["linea"].astype(str).str.strip() == str(linea_sel)) &
-                        (fare_day["direccion"].astype(str).str.strip() == str(dir_sel))
-                    ].copy()
-                    if not fare_day.empty:
-                        daily_summary = daily_summary.drop(columns=[c for c in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"] if c in daily_summary.columns], errors="ignore")
-                        daily_summary = daily_summary.merge(
-                            fare_day[["servicio_label", "tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]],
-                            how="left", on="servicio_label"
-                        )
-                        daily_summary["tarifa_media_aprox"] = pd.to_numeric(daily_summary.get("tarifa_media_aprox"), errors="coerce")
-                        daily_summary["pasajeros_transportados"] = pd.to_numeric(daily_summary.get("pasajeros_transportados"), errors="coerce")
-                        daily_summary["recaudacion_aprox"] = np.where(
-                            daily_summary["tarifa_media_aprox"].notna() & daily_summary["pasajeros_transportados"].notna(),
-                            daily_summary["tarifa_media_aprox"] * daily_summary["pasajeros_transportados"],
-                            np.nan,
-                        )
+            if not turnstile_day.empty:
+                _, fare_day_all, _ = match_turnstile_transactions_to_profile(turnstile_day, perfil_day_all, tolerance_minutes=20)
 
-        daily_summary["fecha"] = fecha_day
-        daily_summary["tipo_dia"] = classify_profile_day_type(fecha_day)
-        daily_rows.append(daily_summary)
+        for dir_sel in directions:
+            perfil_day_dir = perfil_day_all[perfil_day_all["direccion"].astype(str).str.strip() == str(dir_sel)].copy()
+            if perfil_day_dir.empty:
+                continue
+
+            daily_summary = build_service_level_summary(perfil_day_dir, profile_schema)
+            if daily_summary.empty:
+                continue
+
+            daily_summary = enrich_service_summary_with_itinerary(
+                daily_summary, itinerary_summary_df, profile_srv, linea_sel, dir_sel, fecha_day
+            )
+            daily_summary = apply_service_order_and_labels(
+                daily_summary, service_order_df, profile_srv, linea_sel, dir_sel, fecha_day
+            )
+
+            for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]:
+                if col not in daily_summary.columns:
+                    daily_summary[col] = np.nan
+
+            if not fare_day_all.empty:
+                fare_dir = fare_day_all[
+                    (fare_day_all["linea"].astype(str).str.strip() == str(linea_sel)) &
+                    (fare_day_all["direccion"].astype(str).str.strip() == str(dir_sel))
+                ].copy()
+                if not fare_dir.empty:
+                    daily_summary = daily_summary.drop(columns=[c for c in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"] if c in daily_summary.columns], errors="ignore")
+                    daily_summary = daily_summary.merge(
+                        fare_dir[["servicio_label", "tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]],
+                        how="left", on="servicio_label"
+                    )
+
+            daily_summary["tarifa_media_aprox"] = pd.to_numeric(daily_summary.get("tarifa_media_aprox"), errors="coerce")
+            daily_summary["pasajeros_transportados"] = pd.to_numeric(daily_summary.get("pasajeros_transportados"), errors="coerce")
+            daily_summary["tx_cruzadas"] = pd.to_numeric(daily_summary.get("tx_cruzadas"), errors="coerce")
+            daily_summary["fecha"] = fecha_day
+            daily_summary["tipo_dia"] = classify_profile_day_type(fecha_day)
+            daily_summary["direccion_ref"] = dir_sel
+            daily_rows.append(daily_summary)
 
     if not daily_rows:
-        return {}
+        return {}, directions
 
     monthly_daily = pd.concat(daily_rows, ignore_index=True)
-    monthly_daily["pasajeros_transportados"] = pd.to_numeric(monthly_daily.get("pasajeros_transportados"), errors="coerce")
-    monthly_daily["tarifa_media_aprox"] = pd.to_numeric(monthly_daily.get("tarifa_media_aprox"), errors="coerce")
-    monthly_daily["tx_cruzadas"] = pd.to_numeric(monthly_daily.get("tx_cruzadas"), errors="coerce")
-
     result = {}
     for tipo_dia in ["Laboral", "Sábado", "Domingo"]:
-        temp = monthly_daily[monthly_daily["tipo_dia"] == tipo_dia].copy()
-        if temp.empty:
-            result[tipo_dia] = pd.DataFrame()
-            continue
+        result[tipo_dia] = {}
+        temp_tipo = monthly_daily[monthly_daily["tipo_dia"] == tipo_dia].copy()
+        for dir_sel in directions:
+            temp = temp_tipo[temp_tipo["direccion_ref"].astype(str).str.strip() == str(dir_sel)].copy()
+            if temp.empty:
+                result[tipo_dia][dir_sel] = pd.DataFrame()
+                continue
 
-        rows = []
-        temp = temp.sort_values(["servicio_orden_idx", "fecha", "servicio_label"], na_position="last")
-        for servicio_label, g in temp.groupby("servicio_label", sort=False):
-            g = g.copy()
-            tx_sum = pd.to_numeric(g.get("tx_cruzadas"), errors="coerce").fillna(0).sum()
-            tarifa_vals = pd.to_numeric(g.get("tarifa_media_aprox"), errors="coerce")
-            if tx_sum > 0 and tarifa_vals.notna().any():
-                tarifa_mes = (tarifa_vals.fillna(0) * pd.to_numeric(g.get("tx_cruzadas"), errors="coerce").fillna(0)).sum() / tx_sum
-            else:
-                tarifa_mes = tarifa_vals.mean(skipna=True)
+            rows = []
+            temp = temp.sort_values(["servicio_orden_idx", "fecha", "servicio_label"], na_position="last")
+            for servicio_label, g in temp.groupby("servicio_label", sort=False):
+                g = g.copy()
+                tx_sum = pd.to_numeric(g.get("tx_cruzadas"), errors="coerce").fillna(0).sum()
+                tarifa_vals = pd.to_numeric(g.get("tarifa_media_aprox"), errors="coerce")
+                if tx_sum > 0 and tarifa_vals.notna().any():
+                    tarifa_mes = (tarifa_vals.fillna(0) * pd.to_numeric(g.get("tx_cruzadas"), errors="coerce").fillna(0)).sum() / tx_sum
+                else:
+                    tarifa_mes = tarifa_vals.mean(skipna=True)
 
-            first_valid = g.sort_values(["servicio_orden_idx", "fecha"], na_position="last").iloc[0]
-            rows.append({
-                "servicio_label": str(servicio_label),
-                "servicio_display_label": first_valid.get("servicio_display_label", str(servicio_label)),
-                "servicio_orden_idx": pd.to_numeric(first_valid.get("servicio_orden_idx"), errors="coerce"),
-                "hora_salida_fmt": first_valid.get("hora_salida_fmt", "-"),
-                "estacion_origen": first_valid.get("estacion_origen", "-"),
-                "dias_considerados": int(pd.Series(g["fecha"]).nunique()),
-                "pasajeros_transportados_prom_mes": pd.to_numeric(g.get("pasajeros_transportados"), errors="coerce").mean(skipna=True),
-                "tarifa_media_mes": tarifa_mes,
-            })
+                first_valid = g.sort_values(["servicio_orden_idx", "fecha"], na_position="last").iloc[0]
+                rows.append({
+                    "servicio_label": str(servicio_label),
+                    "servicio_orden_idx": pd.to_numeric(first_valid.get("servicio_orden_idx"), errors="coerce"),
+                    "pasajeros_promedio_mes": pd.to_numeric(g.get("pasajeros_transportados"), errors="coerce").mean(skipna=True),
+                    "tarifa_media_mes": tarifa_mes,
+                })
 
-        result_df = pd.DataFrame(rows)
-        if not result_df.empty:
-            result_df["servicio_orden_idx"] = pd.to_numeric(result_df["servicio_orden_idx"], errors="coerce")
-            result_df = result_df.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
-        result[tipo_dia] = result_df
+            result_df = pd.DataFrame(rows)
+            if not result_df.empty:
+                result_df["servicio_orden_idx"] = pd.to_numeric(result_df["servicio_orden_idx"], errors="coerce")
+                result_df = result_df.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
+            result[tipo_dia][dir_sel] = result_df
 
-    return result
-
+    return result, directions
 
 def render_perfil_carga(default_service: str | None = None):
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
@@ -3696,16 +3661,9 @@ def render_perfil_carga(default_service: str | None = None):
 
     service_options = list(PROFILE_SERVICE_CONFIG.keys())
     if default_service and default_service in service_options:
-        service_options = [default_service]
-
-    if default_service and default_service in PROFILE_SERVICE_CONFIG:
         profile_srv = default_service
-        sel_date_col = st.columns([1])[0]
     else:
-        sel_service_col, sel_date_col = st.columns([1.15, 1.05])
-        with sel_service_col:
-            profile_srv = st.selectbox("Servicio de perfil", options=service_options,
-                                        index=0, key="profile_service_root_selector")
+        profile_srv = st.selectbox("Servicio de perfil", options=service_options, index=0, key="profile_service_root_selector")
 
     perfil_df, perfil_path, perfil_missing, perfil_files, perfil_status = load_profile_service_data(
         profile_srv, str(data_path))
@@ -3716,373 +3674,355 @@ def render_perfil_carga(default_service: str | None = None):
         profile_schema = profile_schema or "aggregated"
     else:
         profile_schema = "aggregated"
-    folder_name  = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("folder_candidates", ["perfil_carga"])[0]
+    folder_name = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("folder_candidates", ["perfil_carga"])[0]
 
     if perfil_status in ("no_data",) or perfil_df.empty:
-        with sel_date_col:
-            st.selectbox("📅 Fecha disponible", options=[], index=None,
-                         placeholder="Sin fechas disponibles", key="perfil_fecha_selector_empty")
-        st.info(f"No se encontraron archivos CSV para <b>{profile_srv}</b>. "
-                f"Cree la carpeta <b>{folder_name}</b> y agregue los archivos diarios. "
-                f"Ruta buscada: <b>{perfil_path}</b>.", icon="ℹ️")
+        st.info(f"No se encontraron archivos CSV para <b>{profile_srv}</b>. Cree la carpeta <b>{folder_name}</b> y agregue los archivos diarios. Ruta buscada: <b>{perfil_path}</b>.", icon="ℹ️")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
     if perfil_status == "unsupported_format" or perfil_missing:
-        with sel_date_col:
-            fechas_tmp = sorted(pd.to_datetime(perfil_df.get("fecha"), errors="coerce")
-                                .dropna().dt.date.unique().tolist(), reverse=True)                          if isinstance(perfil_df, pd.DataFrame) and "fecha" in perfil_df.columns else []
-            st.selectbox("📅 Fecha disponible", options=fechas_tmp, index=0 if fechas_tmp else None,
-                         placeholder="Sin fechas válidas", key="perfil_fecha_selector_unsupported",
-                         format_func=lambda d: pd.to_datetime(d).strftime("%d-%m-%Y") if pd.notna(d) else "-")
-        st.warning(f"Archivos detectados, pero formato no compatible. "
-                   f"Columnas faltantes: <b>{', '.join(perfil_missing)}</b>.")
+        st.warning(f"Archivos detectados, pero formato no compatible. Columnas faltantes: <b>{', '.join(perfil_missing)}</b>.")
         if perfil_files:
             st.caption(f"Archivos detectados: {len(perfil_files)} | carpeta: {perfil_path}")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    fechas_disponibles = sorted(perfil_df["fecha"].dropna().unique().tolist())
+    fechas_disponibles = sorted([x for x in perfil_df["fecha"].dropna().unique().tolist() if pd.notna(x)])
     if not fechas_disponibles:
         st.warning("No existen fechas válidas en los archivos de perfil de carga.")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    fechas_set   = set(fechas_disponibles)
-    fecha_default= fechas_disponibles[-1]
-    fecha_key    = f"perfil_fecha_cal_{profile_srv}"
-    fecha_prev   = st.session_state.get(fecha_key)
-    if isinstance(fecha_prev, date):
-        fecha_default = (fecha_prev if fecha_prev in fechas_set
-                         else min(fechas_disponibles, key=lambda d: abs((d-fecha_prev).days)))
-
-    with sel_date_col:
-        fecha_sel_input = st.date_input("📅 Fecha", value=fecha_default,
-                                         min_value=fechas_disponibles[0],
-                                         max_value=fechas_disponibles[-1],
-                                         format="DD/MM/YYYY", key=fecha_key)
-
-    fecha_sel = fecha_sel_input
-    if fecha_sel not in fechas_set:
-        fecha_sel = min(fechas_disponibles, key=lambda d: abs((d-fecha_sel).days))
-        st.info(f"Fecha sin datos. Se usa la más cercana: "
-                f"{pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}.")
-
-    perfil_fecha = perfil_df[perfil_df["fecha"] == fecha_sel].copy()
-    lineas_disp  = sorted([x for x in perfil_fecha["linea"].dropna().astype(str).unique() if x])
-
-    row_sel_2a, row_sel_2b, row_sel_2c = st.columns([0.9, 1.15, 1.15])
-    with row_sel_2a:
-        linea_sel = option_selector("Línea", lineas_disp,
-                                     key=f"perfil_linea_selector_{profile_srv}",
-                                     default=lineas_disp[0] if lineas_disp else None)
-
-    perfil_linea = (perfil_fecha[perfil_fecha["linea"].astype(str) == str(linea_sel)].copy()
-                    if linea_sel else perfil_fecha.iloc[0:0].copy())
-    direcciones_disp = sorted([x for x in perfil_linea["direccion"].dropna().astype(str).unique() if x])
-
-    with row_sel_2b:
-        dir_sel = option_selector("Dirección", direcciones_disp,
-                                   key=f"perfil_direccion_selector_{profile_srv}",
-                                   default=direcciones_disp[0] if direcciones_disp else None)
-
-    perfil_dir = (perfil_linea[perfil_linea["direccion"].astype(str) == str(dir_sel)].copy()
-                  if dir_sel else perfil_linea.iloc[0:0].copy())
-
-    if perfil_dir.empty:
-        st.warning("No existen datos para la combinación seleccionada.")
-        st.markdown("</div></div>", unsafe_allow_html=True)
-        return
-
-    if profile_schema not in {"transactional", "aggregated"}:
-        profile_schema = "transactional" if {"origen", "destino", "t_entrada_viaje", "t_salida_viaje"}.issubset(set(perfil_dir.columns)) else "aggregated"
-
     itinerary_summary_df, itinerary_detail_df, itinerary_path, itinerary_files, itinerary_status = load_itinerary_reference(str(data_path))
     service_order_df, service_order_path, service_order_files, service_order_status = load_service_order_reference(str(data_path))
     turnstile_df, turnstile_path, turnstile_missing, turnstile_files, turnstile_status = load_turnstile_service_data(profile_srv, str(data_path))
-    turnstile_day = pd.DataFrame()
-    turnstile_match_df = pd.DataFrame()
-    service_fare_summary = pd.DataFrame()
-    turnstile_stats = {"turnstile_total": 0, "matched_total": 0, "match_pct": np.nan, "diff_mediana_min": np.nan, "tolerance_minutes": 20}
-    if normalize_text(profile_srv) == "biotren" and profile_schema == "transactional" and turnstile_status == "ok" and not turnstile_df.empty:
-        turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_sel].copy()
-        if not turnstile_day.empty:
-            turnstile_match_df, service_fare_summary, turnstile_stats = match_turnstile_transactions_to_profile(turnstile_day, perfil_fecha, tolerance_minutes=20)
 
-    service_summary = build_service_level_summary(perfil_dir, profile_schema)
-    service_summary = enrich_service_summary_with_itinerary(
-        service_summary,
-        itinerary_summary_df,
-        profile_srv,
-        linea_sel,
-        dir_sel,
-        fecha_sel,
-    )
-    service_summary = apply_service_order_and_labels(
-        service_summary,
-        service_order_df,
-        profile_srv,
-        linea_sel,
-        dir_sel,
-        fecha_sel,
-    )
-    if not service_summary.empty:
-        for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]:
-            if col not in service_summary.columns:
-                service_summary[col] = np.nan
-        if not service_fare_summary.empty:
-            fare_sel = service_fare_summary.copy()
-            fare_sel = fare_sel[
-                (fare_sel["linea"].astype(str).str.strip() == str(linea_sel)) &
-                (fare_sel["direccion"].astype(str).str.strip() == str(dir_sel))
-            ].copy()
-            if not fare_sel.empty:
-                service_summary = service_summary.drop(columns=[c for c in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min"] if c in service_summary.columns], errors="ignore")
-                service_summary = service_summary.merge(
-                    fare_sel[["servicio_label", "tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]],
-                    how="left", on="servicio_label"
-                )
+    tab_diario, tab_mensual = st.tabs(["Análisis diario", "Promedio mensual"])
+
+    with tab_diario:
+        fechas_set = set(fechas_disponibles)
+        fecha_default = fechas_disponibles[-1]
+        fecha_key = f"perfil_fecha_cal_{profile_srv}"
+        fecha_prev = st.session_state.get(fecha_key)
+        if isinstance(fecha_prev, date):
+            fecha_default = fecha_prev if fecha_prev in fechas_set else min(fechas_disponibles, key=lambda d: abs((d-fecha_prev).days))
+
+        fecha_sel_input = st.date_input(
+            "📅 Fecha",
+            value=fecha_default,
+            min_value=fechas_disponibles[0],
+            max_value=fechas_disponibles[-1],
+            format="DD/MM/YYYY",
+            key=fecha_key,
+        )
+
+        fecha_sel = fecha_sel_input
+        if fecha_sel not in fechas_set:
+            fecha_sel = min(fechas_disponibles, key=lambda d: abs((d-fecha_sel).days))
+            st.info(f"Fecha sin datos. Se usa la más cercana: {pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}.")
+
+        perfil_fecha = perfil_df[perfil_df["fecha"] == fecha_sel].copy()
+        lineas_disp = sorted([x for x in perfil_fecha["linea"].dropna().astype(str).unique() if x])
+
+        row_sel_2a, row_sel_2b, row_sel_2c = st.columns([0.9, 1.15, 1.15])
+        with row_sel_2a:
+            linea_sel = option_selector("Línea", lineas_disp,
+                                        key=f"perfil_linea_selector_{profile_srv}",
+                                        default=lineas_disp[0] if lineas_disp else None)
+
+        perfil_linea = perfil_fecha[perfil_fecha["linea"].astype(str) == str(linea_sel)].copy() if linea_sel else perfil_fecha.iloc[0:0].copy()
+        direcciones_disp = sorted([x for x in perfil_linea["direccion"].dropna().astype(str).unique() if x])
+
+        with row_sel_2b:
+            dir_sel = option_selector("Dirección", direcciones_disp,
+                                      key=f"perfil_direccion_selector_{profile_srv}",
+                                      default=direcciones_disp[0] if direcciones_disp else None)
+
+        perfil_dir = perfil_linea[perfil_linea["direccion"].astype(str) == str(dir_sel)].copy() if dir_sel else perfil_linea.iloc[0:0].copy()
+
+        if perfil_dir.empty:
+            st.warning("No existen datos para la combinación seleccionada.")
+        else:
+            if profile_schema not in {"transactional", "aggregated"}:
+                schema_local = "transactional" if {"origen", "destino", "t_entrada_viaje", "t_salida_viaje"}.issubset(set(perfil_dir.columns)) else "aggregated"
+            else:
+                schema_local = profile_schema
+
+            turnstile_day = pd.DataFrame()
+            service_fare_summary = pd.DataFrame()
+            turnstile_stats = {"turnstile_total": 0, "matched_total": 0, "match_pct": np.nan, "diff_mediana_min": np.nan, "tolerance_minutes": 20}
+            if normalize_text(profile_srv) == "biotren" and schema_local == "transactional" and turnstile_status == "ok" and not turnstile_df.empty:
+                turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_sel].copy()
+                if not turnstile_day.empty:
+                    _, service_fare_summary, turnstile_stats = match_turnstile_transactions_to_profile(turnstile_day, perfil_fecha, tolerance_minutes=20)
+
+            service_summary = build_service_level_summary(perfil_dir, schema_local)
+            service_summary = enrich_service_summary_with_itinerary(
+                service_summary, itinerary_summary_df, profile_srv, linea_sel, dir_sel, fecha_sel
+            )
+            service_summary = apply_service_order_and_labels(
+                service_summary, service_order_df, profile_srv, linea_sel, dir_sel, fecha_sel
+            )
+            if not service_summary.empty:
                 for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]:
                     if col not in service_summary.columns:
                         service_summary[col] = np.nan
-                service_summary["tarifa_media_aprox"] = pd.to_numeric(service_summary.get("tarifa_media_aprox"), errors="coerce")
-                service_summary["pasajeros_transportados"] = pd.to_numeric(service_summary.get("pasajeros_transportados"), errors="coerce")
-                service_summary["recaudacion_aprox"] = np.where(
-                    service_summary["tarifa_media_aprox"].notna() & service_summary["pasajeros_transportados"].notna(),
-                    service_summary["tarifa_media_aprox"] * service_summary["pasajeros_transportados"],
-                    np.nan,
-                )
+                if not service_fare_summary.empty:
+                    fare_sel = service_fare_summary[
+                        (service_fare_summary["linea"].astype(str).str.strip() == str(linea_sel)) &
+                        (service_fare_summary["direccion"].astype(str).str.strip() == str(dir_sel))
+                    ].copy()
+                    if not fare_sel.empty:
+                        service_summary = service_summary.drop(columns=[c for c in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min"] if c in service_summary.columns], errors="ignore")
+                        service_summary = service_summary.merge(
+                            fare_sel[["servicio_label", "tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]],
+                            how="left", on="servicio_label"
+                        )
+                        for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]:
+                            if col not in service_summary.columns:
+                                service_summary[col] = np.nan
+                        service_summary["tarifa_media_aprox"] = pd.to_numeric(service_summary.get("tarifa_media_aprox"), errors="coerce")
+                        service_summary["pasajeros_transportados"] = pd.to_numeric(service_summary.get("pasajeros_transportados"), errors="coerce")
+                        service_summary["recaudacion_aprox"] = np.where(
+                            service_summary["tarifa_media_aprox"].notna() & service_summary["pasajeros_transportados"].notna(),
+                            service_summary["tarifa_media_aprox"] * service_summary["pasajeros_transportados"],
+                            np.nan,
+                        )
 
-    if not service_summary.empty:
-        option_df = service_summary[["servicio_label", "servicio_display_label", "servicio_orden_idx"]].drop_duplicates(subset=["servicio_label"], keep="first").copy()
-        option_df = option_df.sort_values(["servicio_orden_idx", "servicio_label"])
-        option_labels = option_df["servicio_display_label"].astype(str).tolist()
-        label_to_service = dict(zip(option_df["servicio_display_label"].astype(str), option_df["servicio_label"].astype(str)))
-        prev_service = st.session_state.get(f"perfil_servicio_selector_{profile_srv}")
-        default_label = option_labels[0] if option_labels else None
-        if prev_service in set(option_df["servicio_label"].astype(str)):
-            default_label = option_df.loc[option_df["servicio_label"].astype(str) == str(prev_service), "servicio_display_label"].iloc[0]
+            if not service_summary.empty:
+                option_df = service_summary[["servicio_label", "servicio_display_label", "servicio_orden_idx"]].drop_duplicates(subset=["servicio_label"], keep="first").copy()
+                option_df = option_df.sort_values(["servicio_orden_idx", "servicio_label"])
+                option_labels = option_df["servicio_display_label"].astype(str).tolist()
+                label_to_service = dict(zip(option_df["servicio_display_label"].astype(str), option_df["servicio_label"].astype(str)))
+                prev_service = st.session_state.get(f"perfil_servicio_selector_{profile_srv}")
+                default_label = option_labels[0] if option_labels else None
+                if prev_service in set(option_df["servicio_label"].astype(str)):
+                    default_label = option_df.loc[option_df["servicio_label"].astype(str) == str(prev_service), "servicio_display_label"].iloc[0]
 
-        with row_sel_2c:
-            servicio_label_sel = (
-                st.selectbox(
-                    "Servicio específico",
-                    options=option_labels,
-                    index=(option_labels.index(default_label) if option_labels and default_label in option_labels else 0),
-                    placeholder="Sin servicios disponibles",
-                    key=f"perfil_servicio_selector_label_{profile_srv}",
-                )
-                if option_labels else None
-            )
-        servicio_sel = label_to_service.get(servicio_label_sel) if servicio_label_sel else None
-        if servicio_sel:
-            st.session_state[f"perfil_servicio_selector_{profile_srv}"] = servicio_sel
-    else:
-        servicios_disp = sorted(perfil_dir["servicio_label"].dropna().astype(str).unique(), key=lambda x: (len(x), x))
-        with row_sel_2c:
-            servicio_sel = (
-                st.selectbox(
-                    "Servicio específico",
-                    options=servicios_disp,
-                    index=0 if servicios_disp else None,
-                    placeholder="Sin servicios disponibles",
-                    key=f"perfil_servicio_selector_{profile_srv}",
-                )
-                if servicios_disp else None
-            )
-
-    if not servicio_sel:
-        st.warning("No existen servicios disponibles para la selección actual.")
-        st.markdown("</div></div>", unsafe_allow_html=True)
-        return
-
-    if profile_schema == "transactional":
-        perfil_servicio_tx = perfil_dir[perfil_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
-        perfil_servicio = build_transactional_service_profile(perfil_servicio_tx)
-    else:
-        perfil_servicio = perfil_dir[perfil_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
-        perfil_servicio["event_time"] = perfil_servicio["t_arr_est"].fillna(perfil_servicio["t_dep_est"])
-
-    if perfil_servicio.empty:
-        st.warning("No fue posible reconstruir el perfil de carga para el servicio seleccionado.")
-        st.markdown("</div></div>", unsafe_allow_html=True)
-        return
-
-    station_order = get_station_order_from_profile(perfil_servicio)
-    if station_order:
-        perfil_servicio["estacion"] = pd.Categorical(perfil_servicio["estacion"],
-                                                      categories=station_order, ordered=True)
-        sort_cols = ["estacion"]
-        if "event_time" in perfil_servicio.columns:
-            sort_cols.append("event_time")
-        perfil_servicio = perfil_servicio.sort_values(sort_cols)
-
-    total_embarque = perfil_servicio["B_embarque"].sum(min_count=1)
-    total_bajadas  = perfil_servicio["D_bajadas"].sum(min_count=1)
-    max_abordo     = perfil_servicio["L_out_abordo"].max()
-    capacidad_col  = perfil_servicio.get("capacidad_tren", pd.Series([], dtype=float))
-    capacidad      = (float(capacidad_col.dropna().iloc[0])
-                      if "capacidad_tren" in perfil_servicio.columns
-                      and perfil_servicio["capacidad_tren"].dropna().any() else None)
-
-    servicios_realizados = int(len(service_summary)) if not service_summary.empty else int(perfil_dir["servicio_label"].nunique())
-    pasajeros_transportados = total_bajadas
-    tramo_max_abordo = "-"
-    l_out_series = pd.to_numeric(perfil_servicio.get("L_out_abordo"), errors="coerce")
-    if l_out_series.notna().any():
-        ordered_stations = [str(s) for s in station_order] if station_order else perfil_servicio["estacion"].astype(str).tolist()
-        max_idx = l_out_series.idxmax()
-        est_max = str(perfil_servicio.loc[max_idx, "estacion"])
-        if est_max in ordered_stations:
-            pos = ordered_stations.index(est_max)
-            if pos < len(ordered_stations) - 1:
-                tramo_max_abordo = f"{ordered_stations[pos]} - {ordered_stations[pos + 1]}"
-            elif pos > 0:
-                tramo_max_abordo = f"{ordered_stations[pos - 1]} - {ordered_stations[pos]}"
+                with row_sel_2c:
+                    servicio_label_sel = st.selectbox(
+                        "Servicio específico",
+                        options=option_labels,
+                        index=(option_labels.index(default_label) if option_labels and default_label in option_labels else 0),
+                        placeholder="Sin servicios disponibles",
+                        key=f"perfil_servicio_selector_label_{profile_srv}",
+                    ) if option_labels else None
+                servicio_sel = label_to_service.get(servicio_label_sel) if servicio_label_sel else None
+                if servicio_sel:
+                    st.session_state[f"perfil_servicio_selector_{profile_srv}"] = servicio_sel
             else:
-                tramo_max_abordo = est_max
+                servicios_disp = sorted(perfil_dir["servicio_label"].dropna().astype(str).unique(), key=lambda x: (len(x), x))
+                with row_sel_2c:
+                    servicio_sel = st.selectbox(
+                        "Servicio específico",
+                        options=servicios_disp,
+                        index=0 if servicios_disp else None,
+                        placeholder="Sin servicios disponibles",
+                        key=f"perfil_servicio_selector_{profile_srv}",
+                    ) if servicios_disp else None
 
-    selected_service_row = service_summary[service_summary["servicio_label"].astype(str) == str(servicio_sel)].head(1) if not service_summary.empty else pd.DataFrame()
-    tarifa_media_sel = pd.to_numeric(selected_service_row["tarifa_media_aprox"], errors="coerce").iloc[0] if not selected_service_row.empty and "tarifa_media_aprox" in selected_service_row.columns else np.nan
-    recaudacion_sel = pd.to_numeric(selected_service_row["recaudacion_aprox"], errors="coerce").iloc[0] if not selected_service_row.empty and "recaudacion_aprox" in selected_service_row.columns else np.nan
-
-    capacidad_referencia_linea = 605.0
-    ocupacion_general_pct = np.nan
-    ocupacion_servicio_pct = np.nan
-    if not service_summary.empty and servicios_realizados > 0:
-        pasajeros_linea_total = pd.to_numeric(service_summary.get("pasajeros_transportados"), errors="coerce").fillna(0).sum()
-        denominador_ocupacion = float(servicios_realizados) * capacidad_referencia_linea
-        if denominador_ocupacion > 0:
-            ocupacion_general_pct = (float(pasajeros_linea_total) / denominador_ocupacion) * 100.0
-    if pd.notna(pasajeros_transportados) and float(capacidad_referencia_linea) > 0:
-        ocupacion_servicio_pct = (float(pasajeros_transportados) / float(capacidad_referencia_linea)) * 100.0
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric(f"Servicios realizados ({linea_sel} | {dir_sel})", servicios_realizados)
-        st.metric(f"Tasa de ocupación línea ({linea_sel} | {dir_sel})", fmt_pct(ocupacion_general_pct) if pd.notna(ocupacion_general_pct) else "-")
-    with col2:
-        st.metric("Pasajeros transportados", fmt_pax(pasajeros_transportados))
-        st.metric(f"Tasa de ocupación servicio {servicio_sel}", fmt_pct(ocupacion_servicio_pct) if pd.notna(ocupacion_servicio_pct) else "-")
-    with col3:
-        st.metric("Máximo a bordo", fmt_pax(max_abordo))
-        st.metric("Tramo con máximo a bordo", tramo_max_abordo)
-    with col4:
-        st.metric("Tarifa media aprox. servicio", fmt_number(tarifa_media_sel, "CLP") if pd.notna(tarifa_media_sel) else "-")
-        st.metric("Recaudación aprox. servicio", fmt_number(recaudacion_sel, "CLP") if pd.notna(recaudacion_sel) else "-")
-
-    st.caption(
-        f"La recaudación aproximada se calcula como tarifa media aproximada × pasajeros transportados del servicio seleccionado. "
-        f"La tasa de ocupación de línea se calcula como pasajeros transportados totales de la línea / (servicios realizados × {int(capacidad_referencia_linea)} pasajeros). "
-        f"La tasa de ocupación del servicio seleccionado se calcula como pasajeros transportados del servicio / {int(capacidad_referencia_linea)} pasajeros."
-    )
-
-    titulo = f"{profile_srv} | {linea_sel} | {dir_sel} | Servicio {servicio_sel}"
-    show_plot(build_perfil_carga_chart(perfil_servicio, titulo), use_container_width=True)
-
-    cap_msg = None
-    if capacidad and pd.notna(max_abordo) and float(capacidad) != 0:
-        cap_msg = f"Capacidad tren: {fmt_pax(capacidad)} · Ocupación máxima: {fmt_pct((float(max_abordo)/float(capacidad))*100)}"
-    ref_parts = []
-    if perfil_files:
-        ref_parts.append(f"Perfil: {len(perfil_files)} archivo(s) en {perfil_path}")
-    if itinerary_status == 'ok' and itinerary_files:
-        ref_parts.append(f"Itinerario: {len(itinerary_files)} archivo(s) en {itinerary_path}")
-    elif itinerary_status == 'no_data':
-        ref_parts.append("Itinerario no encontrado; se usa hora/origen inferidos desde las transacciones")
-    if service_order_status == 'ok' and service_order_files:
-        ref_parts.append(f"Orden servicios: {len(service_order_files)} archivo(s) en {service_order_path}")
-    if normalize_text(profile_srv) == 'biotren':
-        if turnstile_status == 'ok' and turnstile_files:
-            turnstile_msg = f"Torniquetes: {len(turnstile_files)} archivo(s) en {turnstile_path}"
-            if turnstile_stats.get('turnstile_total', 0) > 0:
-                turnstile_msg += f" · match día: {fmt_pct(turnstile_stats.get('match_pct')) if pd.notna(turnstile_stats.get('match_pct')) else '-'}"
-                if pd.notna(turnstile_stats.get('diff_mediana_min')):
-                    turnstile_msg += f" · diferencia mediana: {turnstile_stats.get('diff_mediana_min'):.1f} min"
-                if pd.notna(turnstile_stats.get('pct_match_salida')) or pd.notna(turnstile_stats.get('pct_match_entrada')):
-                    pct_salida = turnstile_stats.get('pct_match_salida')
-                    pct_entrada = turnstile_stats.get('pct_match_entrada')
-                    turnstile_msg += f" · ref. salida: {pct_salida:.1f}% · ref. entrada: {pct_entrada:.1f}%"
-            ref_parts.append(turnstile_msg)
-        elif turnstile_status == 'no_data':
-            ref_parts.append("Torniquetes no encontrados; cree la carpeta transacciones_bt/")
-        elif turnstile_status == 'unsupported_format' and turnstile_missing:
-            ref_parts.append("Torniquetes con formato incompatible")
-    caption_parts = [x for x in [cap_msg] + ref_parts if x]
-    if caption_parts:
-        st.caption(" · ".join(caption_parts))
-
-    st.markdown("<div class='section-title'>Pasajeros transportados por servicio</div>", unsafe_allow_html=True)
-    if service_summary.empty:
-        st.info("No existen servicios disponibles para resumir en el día seleccionado.")
-    else:
-        fig_transport = build_service_transport_chart(
-            service_summary,
-            f"{profile_srv} | {linea_sel} | {dir_sel} | Pasajeros transportados por servicio",
-        )
-        show_plot(fig_transport, use_container_width=True)
-
-    st.markdown("<div class='section-title'>Detalle por servicio</div>", unsafe_allow_html=True)
-    if service_summary.empty:
-        st.info("No existen detalles de servicios para el día seleccionado.")
-    else:
-        detalle_servicios = service_summary.copy()
-        detalle_servicios = detalle_servicios.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").copy() if "servicio_orden_idx" in detalle_servicios.columns else detalle_servicios.sort_values(["servicio_label"], kind="stable", na_position="last").copy()
-        detalle_servicios["Hora salida"] = detalle_servicios["hora_salida_fmt"]
-        detalle_servicios["Servicio"] = detalle_servicios["servicio_label"]
-        detalle_servicios["Estación origen"] = detalle_servicios["estacion_origen"]
-        detalle_servicios["Pasajeros transportados"] = detalle_servicios["pasajeros_transportados"].apply(fmt_pax)
-        detalle_servicios["Máximo a bordo"] = detalle_servicios["max_abordo"].apply(fmt_pax)
-        if "tx_cruzadas" in detalle_servicios.columns:
-            detalle_servicios["Tx cruzadas"] = pd.to_numeric(detalle_servicios["tx_cruzadas"], errors="coerce").apply(lambda v: fmt_pax(v) if pd.notna(v) else "-")
-        if "tarifa_media_aprox" in detalle_servicios.columns:
-            detalle_servicios["Tarifa media aprox."] = pd.to_numeric(detalle_servicios["tarifa_media_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
-        if "recaudacion_aprox" in detalle_servicios.columns:
-            detalle_servicios["Recaudación aprox."] = pd.to_numeric(detalle_servicios["recaudacion_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
-        visible_cols = ["Servicio", "Hora salida", "Estación origen", "Pasajeros transportados", "Máximo a bordo", "Tx cruzadas", "Tarifa media aprox.", "Recaudación aprox."]
-        visible_cols = [c for c in visible_cols if c in detalle_servicios.columns]
-        st.dataframe(detalle_servicios[visible_cols], use_container_width=True, hide_index=True)
-
-    st.markdown("<div class='section-title'>Promedios mensuales por tipo de día</div>", unsafe_allow_html=True)
-    tablas_mensuales = build_monthly_profile_tables(
-        perfil_df,
-        profile_schema,
-        profile_srv,
-        fecha_sel,
-        linea_sel,
-        dir_sel,
-        itinerary_summary_df,
-        service_order_df,
-        turnstile_df,
-        turnstile_status,
-    )
-    mes_label = month_label_es(fecha_sel)
-    st.markdown(
-        f"<div class='section-subtitle'>Mes analizado: <b>{mes_label}</b> · Filtros activos: <b>{profile_srv}</b> · <b>{linea_sel}</b> · <b>{dir_sel}</b>. Los pasajeros corresponden al promedio diario del mes dentro de cada tipo de día; la tarifa media mensual se calcula a partir del cruce tarifario disponible para ese mismo tipo de día.</div>",
-        unsafe_allow_html=True,
-    )
-    tabs = st.tabs(["Laboral", "Sábado", "Domingo"])
-    for tipo_dia, tab in zip(["Laboral", "Sábado", "Domingo"], tabs):
-        with tab:
-            tabla_tipo = tablas_mensuales.get(tipo_dia, pd.DataFrame()) if isinstance(tablas_mensuales, dict) else pd.DataFrame()
-            if tabla_tipo is None or tabla_tipo.empty:
-                st.info(f"No existen datos mensuales para {tipo_dia.lower()} con los filtros activos.")
+            if not servicio_sel:
+                st.warning("No existen servicios disponibles para la selección actual.")
             else:
-                tabla_show = tabla_tipo.copy()
-                tabla_show["Servicio"] = tabla_show["servicio_display_label"].fillna(tabla_show["servicio_label"])
-                tabla_show["Hora salida"] = tabla_show["hora_salida_fmt"].fillna("-")
-                tabla_show["Estación origen"] = tabla_show["estacion_origen"].fillna("-")
-                tabla_show["Días considerados"] = pd.to_numeric(tabla_show["dias_considerados"], errors="coerce").fillna(0).astype(int)
-                tabla_show["Pasajeros promedio mes"] = pd.to_numeric(tabla_show["pasajeros_transportados_prom_mes"], errors="coerce").apply(fmt_avg_pax)
-                tabla_show["Tarifa media mes"] = pd.to_numeric(tabla_show["tarifa_media_mes"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
-                st.dataframe(
-                    tabla_show[["Servicio", "Hora salida", "Estación origen", "Días considerados", "Pasajeros promedio mes", "Tarifa media mes"]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
+                if schema_local == "transactional":
+                    perfil_servicio_tx = perfil_dir[perfil_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
+                    perfil_servicio = build_transactional_service_profile(perfil_servicio_tx)
+                else:
+                    perfil_servicio = perfil_dir[perfil_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
+                    perfil_servicio["event_time"] = perfil_servicio["t_arr_est"].fillna(perfil_servicio["t_dep_est"])
+
+                if perfil_servicio.empty:
+                    st.warning("No fue posible reconstruir el perfil de carga para el servicio seleccionado.")
+                else:
+                    station_order = get_station_order_from_profile(perfil_servicio)
+                    if station_order:
+                        perfil_servicio["estacion"] = pd.Categorical(perfil_servicio["estacion"], categories=station_order, ordered=True)
+                        sort_cols = ["estacion"]
+                        if "event_time" in perfil_servicio.columns:
+                            sort_cols.append("event_time")
+                        perfil_servicio = perfil_servicio.sort_values(sort_cols)
+
+                    total_bajadas = perfil_servicio["D_bajadas"].sum(min_count=1)
+                    max_abordo = perfil_servicio["L_out_abordo"].max()
+                    capacidad_col = perfil_servicio.get("capacidad_tren", pd.Series([], dtype=float))
+                    capacidad = (float(capacidad_col.dropna().iloc[0]) if "capacidad_tren" in perfil_servicio.columns and perfil_servicio["capacidad_tren"].dropna().any() else None)
+
+                    servicios_realizados = int(len(service_summary)) if not service_summary.empty else int(perfil_dir["servicio_label"].nunique())
+                    pasajeros_transportados = total_bajadas
+                    tramo_max_abordo = "-"
+                    l_out_series = pd.to_numeric(perfil_servicio.get("L_out_abordo"), errors="coerce")
+                    if l_out_series.notna().any():
+                        ordered_stations = [str(s) for s in station_order] if station_order else perfil_servicio["estacion"].astype(str).tolist()
+                        max_idx = l_out_series.idxmax()
+                        est_max = str(perfil_servicio.loc[max_idx, "estacion"])
+                        if est_max in ordered_stations:
+                            pos = ordered_stations.index(est_max)
+                            if pos < len(ordered_stations) - 1:
+                                tramo_max_abordo = f"{ordered_stations[pos]} - {ordered_stations[pos + 1]}"
+                            elif pos > 0:
+                                tramo_max_abordo = f"{ordered_stations[pos - 1]} - {ordered_stations[pos]}"
+                            else:
+                                tramo_max_abordo = est_max
+
+                    selected_service_row = service_summary[service_summary["servicio_label"].astype(str) == str(servicio_sel)].head(1) if not service_summary.empty else pd.DataFrame()
+                    tarifa_media_sel = pd.to_numeric(selected_service_row["tarifa_media_aprox"], errors="coerce").iloc[0] if not selected_service_row.empty and "tarifa_media_aprox" in selected_service_row.columns else np.nan
+                    recaudacion_sel = pd.to_numeric(selected_service_row["recaudacion_aprox"], errors="coerce").iloc[0] if not selected_service_row.empty and "recaudacion_aprox" in selected_service_row.columns else np.nan
+
+                    capacidad_referencia_linea = 605.0
+                    ocupacion_general_pct = np.nan
+                    ocupacion_servicio_pct = np.nan
+                    if not service_summary.empty and servicios_realizados > 0:
+                        pasajeros_linea_total = pd.to_numeric(service_summary.get("pasajeros_transportados"), errors="coerce").fillna(0).sum()
+                        denominador_ocupacion = float(servicios_realizados) * capacidad_referencia_linea
+                        if denominador_ocupacion > 0:
+                            ocupacion_general_pct = (float(pasajeros_linea_total) / denominador_ocupacion) * 100.0
+                    if pd.notna(pasajeros_transportados) and float(capacidad_referencia_linea) > 0:
+                        ocupacion_servicio_pct = (float(pasajeros_transportados) / float(capacidad_referencia_linea)) * 100.0
+
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric(f"Servicios realizados ({linea_sel} | {dir_sel})", servicios_realizados)
+                        st.metric(f"Tasa de ocupación línea ({linea_sel} | {dir_sel})", fmt_pct(ocupacion_general_pct) if pd.notna(ocupacion_general_pct) else "-")
+                    with col2:
+                        st.metric("Pasajeros transportados", fmt_pax(pasajeros_transportados))
+                        st.metric(f"Tasa de ocupación servicio {servicio_sel}", fmt_pct(ocupacion_servicio_pct) if pd.notna(ocupacion_servicio_pct) else "-")
+                    with col3:
+                        st.metric("Máximo a bordo", fmt_pax(max_abordo))
+                        st.metric("Tramo con máximo a bordo", tramo_max_abordo)
+                    with col4:
+                        st.metric("Tarifa media aprox. servicio", fmt_number(tarifa_media_sel, "CLP") if pd.notna(tarifa_media_sel) else "-")
+                        st.metric("Recaudación aprox. servicio", fmt_number(recaudacion_sel, "CLP") if pd.notna(recaudacion_sel) else "-")
+
+                    st.caption(
+                        f"La recaudación aproximada se calcula como tarifa media aproximada × pasajeros transportados del servicio seleccionado. "
+                        f"La tasa de ocupación de línea se calcula como pasajeros transportados totales de la línea / (servicios realizados × {int(capacidad_referencia_linea)} pasajeros). "
+                        f"La tasa de ocupación del servicio seleccionado se calcula como pasajeros transportados del servicio / {int(capacidad_referencia_linea)} pasajeros."
+                    )
+
+                    titulo = f"{profile_srv} | {linea_sel} | {dir_sel} | Servicio {servicio_sel}"
+                    show_plot(build_perfil_carga_chart(perfil_servicio, titulo), use_container_width=True)
+
+                    cap_msg = None
+                    if capacidad and pd.notna(max_abordo) and float(capacidad) != 0:
+                        cap_msg = f"Capacidad tren: {fmt_pax(capacidad)} · Ocupación máxima: {fmt_pct((float(max_abordo)/float(capacidad))*100)}"
+                    ref_parts = []
+                    if perfil_files:
+                        ref_parts.append(f"Perfil: {len(perfil_files)} archivo(s) en {perfil_path}")
+                    if itinerary_status == 'ok' and itinerary_files:
+                        ref_parts.append(f"Itinerario: {len(itinerary_files)} archivo(s) en {itinerary_path}")
+                    elif itinerary_status == 'no_data':
+                        ref_parts.append("Itinerario no encontrado; se usa hora/origen inferidos desde las transacciones")
+                    if service_order_status == 'ok' and service_order_files:
+                        ref_parts.append(f"Orden servicios: {len(service_order_files)} archivo(s) en {service_order_path}")
+                    if normalize_text(profile_srv) == 'biotren':
+                        if turnstile_status == 'ok' and turnstile_files:
+                            turnstile_msg = f"Torniquetes: {len(turnstile_files)} archivo(s) en {turnstile_path}"
+                            if turnstile_stats.get('turnstile_total', 0) > 0:
+                                turnstile_msg += f" · match día: {fmt_pct(turnstile_stats.get('match_pct')) if pd.notna(turnstile_stats.get('match_pct')) else '-'}"
+                            ref_parts.append(turnstile_msg)
+                    caption_parts = [x for x in [cap_msg] + ref_parts if x]
+                    if caption_parts:
+                        st.caption(" · ".join(caption_parts))
+
+                    st.markdown("<div class='section-title'>Pasajeros transportados por servicio</div>", unsafe_allow_html=True)
+                    if service_summary.empty:
+                        st.info("No existen servicios disponibles para resumir en el día seleccionado.")
+                    else:
+                        fig_transport = build_service_transport_chart(
+                            service_summary,
+                            f"{profile_srv} | {linea_sel} | {dir_sel} | Pasajeros transportados por servicio",
+                        )
+                        show_plot(fig_transport, use_container_width=True)
+
+                    st.markdown("<div class='section-title'>Detalle por servicio</div>", unsafe_allow_html=True)
+                    if service_summary.empty:
+                        st.info("No existen detalles de servicios para el día seleccionado.")
+                    else:
+                        detalle_servicios = service_summary.copy()
+                        detalle_servicios = detalle_servicios.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").copy() if "servicio_orden_idx" in detalle_servicios.columns else detalle_servicios.sort_values(["servicio_label"], kind="stable", na_position="last").copy()
+                        detalle_servicios["Hora salida"] = detalle_servicios["hora_salida_fmt"]
+                        detalle_servicios["Servicio"] = detalle_servicios["servicio_label"]
+                        detalle_servicios["Estación origen"] = detalle_servicios["estacion_origen"]
+                        detalle_servicios["Pasajeros transportados"] = detalle_servicios["pasajeros_transportados"].apply(fmt_pax)
+                        detalle_servicios["Máximo a bordo"] = detalle_servicios["max_abordo"].apply(fmt_pax)
+                        if "tx_cruzadas" in detalle_servicios.columns:
+                            detalle_servicios["Tx cruzadas"] = pd.to_numeric(detalle_servicios["tx_cruzadas"], errors="coerce").apply(lambda v: fmt_pax(v) if pd.notna(v) else "-")
+                        if "tarifa_media_aprox" in detalle_servicios.columns:
+                            detalle_servicios["Tarifa media aprox."] = pd.to_numeric(detalle_servicios["tarifa_media_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
+                        if "recaudacion_aprox" in detalle_servicios.columns:
+                            detalle_servicios["Recaudación aprox."] = pd.to_numeric(detalle_servicios["recaudacion_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
+                        visible_cols = ["Servicio", "Hora salida", "Estación origen", "Pasajeros transportados", "Máximo a bordo", "Tx cruzadas", "Tarifa media aprox.", "Recaudación aprox."]
+                        visible_cols = [c for c in visible_cols if c in detalle_servicios.columns]
+                        st.dataframe(detalle_servicios[visible_cols], use_container_width=True, hide_index=True)
+
+    with tab_mensual:
+        st.markdown("<div class='section-title'>Promedio mensual por tipo de día</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-subtitle'>Vista separada del análisis diario. Solo utiliza filtros de mes y línea; la información se presenta en tablas paralelas por dirección.</div>", unsafe_allow_html=True)
+
+        month_series = pd.to_datetime(perfil_df["fecha"], errors="coerce").dt.to_period("M").astype(str)
+        month_options = [m for m in sorted(pd.Series(month_series).dropna().unique().tolist()) if m and m != 'NaT']
+        month_default = month_options[-1] if month_options else None
+        line_col_m, month_col_m = st.columns([1.0, 1.0])
+        with month_col_m:
+            month_sel = st.selectbox(
+                "Mes",
+                options=month_options,
+                index=(month_options.index(month_default) if month_options and month_default in month_options else 0),
+                format_func=month_period_to_label,
+                key=f"perfil_month_selector_{profile_srv}",
+            ) if month_options else None
+
+        perfil_month = perfil_df[pd.to_datetime(perfil_df["fecha"], errors="coerce").dt.to_period("M").astype(str) == str(month_sel)].copy() if month_sel else perfil_df.iloc[0:0].copy()
+        lineas_mes = sorted([x for x in perfil_month["linea"].dropna().astype(str).unique() if x])
+        with line_col_m:
+            linea_mes_sel = option_selector(
+                "Línea",
+                lineas_mes,
+                key=f"perfil_linea_mes_selector_{profile_srv}",
+                default=lineas_mes[0] if lineas_mes else None,
+            )
+
+        if not month_sel or not linea_mes_sel:
+            st.info("No existen datos mensuales disponibles para los filtros seleccionados.")
+        else:
+            tablas_mensuales, directions = build_monthly_profile_tables_by_direction(
+                perfil_df, profile_schema, profile_srv, month_sel, linea_mes_sel,
+                itinerary_summary_df, service_order_df, turnstile_df, turnstile_status,
+            )
+            if not tablas_mensuales:
+                st.info("No existen datos mensuales para la línea y mes seleccionados.")
+            else:
+                st.caption(f"Mes analizado: {month_period_to_label(month_sel)} · Línea: {linea_mes_sel}")
+                for tipo_dia in ["Laboral", "Sábado", "Domingo"]:
+                    st.markdown(f"<div class='section-title' style='font-size:0.95rem'>{tipo_dia}</div>", unsafe_allow_html=True)
+                    dir_list = directions[:2] if directions else []
+                    if not dir_list:
+                        st.info(f"No existen datos para {tipo_dia.lower()}.")
+                        continue
+                    cols = st.columns(2)
+                    showed_any = False
+                    for idx, dir_val in enumerate(dir_list):
+                        with cols[idx]:
+                            st.markdown(f"<div class='map-note'><b>Dirección:</b> {dir_val}</div>", unsafe_allow_html=True)
+                            tabla_dir = tablas_mensuales.get(tipo_dia, {}).get(dir_val, pd.DataFrame())
+                            if tabla_dir is None or tabla_dir.empty:
+                                st.info("Sin datos para esta dirección.")
+                            else:
+                                showed_any = True
+                                tabla_show = tabla_dir.copy()
+                                tabla_show["Servicio"] = tabla_show["servicio_label"]
+                                tabla_show["Pasajeros Promedio Mes"] = pd.to_numeric(tabla_show["pasajeros_promedio_mes"], errors="coerce").apply(fmt_avg_pax)
+                                tabla_show["Tarifa Media Mes"] = pd.to_numeric(tabla_show["tarifa_media_mes"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
+                                st.dataframe(
+                                    tabla_show[["Servicio", "Pasajeros Promedio Mes", "Tarifa Media Mes"]],
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+                    if not showed_any:
+                        st.info(f"No existen datos para {tipo_dia.lower()} con los filtros seleccionados.")
 
     st.markdown("</div></div>", unsafe_allow_html=True)
-
 
 def render_od_estaciones():
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
