@@ -442,6 +442,25 @@ def safe_to_datetime(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce")
 
 
+def safe_sort_values(df: pd.DataFrame, by, ascending=True, na_position="last", kind="stable") -> pd.DataFrame:
+    """Ordena solo por columnas existentes y retorna copia segura sin fallar si falta alguna columna."""
+    if df is None:
+        return pd.DataFrame()
+    if isinstance(by, str):
+        by = [by]
+    by_existing = [c for c in by if c in df.columns]
+    if not by_existing:
+        return df.copy()
+    try:
+        return df.sort_values(by_existing, ascending=ascending, na_position=na_position, kind=kind).copy()
+    except TypeError:
+        # Compatibilidad cuando alguna versión no acepta kind o na_position en ciertos casos
+        try:
+            return df.sort_values(by_existing, ascending=ascending, na_position=na_position).copy()
+        except Exception:
+            return df.sort_values(by_existing, ascending=ascending).copy()
+
+
 # =========================================================
 # UTILIDADES — clasificación y estado
 # =========================================================
