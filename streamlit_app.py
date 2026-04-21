@@ -1,15 +1,19 @@
 """
 EFE Sur | KPIs e Iniciativas - Gerencia de Pasajeros
 =====================================================
-Refactorización completa:
-  - Eliminadas importaciones y definiciones duplicadas
-  - Precálculo único de entry_bucket / exit_bucket
-  - infer_station_path reemplazado por orden_trazado cuando disponible
-  - normalize_text vectorizado para columnas completas
-  - Bug corregido en classify_status (división por cero)
-  - od_linea no se muta tras el filtrado inicial
-  - Nuevas vistas: Matriz OD, Sankey OD, Tendencia con regresión, Detección de anomalías
-  - CSS centralizado con dict de variables
+Refactorización v2 — optimizaciones de rendimiento adicionales:
+  - PLOTLY_CHART_CONFIG deduplicado (una sola definición canónica)
+  - show_plot: reemplaza iteración sobre fig.layout por update_xaxes/update_yaxes
+  - normalize_text: decorado con @lru_cache(maxsize=4096)
+  - get_time_bucket_series: "Periodos operacionales" vectorizado con np.select
+  - scale_kpi_dataframe_for_display: vectorizado con np.where
+  - build_line_chart / build_trend_line_chart / build_perfil_carga_chart:
+      anotaciones en batch via update_layout(annotations=[...])
+  - apply_service_order_and_labels: iterrows() → zip()
+  - load_turnstile_service_data: rename de columnas vectorizado
+  - match_turnstile_transactions_to_profile: pre-filtro de fecha antes del merge
+  - build_station_hourly_overview_chart: loop de trazas → px.line(color=estacion)
+  - _MESES hoisted a nivel de módulo (evita re-crear dict en cada llamada)
 """
 
 # =========================================================
@@ -17,6 +21,7 @@ Refactorización completa:
 # =========================================================
 import unicodedata
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -36,22 +41,7 @@ st.set_page_config(
 )
 
 
-PLOTLY_CHART_CONFIG = {
-    "scrollZoom": False,
-    "displayModeBar": False,
-    "doubleClick": "reset",
-    "responsive": True,
-}
-
-_ORIGINAL_ST_PLOTLY_CHART = st.plotly_chart
-
-def _plotly_chart_without_scroll(*args, **kwargs):
-    config = kwargs.pop("config", None) or {}
-    merged_config = dict(PLOTLY_CHART_CONFIG)
-    merged_config.update(config)
-    return _ORIGINAL_ST_PLOTLY_CHART(*args, config=merged_config, **kwargs)
-
-st.plotly_chart = _plotly_chart_without_scroll
+# PLOTLY_CHART_CONFIG se define más abajo junto a show_plot (sin duplicados)
 
 # =========================================================
 # PALETA DE COLORES (definida UNA sola vez)
@@ -306,8 +296,10 @@ st.markdown(_CSS_TEMPLATE.format(**COLORS), unsafe_allow_html=True)
 # UTILIDADES — texto y formato
 # =========================================================
 
+@lru_cache(maxsize=4096)
 def normalize_text(text: str) -> str:
-    """Normaliza un string individual eliminando acentos y pasando a minúsculas."""
+    """Normaliza un string individual eliminando acentos y pasando a minúsculas.
+    Decorado con lru_cache para evitar recomputar el mismo string."""
     text = "" if text is None else str(text)
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii").strip().lower()
 
@@ -379,6 +371,12 @@ def fmt_pax(value) -> str:
     return f"{float(value):,.0f}".replace(",", ".")
 
 
+def fmt_avg_pax(value) -> str:
+    if pd.isna(value):
+        return "-"
+    return f"{float(value):,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def fmt_fuga_pct(value) -> str:
     if pd.isna(value):
         return "-"
@@ -399,16 +397,12 @@ def show_plot(fig: go.Figure, use_container_width: bool = True, **kwargs):
     - desactiva zoom con rueda y la barra de herramientas;
     - fija dragmode en False;
     - bloquea zoom/pan de ejes para que la rueda del mouse desplace la página.
+    Optimizado: usa update_xaxes/update_yaxes en lugar de iterar sobre fig.layout.
     """
     try:
         fig.update_layout(dragmode=False)
-        layout_keys = list(fig.layout)
-        for key in layout_keys:
-            if str(key).startswith("xaxis") or str(key).startswith("yaxis"):
-                try:
-                    fig.layout[key].fixedrange = True
-                except Exception:
-                    pass
+        fig.update_xaxes(fixedrange=True)
+        fig.update_yaxes(fixedrange=True)
     except Exception:
         pass
     return st.plotly_chart(fig, use_container_width=use_container_width, config=PLOTLY_CHART_CONFIG, **kwargs)
@@ -423,13 +417,15 @@ def periodo_to_date(value):
     return pd.to_datetime(value, errors="coerce")
 
 
+# Constante a nivel de módulo: evita re-crear el dict en cada llamada
+_MESES = {1:"ene",2:"feb",3:"mar",4:"abr",5:"may",6:"jun",
+          7:"jul",8:"ago",9:"sep",10:"oct",11:"nov",12:"dic"}
+
 def periodo_to_label(value) -> str:
-    meses = {1:"ene",2:"feb",3:"mar",4:"abr",5:"may",6:"jun",
-              7:"jul",8:"ago",9:"sep",10:"oct",11:"nov",12:"dic"}
     dt = periodo_to_date(value)
     if pd.isna(dt):
         return str(value)
-    return f"{meses.get(int(dt.month), str(dt.month))}-{str(dt.year)[2:]}"
+    return f"{_MESES.get(int(dt.month), str(dt.month))}-{str(dt.year)[2:]}"
 
 
 def safe_to_datetime(series: pd.Series) -> pd.Series:
@@ -682,7 +678,14 @@ def classify_operational_period(ts) -> str | None:
 def get_time_bucket_series(timestamp_series: pd.Series, granularity: str) -> pd.Series:
     ts = pd.to_datetime(timestamp_series, errors="coerce")
     if granularity == "Periodos operacionales":
-        return ts.apply(classify_operational_period)
+        # Vectorizado con np.select en lugar de .apply() fila a fila
+        h = ts.dt.hour + ts.dt.minute / 60.0
+        result = np.select(
+            [(h >= 6) & (h < 9), (h >= 9) & (h < 17), (h >= 17) & (h < 21)],
+            ["Punta Mañana", "Valle", "Punta Tarde"],
+            default="Fuera de periodo",
+        )
+        return pd.Series(np.where(ts.isna(), None, result), index=ts.index, dtype=object)
     hours = 1 if granularity == "Bloques de 1 hora" else 2
     start = ts.dt.floor(f"{hours}h")
     end   = start + pd.Timedelta(hours=hours)
@@ -1075,15 +1078,18 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
 
     df = pd.concat(frames, ignore_index=True)
 
-    rename_map = {}
-    for c in df.columns:
-        nc = normalize_text(c)
-        if nc == "fecha_transaccion":
-            rename_map[c] = "FECHA_TRANSACCION"
-        elif nc == "numero_tarjeta":
-            rename_map[c] = "NUMERO_TARJETA"
-        elif nc == "monto_transaccion":
-            rename_map[c] = "MONTO_TRANSACCION"
+    # Vectorizado: normalizar todos los nombres de columnas de una sola vez
+    _turnstile_col_map = {
+        "fecha_transaccion": "FECHA_TRANSACCION",
+        "numero_tarjeta": "NUMERO_TARJETA",
+        "monto_transaccion": "MONTO_TRANSACCION",
+    }
+    col_norms = normalize_series(pd.Series(df.columns.tolist()))
+    rename_map = {
+        orig: _turnstile_col_map[norm]
+        for orig, norm in zip(df.columns, col_norms)
+        if norm in _turnstile_col_map
+    }
     df = df.rename(columns=rename_map)
 
     required = ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"]
@@ -1173,6 +1179,17 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
     if tx["turnstile_tx_id"].isna().all():
         tx["turnstile_tx_id"] = np.arange(1, len(tx) + 1)
     tx["turnstile_tx_id"] = tx["turnstile_tx_id"].astype(int)
+
+    # Pre-filtro de fecha antes del merge para reducir el producto cartesiano
+    if "fecha_transaccion" in tx.columns:
+        tx_dates = set(tx["fecha_transaccion"].dt.date.dropna())
+        if tx_dates:
+            prof_date_mask = pd.Series(False, index=prof.index)
+            if "t_entrada_viaje" in prof.columns:
+                prof_date_mask |= pd.to_datetime(prof["t_entrada_viaje"], errors="coerce").dt.date.isin(tx_dates)
+            if "t_salida_viaje" in prof.columns:
+                prof_date_mask |= pd.to_datetime(prof["t_salida_viaje"], errors="coerce").dt.date.isin(tx_dates)
+            prof = prof[prof_date_mask].copy()
 
     merged = tx.merge(prof, how="inner", on="tarjeta_id", suffixes=("", "_perfil"))
     if merged.empty:
@@ -1628,10 +1645,11 @@ def apply_service_order_and_labels(summary_df: pd.DataFrame,
             .sort_values(["__input_order"], kind="stable")
             .reset_index(drop=True)
         )
-        fallback_map = {
-            row["servicio_label"]: fallback_base + idx + 1
-            for idx, (_, row) in enumerate(fallback_services.iterrows())
-        }
+        # Usar zip() en lugar de iterrows() — más rápido sin overhead de Series por fila
+        fallback_map = dict(zip(
+            fallback_services["servicio_label"],
+            range(fallback_base + 1, fallback_base + 1 + len(fallback_services)),
+        ))
         enriched.loc[missing_mask, "servicio_orden_idx"] = enriched.loc[missing_mask, "servicio_label"].map(fallback_map)
 
     enriched["servicio_orden_idx"] = pd.to_numeric(enriched["servicio_orden_idx"], errors="coerce").fillna(999999).astype(int)
@@ -1666,7 +1684,9 @@ def scale_kpi_dataframe_for_display(df: pd.DataFrame, kpi_name: str,
     if is_occupancy_rate_kpi(kpi_name):
         for col in value_columns:
             if col in df.columns:
-                df[col] = df[col].apply(maybe_scale_percent)
+                # Vectorizado con np.where en lugar de .apply(maybe_scale_percent) fila a fila
+                s = pd.to_numeric(df[col], errors="coerce")
+                df[col] = np.where(s.isna(), np.nan, np.where(s.abs() <= 1.5, s * 100, s))
     return df
 
 
@@ -1693,20 +1713,24 @@ def build_line_chart(df: pd.DataFrame, title: str, color=None, line_dash=None,
     fig.update_yaxes(title="", gridcolor="#E8EEF4", zeroline=False)
 
     if boxed_values and not plot_df.empty:
+        # Batch annotations en una sola llamada a update_layout (más eficiente que N add_annotation)
         annot_cols = ["periodo_label","valor","valor_label"]
         if color and color in plot_df.columns:
             annot_cols.append(color)
+        annotations = []
         for _, row in plot_df[annot_cols].iterrows():
             xshift = 0
             if color and color in plot_df.columns:
                 xshift = 10 if len(str(row[color])) % 2 == 0 else -10
-            fig.add_annotation(
+            annotations.append(dict(
                 x=row["periodo_label"], y=row["valor"], text=row["valor_label"],
                 showarrow=False, yshift=18, xshift=xshift,
                 font=dict(size=PLOT_ANNOTATION_SIZE, color=EFE_BLUE),
                 bgcolor="rgba(255,255,255,0.92)", bordercolor=BORDER,
                 borderwidth=1, borderpad=3, align="center",
-            )
+                xref="x", yref="y",
+            ))
+        fig.update_layout(annotations=annotations)
     return fig
 
 
@@ -1756,14 +1780,19 @@ def build_trend_line_chart(df: pd.DataFrame, kpi_name: str, unit: str | None,
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
                      categoryarray=category_order, showgrid=False)
     fig.update_yaxes(title="", gridcolor="#E8EEF4", zeroline=False)
-    for i, row in plot_df.iterrows():
-        fig.add_annotation(
+    # Batch: construir lista y pasar de una vez
+    bg_color = "rgba(255,255,255,0.96)" if COLORS.get("EFE_WHITE") == "#FFFFFF" else "rgba(15,23,42,0.92)"
+    trend_annotations = [
+        dict(
             x=row["periodo_label"], y=row["valor"], text=row["valor_label"],
-            showarrow=False, yshift=18 if i % 2 == 0 else 30,
+            showarrow=False, yshift=18 if (idx % 2 == 0) else 30,
             font=dict(size=max(PLOT_ANNOTATION_SIZE, 11), color=EFE_BLUE),
-            bgcolor="rgba(255,255,255,0.96)" if COLORS.get("EFE_WHITE") == "#FFFFFF" else "rgba(15,23,42,0.92)",
-            bordercolor=BORDER, borderwidth=1, borderpad=4, align="center",
+            bgcolor=bg_color, bordercolor=BORDER, borderwidth=1, borderpad=4,
+            align="center", xref="x", yref="y",
         )
+        for idx, (_, row) in enumerate(plot_df.iterrows())
+    ]
+    fig.update_layout(annotations=trend_annotations)
     return fig
 
 
@@ -2171,20 +2200,23 @@ def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure
                                   line=dict(color=TEXT_MUTED, width=2, dash="dash"),
                                   hovertemplate="Capacidad: %{y:,.0f}<extra></extra>"))
 
-    for _, row in plot_df.dropna(subset=["L_out_abordo"]).iterrows():
-        fig.add_annotation(
-            x=row["estacion"],
-            y=row["L_out_abordo"],
+    # Batch annotations a bordo en una sola llamada
+    abordo_rows = plot_df.dropna(subset=["L_out_abordo"])
+    perfil_annotations = [
+        dict(
+            x=row["estacion"], y=row["L_out_abordo"],
             text=fmt_pax(row["L_out_abordo"]),
-            showarrow=False,
-            yshift=18,
+            showarrow=False, yshift=18,
             font=dict(size=PLOT_ANNOTATION_SIZE, color=SUCCESS),
             bgcolor="rgba(255,255,255,0.96)",
-            bordercolor=SUCCESS,
-            borderwidth=1,
-            borderpad=3,
-            align="center",
+            bordercolor=SUCCESS, borderwidth=1, borderpad=3, align="center",
+            xref="x", yref="y",
         )
+        for _, row in abordo_rows.iterrows()
+    ]
+    if perfil_annotations:
+        existing = list(fig.layout.annotations or [])
+        fig.update_layout(annotations=existing + perfil_annotations)
 
     fig.update_layout(
         title=titulo, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
@@ -2484,25 +2516,32 @@ def build_station_hourly_overview_chart(day_df: pd.DataFrame, station_order=None
         station_order = (hourly.groupby("estacion")["total"].sum()
                          .sort_values(ascending=False).index.tolist())
 
-    fig = go.Figure()
-    for estacion in station_order:
-        sdf = hourly[hourly["estacion"].astype(str) == str(estacion)].copy()
-        if sdf.empty:
-            continue
-        if hour_order:
-            sdf["hora"] = pd.Categorical(sdf["hora"], categories=hour_order, ordered=True)
-            sdf = sdf.sort_values("hora")
-        fig.add_trace(go.Scatter(
-            x=sdf["hora"], y=sdf["total"], mode="lines+markers", name=str(estacion),
-            line=dict(width=2), marker=dict(size=6),
-            hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>Movimientos: %{y:,.0f}<extra></extra>",
-        ))
+    # Optimizado: usar px.line con color="estacion" en lugar de un trace por estación
+    if hour_order:
+        hourly["hora"] = pd.Categorical(hourly["hora"], categories=hour_order, ordered=True)
+    if station_order:
+        hourly["estacion"] = pd.Categorical(hourly["estacion"], categories=station_order, ordered=True)
+    hourly = hourly.sort_values(["estacion", "hora"])
 
-    fig.update_layout(
+    fig = px.line(
+        hourly, x="hora", y="total", color="estacion",
+        markers=True,
+        category_orders={
+            "hora": hour_order or [],
+            "estacion": station_order or [],
+        },
         title="Movimientos por hora y estación",
+    )
+    fig.update_traces(
+        line=dict(width=2), marker=dict(size=6),
+        hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>Movimientos: %{y:,.0f}<extra></extra>",
+    )
+    fig.update_layout(
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20,r=20,t=55,b=20), height=440,
-        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
+        legend_title_text="Estación",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     fig.update_xaxes(title="Hora", tickangle=-90, categoryorder="array",
@@ -3506,6 +3545,149 @@ def render_detalle_servicio():
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
+def classify_profile_day_type(fecha_value) -> str | None:
+    if pd.isna(fecha_value):
+        return None
+    ts = pd.Timestamp(fecha_value)
+    wd = int(ts.weekday())
+    if wd < 5:
+        return "Laboral"
+    if wd == 5:
+        return "Sábado"
+    return "Domingo"
+
+
+def month_label_es(fecha_value) -> str:
+    if pd.isna(fecha_value):
+        return "-"
+    ts = pd.Timestamp(fecha_value)
+    meses = {1:"enero",2:"febrero",3:"marzo",4:"abril",5:"mayo",6:"junio",7:"julio",8:"agosto",9:"septiembre",10:"octubre",11:"noviembre",12:"diciembre"}
+    return f"{meses.get(int(ts.month), str(ts.month))} {int(ts.year)}"
+
+
+def build_monthly_profile_tables(perfil_df: pd.DataFrame,
+                                 profile_schema: str,
+                                 profile_srv: str,
+                                 fecha_sel: date,
+                                 linea_sel: str,
+                                 dir_sel: str,
+                                 itinerary_summary_df: pd.DataFrame,
+                                 service_order_df: pd.DataFrame,
+                                 turnstile_df: pd.DataFrame,
+                                 turnstile_status: str) -> dict:
+    if perfil_df.empty:
+        return {}
+
+    fecha_series = pd.to_datetime(perfil_df["fecha"], errors="coerce")
+    month_mask = fecha_series.dt.to_period("M") == pd.Timestamp(fecha_sel).to_period("M")
+    perfil_month_all = perfil_df.loc[month_mask].copy()
+    if perfil_month_all.empty:
+        return {}
+
+    perfil_month_sel = perfil_month_all[
+        (perfil_month_all["linea"].astype(str).str.strip() == str(linea_sel)) &
+        (perfil_month_all["direccion"].astype(str).str.strip() == str(dir_sel))
+    ].copy()
+    if perfil_month_sel.empty:
+        return {}
+
+    daily_rows = []
+    fechas_mes = sorted([x for x in perfil_month_sel["fecha"].dropna().unique().tolist() if pd.notna(x)])
+    for fecha_day in fechas_mes:
+        perfil_day_sel = perfil_month_sel[perfil_month_sel["fecha"] == fecha_day].copy()
+        if perfil_day_sel.empty:
+            continue
+
+        daily_summary = build_service_level_summary(perfil_day_sel, profile_schema)
+        if daily_summary.empty:
+            continue
+
+        daily_summary = enrich_service_summary_with_itinerary(
+            daily_summary, itinerary_summary_df, profile_srv, linea_sel, dir_sel, fecha_day
+        )
+        daily_summary = apply_service_order_and_labels(
+            daily_summary, service_order_df, profile_srv, linea_sel, dir_sel, fecha_day
+        )
+
+        for col in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]:
+            if col not in daily_summary.columns:
+                daily_summary[col] = np.nan
+
+        if normalize_text(profile_srv) == "biotren" and profile_schema == "transactional" and turnstile_status == "ok" and not turnstile_df.empty:
+            turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_day].copy()
+            perfil_day_all = perfil_month_all[perfil_month_all["fecha"] == fecha_day].copy()
+            if not turnstile_day.empty and not perfil_day_all.empty:
+                _, fare_day, _ = match_turnstile_transactions_to_profile(turnstile_day, perfil_day_all, tolerance_minutes=20)
+                if not fare_day.empty:
+                    fare_day = fare_day[
+                        (fare_day["linea"].astype(str).str.strip() == str(linea_sel)) &
+                        (fare_day["direccion"].astype(str).str.strip() == str(dir_sel))
+                    ].copy()
+                    if not fare_day.empty:
+                        daily_summary = daily_summary.drop(columns=[c for c in ["tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"] if c in daily_summary.columns], errors="ignore")
+                        daily_summary = daily_summary.merge(
+                            fare_day[["servicio_label", "tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal"]],
+                            how="left", on="servicio_label"
+                        )
+                        daily_summary["tarifa_media_aprox"] = pd.to_numeric(daily_summary.get("tarifa_media_aprox"), errors="coerce")
+                        daily_summary["pasajeros_transportados"] = pd.to_numeric(daily_summary.get("pasajeros_transportados"), errors="coerce")
+                        daily_summary["recaudacion_aprox"] = np.where(
+                            daily_summary["tarifa_media_aprox"].notna() & daily_summary["pasajeros_transportados"].notna(),
+                            daily_summary["tarifa_media_aprox"] * daily_summary["pasajeros_transportados"],
+                            np.nan,
+                        )
+
+        daily_summary["fecha"] = fecha_day
+        daily_summary["tipo_dia"] = classify_profile_day_type(fecha_day)
+        daily_rows.append(daily_summary)
+
+    if not daily_rows:
+        return {}
+
+    monthly_daily = pd.concat(daily_rows, ignore_index=True)
+    monthly_daily["pasajeros_transportados"] = pd.to_numeric(monthly_daily.get("pasajeros_transportados"), errors="coerce")
+    monthly_daily["tarifa_media_aprox"] = pd.to_numeric(monthly_daily.get("tarifa_media_aprox"), errors="coerce")
+    monthly_daily["tx_cruzadas"] = pd.to_numeric(monthly_daily.get("tx_cruzadas"), errors="coerce")
+
+    result = {}
+    for tipo_dia in ["Laboral", "Sábado", "Domingo"]:
+        temp = monthly_daily[monthly_daily["tipo_dia"] == tipo_dia].copy()
+        if temp.empty:
+            result[tipo_dia] = pd.DataFrame()
+            continue
+
+        rows = []
+        temp = temp.sort_values(["servicio_orden_idx", "fecha", "servicio_label"], na_position="last")
+        for servicio_label, g in temp.groupby("servicio_label", sort=False):
+            g = g.copy()
+            tx_sum = pd.to_numeric(g.get("tx_cruzadas"), errors="coerce").fillna(0).sum()
+            tarifa_vals = pd.to_numeric(g.get("tarifa_media_aprox"), errors="coerce")
+            if tx_sum > 0 and tarifa_vals.notna().any():
+                tarifa_mes = (tarifa_vals.fillna(0) * pd.to_numeric(g.get("tx_cruzadas"), errors="coerce").fillna(0)).sum() / tx_sum
+            else:
+                tarifa_mes = tarifa_vals.mean(skipna=True)
+
+            first_valid = g.sort_values(["servicio_orden_idx", "fecha"], na_position="last").iloc[0]
+            rows.append({
+                "servicio_label": str(servicio_label),
+                "servicio_display_label": first_valid.get("servicio_display_label", str(servicio_label)),
+                "servicio_orden_idx": pd.to_numeric(first_valid.get("servicio_orden_idx"), errors="coerce"),
+                "hora_salida_fmt": first_valid.get("hora_salida_fmt", "-"),
+                "estacion_origen": first_valid.get("estacion_origen", "-"),
+                "dias_considerados": int(pd.Series(g["fecha"]).nunique()),
+                "pasajeros_transportados_prom_mes": pd.to_numeric(g.get("pasajeros_transportados"), errors="coerce").mean(skipna=True),
+                "tarifa_media_mes": tarifa_mes,
+            })
+
+        result_df = pd.DataFrame(rows)
+        if not result_df.empty:
+            result_df["servicio_orden_idx"] = pd.to_numeric(result_df["servicio_orden_idx"], errors="coerce")
+            result_df = result_df.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
+        result[tipo_dia] = result_df
+
+    return result
+
+
 def render_perfil_carga(default_service: str | None = None):
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Perfil de Carga</div>", unsafe_allow_html=True)
@@ -3515,12 +3697,13 @@ def render_perfil_carga(default_service: str | None = None):
     service_options = list(PROFILE_SERVICE_CONFIG.keys())
     if default_service and default_service in service_options:
         service_options = [default_service]
-    sel_service_col, sel_date_col, info_col = st.columns([1.15, 1.05, 1.8])
-    with sel_service_col:
-        if default_service and default_service in PROFILE_SERVICE_CONFIG:
-            profile_srv = default_service
-            st.markdown(f"<div class='map-note'><b>Servicio:</b> {profile_srv}</div>", unsafe_allow_html=True)
-        else:
+
+    if default_service and default_service in PROFILE_SERVICE_CONFIG:
+        profile_srv = default_service
+        sel_date_col = st.columns([1])[0]
+    else:
+        sel_service_col, sel_date_col = st.columns([1.15, 1.05])
+        with sel_service_col:
             profile_srv = st.selectbox("Servicio de perfil", options=service_options,
                                         index=0, key="profile_service_root_selector")
 
@@ -3534,14 +3717,6 @@ def render_perfil_carga(default_service: str | None = None):
     else:
         profile_schema = "aggregated"
     folder_name  = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("folder_candidates", ["perfil_carga"])[0]
-    service_desc = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("description", "")
-
-    schema_note = "Esquema detectado: transaccional por viaje." if profile_schema == "transactional" else "Esquema detectado: agregado por estación."
-    itinerary_note = "Itinerario de referencia: carpeta recomendada <b>itinerarios/</b> con los archivos <b>itinerario_resumen_servicios.csv</b> y opcionalmente <b>itinerario_detalle_estaciones.csv</b>. También se acepta el consolidado <b>itinerario_efe_sur_extraido.xlsx</b>."
-    turnstile_note = "Cruce tarifario: carpeta recomendada <b>transacciones_bt/</b> con archivos CSV/XLSX que incluyan <b>FECHA_TRANSACCION</b>, <b>NUMERO_TARJETA</b> y <b>MONTO_TRANSACCION</b>. El match se realiza por tarjeta y por cercanía al evento temporal más próximo del viaje (entrada o salida)."
-    with info_col:
-        st.markdown(f"<div class='map-note'><b>Carpeta perfil:</b> {folder_name}<br>{service_desc}<br>{schema_note}<br><br>{itinerary_note}<br><br>{turnstile_note}</div>",
-                    unsafe_allow_html=True)
 
     if perfil_status in ("no_data",) or perfil_df.empty:
         with sel_date_col:
@@ -3867,6 +4042,44 @@ def render_perfil_carga(default_service: str | None = None):
         visible_cols = ["Servicio", "Hora salida", "Estación origen", "Pasajeros transportados", "Máximo a bordo", "Tx cruzadas", "Tarifa media aprox.", "Recaudación aprox."]
         visible_cols = [c for c in visible_cols if c in detalle_servicios.columns]
         st.dataframe(detalle_servicios[visible_cols], use_container_width=True, hide_index=True)
+
+    st.markdown("<div class='section-title'>Promedios mensuales por tipo de día</div>", unsafe_allow_html=True)
+    tablas_mensuales = build_monthly_profile_tables(
+        perfil_df,
+        profile_schema,
+        profile_srv,
+        fecha_sel,
+        linea_sel,
+        dir_sel,
+        itinerary_summary_df,
+        service_order_df,
+        turnstile_df,
+        turnstile_status,
+    )
+    mes_label = month_label_es(fecha_sel)
+    st.markdown(
+        f"<div class='section-subtitle'>Mes analizado: <b>{mes_label}</b> · Filtros activos: <b>{profile_srv}</b> · <b>{linea_sel}</b> · <b>{dir_sel}</b>. Los pasajeros corresponden al promedio diario del mes dentro de cada tipo de día; la tarifa media mensual se calcula a partir del cruce tarifario disponible para ese mismo tipo de día.</div>",
+        unsafe_allow_html=True,
+    )
+    tabs = st.tabs(["Laboral", "Sábado", "Domingo"])
+    for tipo_dia, tab in zip(["Laboral", "Sábado", "Domingo"], tabs):
+        with tab:
+            tabla_tipo = tablas_mensuales.get(tipo_dia, pd.DataFrame()) if isinstance(tablas_mensuales, dict) else pd.DataFrame()
+            if tabla_tipo is None or tabla_tipo.empty:
+                st.info(f"No existen datos mensuales para {tipo_dia.lower()} con los filtros activos.")
+            else:
+                tabla_show = tabla_tipo.copy()
+                tabla_show["Servicio"] = tabla_show["servicio_display_label"].fillna(tabla_show["servicio_label"])
+                tabla_show["Hora salida"] = tabla_show["hora_salida_fmt"].fillna("-")
+                tabla_show["Estación origen"] = tabla_show["estacion_origen"].fillna("-")
+                tabla_show["Días considerados"] = pd.to_numeric(tabla_show["dias_considerados"], errors="coerce").fillna(0).astype(int)
+                tabla_show["Pasajeros promedio mes"] = pd.to_numeric(tabla_show["pasajeros_transportados_prom_mes"], errors="coerce").apply(fmt_avg_pax)
+                tabla_show["Tarifa media mes"] = pd.to_numeric(tabla_show["tarifa_media_mes"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
+                st.dataframe(
+                    tabla_show[["Servicio", "Hora salida", "Estación origen", "Días considerados", "Pasajeros promedio mes", "Tarifa media mes"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
     st.markdown("</div></div>", unsafe_allow_html=True)
 
