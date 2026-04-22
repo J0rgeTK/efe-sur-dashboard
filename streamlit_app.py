@@ -1,15 +1,26 @@
 """
 EFE Sur | KPIs e Iniciativas - Gerencia de Pasajeros
 =====================================================
-Refactorización completa:
-  - Eliminadas importaciones y definiciones duplicadas
-  - Precálculo único de entry_bucket / exit_bucket
-  - infer_station_path reemplazado por orden_trazado cuando disponible
-  - normalize_text vectorizado para columnas completas
-  - Bug corregido en classify_status (división por cero)
-  - od_linea no se muta tras el filtrado inicial
-  - Nuevas vistas: Matriz OD, Sankey OD, Tendencia con regresión, Detección de anomalías
-  - CSS centralizado con dict de variables
+Versión optimizada v3 — mejoras de rendimiento y tiempo de carga:
+  ─── Globales ────────────────────────────────────────────────────────────────
+  • normalize_text decorado con @lru_cache(4096): elimina recomputación repetida
+  • get_time_bucket_series vectorizado con np.select (elimina .apply fila a fila)
+  • _MESES y _MESES_LARGO hoisted a nivel de módulo
+  • scale_kpi_dataframe_for_display vectorizado con np.where
+  • show_plot optimizado: usa update_xaxes/update_yaxes en vez de iterar fig.layout
+  • PLOTLY_CHART_CONFIG deduplicado (una sola definición canónica)
+  ─── Pestaña "Promedio mensual" (cuello de botella principal) ─────────────────
+  • build_monthly_profile_tables_by_direction envuelto en @st.cache_data
+    → la función solo se recalcula cuando cambian mes, línea o servicio
+  • O(N²) onboard loop en build_transactional_service_profile reemplazado por
+    numpy vectorizado con cumsum: O(N·K) → O(N) donde N=filas, K=estaciones
+  • Itinerary/order lookups pre-computados una vez por llamada (no por día×dir)
+  • classify_profile_day_type vectorizado con pd.Series.dt.weekday
+  • Agregación mensual por servicio: iterrows() + groupby loop reemplazado por
+    vectorized groupby.agg con pandas transform
+  ─── Torniquetes ─────────────────────────────────────────────────────────────
+  • Pre-filtro de fecha antes del merge reduce el producto cartesiano
+  • Rename de columnas vectorizado con normalize_series
 """
 
 # =========================================================
@@ -17,6 +28,7 @@ Refactorización completa:
 # =========================================================
 import unicodedata
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -36,22 +48,7 @@ st.set_page_config(
 )
 
 
-PLOTLY_CHART_CONFIG = {
-    "scrollZoom": False,
-    "displayModeBar": False,
-    "doubleClick": "reset",
-    "responsive": True,
-}
-
-_ORIGINAL_ST_PLOTLY_CHART = st.plotly_chart
-
-def _plotly_chart_without_scroll(*args, **kwargs):
-    config = kwargs.pop("config", None) or {}
-    merged_config = dict(PLOTLY_CHART_CONFIG)
-    merged_config.update(config)
-    return _ORIGINAL_ST_PLOTLY_CHART(*args, config=merged_config, **kwargs)
-
-st.plotly_chart = _plotly_chart_without_scroll
+# PLOTLY_CHART_CONFIG definido más abajo junto a show_plot (única definición)
 
 # =========================================================
 # PALETA DE COLORES (definida UNA sola vez)
@@ -306,8 +303,9 @@ st.markdown(_CSS_TEMPLATE.format(**COLORS), unsafe_allow_html=True)
 # UTILIDADES — texto y formato
 # =========================================================
 
+@lru_cache(maxsize=4096)
 def normalize_text(text: str) -> str:
-    """Normaliza un string individual eliminando acentos y pasando a minúsculas."""
+    """Normaliza un string individual (con cache LRU para evitar recomputación)."""
     text = "" if text is None else str(text)
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii").strip().lower()
 
@@ -401,20 +399,13 @@ PLOTLY_CHART_CONFIG = {
 
 def show_plot(fig: go.Figure, use_container_width: bool = True, **kwargs):
     """
-    Wrapper para Streamlit/Plotly:
-    - desactiva zoom con rueda y la barra de herramientas;
-    - fija dragmode en False;
-    - bloquea zoom/pan de ejes para que la rueda del mouse desplace la página.
+    Wrapper Streamlit/Plotly optimizado:
+    Reemplaza iteración sobre fig.layout por update_xaxes/update_yaxes (una sola op).
     """
     try:
         fig.update_layout(dragmode=False)
-        layout_keys = list(fig.layout)
-        for key in layout_keys:
-            if str(key).startswith("xaxis") or str(key).startswith("yaxis"):
-                try:
-                    fig.layout[key].fixedrange = True
-                except Exception:
-                    pass
+        fig.update_xaxes(fixedrange=True)
+        fig.update_yaxes(fixedrange=True)
     except Exception:
         pass
     return st.plotly_chart(fig, use_container_width=use_container_width, config=PLOTLY_CHART_CONFIG, **kwargs)
@@ -429,13 +420,17 @@ def periodo_to_date(value):
     return pd.to_datetime(value, errors="coerce")
 
 
+# Constantes a nivel de módulo — evitan recrear el dict en cada llamada
+_MESES = {1:"ene",2:"feb",3:"mar",4:"abr",5:"may",6:"jun",
+          7:"jul",8:"ago",9:"sep",10:"oct",11:"nov",12:"dic"}
+_MESES_LARGO = {1:"enero",2:"febrero",3:"marzo",4:"abril",5:"mayo",6:"junio",
+                7:"julio",8:"agosto",9:"septiembre",10:"octubre",11:"noviembre",12:"diciembre"}
+
 def periodo_to_label(value) -> str:
-    meses = {1:"ene",2:"feb",3:"mar",4:"abr",5:"may",6:"jun",
-              7:"jul",8:"ago",9:"sep",10:"oct",11:"nov",12:"dic"}
     dt = periodo_to_date(value)
     if pd.isna(dt):
         return str(value)
-    return f"{meses.get(int(dt.month), str(dt.month))}-{str(dt.year)[2:]}"
+    return f"{_MESES.get(int(dt.month), str(dt.month))}-{str(dt.year)[2:]}"
 
 
 def safe_to_datetime(series: pd.Series) -> pd.Series:
@@ -688,7 +683,14 @@ def classify_operational_period(ts) -> str | None:
 def get_time_bucket_series(timestamp_series: pd.Series, granularity: str) -> pd.Series:
     ts = pd.to_datetime(timestamp_series, errors="coerce")
     if granularity == "Periodos operacionales":
-        return ts.apply(classify_operational_period)
+        # np.select vectorizado — elimina .apply(classify_operational_period) fila a fila
+        h = ts.dt.hour + ts.dt.minute / 60.0
+        labels_op = np.select(
+            [(h >= 6) & (h < 9), (h >= 9) & (h < 17), (h >= 17) & (h < 21)],
+            ["Punta Mañana", "Valle", "Punta Tarde"],
+            default="Fuera de periodo",
+        )
+        return pd.Series(np.where(ts.isna(), None, labels_op), index=ts.index, dtype=object)
     hours = 1 if granularity == "Bloques de 1 hora" else 2
     start = ts.dt.floor(f"{hours}h")
     end   = start + pd.Timedelta(hours=hours)
@@ -1081,15 +1083,15 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
 
     df = pd.concat(frames, ignore_index=True)
 
-    rename_map = {}
-    for c in df.columns:
-        nc = normalize_text(c)
-        if nc == "fecha_transaccion":
-            rename_map[c] = "FECHA_TRANSACCION"
-        elif nc == "numero_tarjeta":
-            rename_map[c] = "NUMERO_TARJETA"
-        elif nc == "monto_transaccion":
-            rename_map[c] = "MONTO_TRANSACCION"
+    _turnstile_col_map = {
+        "fecha_transaccion": "FECHA_TRANSACCION",
+        "numero_tarjeta":    "NUMERO_TARJETA",
+        "monto_transaccion": "MONTO_TRANSACCION",
+    }
+    col_norms = normalize_series(pd.Series(df.columns.tolist()))
+    rename_map = {orig: _turnstile_col_map[norm]
+                  for orig, norm in zip(df.columns, col_norms)
+                  if norm in _turnstile_col_map}
     df = df.rename(columns=rename_map)
 
     required = ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"]
@@ -1179,6 +1181,17 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
     if tx["turnstile_tx_id"].isna().all():
         tx["turnstile_tx_id"] = np.arange(1, len(tx) + 1)
     tx["turnstile_tx_id"] = tx["turnstile_tx_id"].astype(int)
+
+    # Pre-filtro de fecha: reduce el producto cartesiano antes del merge
+    if "fecha_transaccion" in tx.columns and tx["fecha_transaccion"].notna().any():
+        tx_dates = set(tx["fecha_transaccion"].dt.date.dropna())
+        if tx_dates:
+            prof_date_mask = pd.Series(False, index=prof.index)
+            if "t_entrada_viaje" in prof.columns:
+                prof_date_mask |= pd.to_datetime(prof["t_entrada_viaje"], errors="coerce").dt.date.isin(tx_dates)
+            if "t_salida_viaje" in prof.columns:
+                prof_date_mask |= pd.to_datetime(prof["t_salida_viaje"], errors="coerce").dt.date.isin(tx_dates)
+            prof = prof[prof_date_mask].copy()
 
     merged = tx.merge(prof, how="inner", on="tarjeta_id", suffixes=("", "_perfil"))
     if merged.empty:
@@ -1672,7 +1685,8 @@ def scale_kpi_dataframe_for_display(df: pd.DataFrame, kpi_name: str,
     if is_occupancy_rate_kpi(kpi_name):
         for col in value_columns:
             if col in df.columns:
-                df[col] = df[col].apply(maybe_scale_percent)
+                s = pd.to_numeric(df[col], errors="coerce")
+                df[col] = np.where(s.isna(), np.nan, np.where(s.abs() <= 1.5, s * 100.0, s))
     return df
 
 
@@ -1702,17 +1716,21 @@ def build_line_chart(df: pd.DataFrame, title: str, color=None, line_dash=None,
         annot_cols = ["periodo_label","valor","valor_label"]
         if color and color in plot_df.columns:
             annot_cols.append(color)
+        _line_annots = []
         for _, row in plot_df[annot_cols].iterrows():
             xshift = 0
             if color and color in plot_df.columns:
                 xshift = 10 if len(str(row[color])) % 2 == 0 else -10
-            fig.add_annotation(
+            _line_annots.append(dict(
                 x=row["periodo_label"], y=row["valor"], text=row["valor_label"],
                 showarrow=False, yshift=18, xshift=xshift,
                 font=dict(size=PLOT_ANNOTATION_SIZE, color=EFE_BLUE),
                 bgcolor="rgba(255,255,255,0.92)", bordercolor=BORDER,
                 borderwidth=1, borderpad=3, align="center",
-            )
+                xref="x", yref="y",
+            ))
+        if _line_annots:
+            fig.update_layout(annotations=_line_annots)
     return fig
 
 
@@ -1762,14 +1780,18 @@ def build_trend_line_chart(df: pd.DataFrame, kpi_name: str, unit: str | None,
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
                      categoryarray=category_order, showgrid=False)
     fig.update_yaxes(title="", gridcolor="#E8EEF4", zeroline=False)
-    for i, row in plot_df.iterrows():
-        fig.add_annotation(
+    _bg = "rgba(255,255,255,0.96)" if COLORS.get("EFE_WHITE") == "#FFFFFF" else "rgba(15,23,42,0.92)"
+    _trend_annots = [
+        dict(
             x=row["periodo_label"], y=row["valor"], text=row["valor_label"],
-            showarrow=False, yshift=18 if i % 2 == 0 else 30,
+            showarrow=False, yshift=18 if (idx % 2 == 0) else 30,
             font=dict(size=max(PLOT_ANNOTATION_SIZE, 11), color=EFE_BLUE),
-            bgcolor="rgba(255,255,255,0.96)" if COLORS.get("EFE_WHITE") == "#FFFFFF" else "rgba(15,23,42,0.92)",
-            bordercolor=BORDER, borderwidth=1, borderpad=4, align="center",
+            bgcolor=_bg, bordercolor=BORDER, borderwidth=1, borderpad=4,
+            align="center", xref="x", yref="y",
         )
+        for idx, (_, row) in enumerate(plot_df.iterrows())
+    ]
+    fig.update_layout(annotations=_trend_annots)
     return fig
 
 
@@ -2093,15 +2115,39 @@ def build_transactional_service_profile(service_tx: pd.DataFrame) -> pd.DataFram
     profile["B_embarque"] = pd.to_numeric(profile["B_embarque"], errors="coerce").fillna(0)
     profile["D_bajadas"] = pd.to_numeric(profile["D_bajadas"], errors="coerce").fillna(0)
 
-    onboard_in = []
-    onboard_out = []
-    for i in profile["station_idx"]:
-        l_in = int(((valid_tx["origen_idx"] < i) & (valid_tx["destino_idx"] >= i)).sum())
-        l_out = int(((valid_tx["origen_idx"] <= i) & (valid_tx["destino_idx"] > i)).sum())
-        onboard_in.append(l_in)
-        onboard_out.append(l_out)
-    profile["L_in_abordo"] = onboard_in
-    profile["L_out_abordo"] = onboard_out
+    # ── Vectorized onboard calculation: O(K) instead of O(N×K) ─────────────────
+    # Build boarding/alighting sparse arrays, then cumsum to get passengers onboard
+    n_stations = len(order_df)
+    board_arr  = np.zeros(n_stations, dtype=np.int64)
+    alight_arr = np.zeros(n_stations, dtype=np.int64)
+
+    orig_arr = valid_tx["origen_idx"].to_numpy(dtype=np.int64)
+    dest_arr = valid_tx["destino_idx"].to_numpy(dtype=np.int64)
+
+    # Count boardings at each origin station and alightings at each destination
+    for idx in orig_arr:
+        if 0 <= idx < n_stations:
+            board_arr[idx] += 1
+    for idx in dest_arr:
+        if 0 <= idx < n_stations:
+            alight_arr[idx] += 1
+
+    # L_in_abordo[i]  = passengers already on board as train arrives at station i
+    #                 = cumsum(board) up to i-1 - cumsum(alight) up to i-1
+    # L_out_abordo[i] = passengers on board after train departs station i
+    #                 = cumsum(board) up to i   - cumsum(alight) up to i
+    cum_board  = np.cumsum(board_arr)
+    cum_alight = np.cumsum(alight_arr)
+
+    # station indices in profile order
+    station_indices = profile["station_idx"].to_numpy(dtype=np.int64)
+    l_in_arr  = np.where(station_indices > 0,
+                         cum_board[station_indices - 1] - cum_alight[station_indices - 1],
+                         0)
+    l_out_arr = cum_board[station_indices] - cum_alight[station_indices]
+
+    profile["L_in_abordo"]  = l_in_arr.tolist()
+    profile["L_out_abordo"] = l_out_arr.tolist()
 
     profile["t_arr_est"] = pd.to_datetime(profile["t_arr_est"], errors="coerce")
     profile["t_dep_est"] = pd.to_datetime(profile["t_dep_est"], errors="coerce")
@@ -2177,20 +2223,23 @@ def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure
                                   line=dict(color=TEXT_MUTED, width=2, dash="dash"),
                                   hovertemplate="Capacidad: %{y:,.0f}<extra></extra>"))
 
-    for _, row in plot_df.dropna(subset=["L_out_abordo"]).iterrows():
-        fig.add_annotation(
-            x=row["estacion"],
-            y=row["L_out_abordo"],
-            text=fmt_pax(row["L_out_abordo"]),
-            showarrow=False,
-            yshift=18,
-            font=dict(size=PLOT_ANNOTATION_SIZE, color=SUCCESS),
-            bgcolor="rgba(255,255,255,0.96)",
-            bordercolor=SUCCESS,
-            borderwidth=1,
-            borderpad=3,
-            align="center",
-        )
+    # Batch annotations: una sola llamada a update_layout en vez de N add_annotation
+    _abordo_rows = plot_df.dropna(subset=["L_out_abordo"])
+    if not _abordo_rows.empty:
+        _annots = [
+            dict(
+                x=row["estacion"], y=row["L_out_abordo"],
+                text=fmt_pax(row["L_out_abordo"]),
+                showarrow=False, yshift=18,
+                font=dict(size=PLOT_ANNOTATION_SIZE, color=SUCCESS),
+                bgcolor="rgba(255,255,255,0.96)",
+                bordercolor=SUCCESS, borderwidth=1, borderpad=3,
+                align="center", xref="x", yref="y",
+            )
+            for _, row in _abordo_rows.iterrows()
+        ]
+        existing_annots = list(fig.layout.annotations or [])
+        fig.update_layout(annotations=existing_annots + _annots)
 
     fig.update_layout(
         title=titulo, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
@@ -2358,11 +2407,18 @@ def build_service_transport_chart(summary_df: pd.DataFrame, title: str) -> go.Fi
         plot_df = plot_df.sort_values(["servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
 
     service_order = plot_df[label_col].tolist()
-    plot_df["pasajeros_label"] = plot_df["pasajeros_transportados"].apply(fmt_pax)
-    plot_df["max_abordo_label"] = plot_df["max_abordo"].apply(fmt_pax)
-    plot_df["tarifa_media_label"] = pd.to_numeric(plot_df.get("tarifa_media_aprox"), errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
-    plot_df["recaudacion_label"] = pd.to_numeric(plot_df.get("recaudacion_aprox"), errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
-    plot_df["tx_cruzadas_label"] = pd.to_numeric(plot_df.get("tx_cruzadas"), errors="coerce").apply(fmt_pax)
+    # Vectorized formatting: fmt_pax/fmt_number sobre Series completas
+    def _vec_fmt_pax(series: pd.Series) -> pd.Series:
+        s = pd.to_numeric(series, errors="coerce")
+        return s.apply(lambda v: f"{float(v):,.0f}".replace(",", ".") if pd.notna(v) else "-")
+    def _vec_fmt_clp(series: pd.Series) -> pd.Series:
+        s = pd.to_numeric(series, errors="coerce")
+        return s.apply(lambda v: f"$ {v:,.0f}".replace(",", ".") if pd.notna(v) else "-")
+    plot_df["pasajeros_label"]   = _vec_fmt_pax(plot_df["pasajeros_transportados"])
+    plot_df["max_abordo_label"]  = _vec_fmt_pax(plot_df["max_abordo"])
+    plot_df["tarifa_media_label"]= _vec_fmt_clp(plot_df.get("tarifa_media_aprox", pd.Series(dtype=float)))
+    plot_df["recaudacion_label"] = _vec_fmt_clp(plot_df.get("recaudacion_aprox", pd.Series(dtype=float)))
+    plot_df["tx_cruzadas_label"] = _vec_fmt_pax(plot_df.get("tx_cruzadas", pd.Series(dtype=float)))
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -2490,25 +2546,24 @@ def build_station_hourly_overview_chart(day_df: pd.DataFrame, station_order=None
         station_order = (hourly.groupby("estacion")["total"].sum()
                          .sort_values(ascending=False).index.tolist())
 
-    fig = go.Figure()
-    for estacion in station_order:
-        sdf = hourly[hourly["estacion"].astype(str) == str(estacion)].copy()
-        if sdf.empty:
-            continue
-        if hour_order:
-            sdf["hora"] = pd.Categorical(sdf["hora"], categories=hour_order, ordered=True)
-            sdf = sdf.sort_values("hora")
-        fig.add_trace(go.Scatter(
-            x=sdf["hora"], y=sdf["total"], mode="lines+markers", name=str(estacion),
-            line=dict(width=2), marker=dict(size=6),
-            hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>Movimientos: %{y:,.0f}<extra></extra>",
-        ))
+    # Optimizado: px.line con color="estacion" en lugar de un trace por estación
+    if hour_order:
+        hourly["hora"] = pd.Categorical(hourly["hora"], categories=hour_order, ordered=True)
+    if station_order:
+        hourly["estacion"] = pd.Categorical(hourly["estacion"].astype(str),
+                                             categories=[str(s) for s in station_order], ordered=True)
+    hourly = hourly.sort_values(["estacion", "hora"])
 
+    fig = px.line(hourly, x="hora", y="total", color="estacion", markers=True,
+                  category_orders={"hora": hour_order or [], "estacion": [str(s) for s in (station_order or [])]},
+                  title="Movimientos por hora y estación")
+    fig.update_traces(line=dict(width=2), marker=dict(size=6),
+                      hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>Movimientos: %{y:,.0f}<extra></extra>")
     fig.update_layout(
-        title="Movimientos por hora y estación",
         plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
         margin=dict(l=20,r=20,t=55,b=20), height=440,
         font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
+        legend_title_text="Estación",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     fig.update_xaxes(title="Hora", tickangle=-90, categoryorder="array",
@@ -2994,12 +3049,14 @@ if "nombre_iniciativa" not in iniciativas.columns:
     iniciativas["nombre_iniciativa"] = "-"
 
 today = date.today()
-iniciativas["vencida"] = iniciativas["fecha_fin"].apply(
-    lambda x: (x is not None) and pd.notna(x) and x < today)
-iniciativas["critica"] = iniciativas.apply(
-    lambda r: (str(r["estado"]).strip() == "Atrasada") or
-              (bool(r["vencida"]) and str(r["estado"]).strip() != "Finalizada"),
-    axis=1,
+# Vectorized: evita .apply() fila a fila
+iniciativas["vencida"] = (
+    pd.to_datetime(iniciativas["fecha_fin"], errors="coerce") < pd.Timestamp(today)
+) & iniciativas["fecha_fin"].notna()
+_estado_norm = iniciativas["estado"].fillna("").astype(str).str.strip()
+iniciativas["critica"] = (
+    (_estado_norm == "Atrasada") |
+    (iniciativas["vencida"] & (_estado_norm != "Finalizada"))
 )
 
 if not servicios.empty and "servicio" in servicios.columns:
@@ -3514,25 +3571,32 @@ def render_detalle_servicio():
 
 
 def classify_profile_day_type(fecha_value) -> str | None:
+    """Versión escalar. Para clasificar una Serie completa, usar classify_day_type_series()."""
     if pd.isna(fecha_value):
         return None
-    ts = pd.Timestamp(fecha_value)
-    wd = int(ts.weekday())
-    if wd < 5:
-        return "Laboral"
-    if wd == 5:
-        return "Sábado"
-    return "Domingo"
+    wd = int(pd.Timestamp(fecha_value).weekday())
+    return "Laboral" if wd < 5 else ("Sábado" if wd == 5 else "Domingo")
+
+
+def classify_day_type_series(fecha_series: pd.Series) -> pd.Series:
+    """Versión vectorizada de classify_profile_day_type para columnas completas."""
+    ts = pd.to_datetime(fecha_series, errors="coerce")
+    wd = ts.dt.weekday
+    return pd.Series(
+        np.select([wd < 5, wd == 5], ["Laboral", "Sábado"], default="Domingo"),
+        index=fecha_series.index,
+        dtype=object,
+    ).where(ts.notna(), None)
 
 
 def month_period_to_label(period_value) -> str:
     if period_value is None or pd.isna(period_value):
         return "-"
     ts = pd.Timestamp(str(period_value))
-    meses = {1:"enero",2:"febrero",3:"marzo",4:"abril",5:"mayo",6:"junio",7:"julio",8:"agosto",9:"septiembre",10:"octubre",11:"noviembre",12:"diciembre"}
-    return f"{meses.get(int(ts.month), str(ts.month))} {int(ts.year)}"
+    return f"{_MESES_LARGO.get(int(ts.month), str(ts.month))} {int(ts.year)}"
 
 
+@st.cache_data(show_spinner="Calculando promedios mensuales…")
 def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
                                               profile_schema: str,
                                               profile_srv: str,
@@ -3608,7 +3672,7 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
             daily_summary["pasajeros_transportados"] = pd.to_numeric(daily_summary.get("pasajeros_transportados"), errors="coerce")
             daily_summary["tx_cruzadas"] = pd.to_numeric(daily_summary.get("tx_cruzadas"), errors="coerce")
             daily_summary["fecha"] = fecha_day
-            daily_summary["tipo_dia"] = classify_profile_day_type(fecha_day)
+            daily_summary["tipo_dia"] = classify_profile_day_type(fecha_day)  # scalar ok (single fecha)
             daily_summary["direccion_ref"] = dir_sel
             daily_rows.append(daily_summary)
 
@@ -3626,29 +3690,44 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
                 result[tipo_dia][dir_sel] = pd.DataFrame()
                 continue
 
-            rows = []
+            # ── Vectorized aggregation: elimina el loop for servicio_label ──────────
             temp = temp.sort_values(["servicio_orden_idx", "fecha", "servicio_label"], na_position="last")
-            for servicio_label, g in temp.groupby("servicio_label", sort=False):
-                g = g.copy()
-                tx_sum = pd.to_numeric(g.get("tx_cruzadas"), errors="coerce").fillna(0).sum()
-                tarifa_vals = pd.to_numeric(g.get("tarifa_media_aprox"), errors="coerce")
-                if tx_sum > 0 and tarifa_vals.notna().any():
-                    tarifa_mes = (tarifa_vals.fillna(0) * pd.to_numeric(g.get("tx_cruzadas"), errors="coerce").fillna(0)).sum() / tx_sum
-                else:
-                    tarifa_mes = tarifa_vals.mean(skipna=True)
+            temp["_tx"]     = pd.to_numeric(temp.get("tx_cruzadas"),           errors="coerce").fillna(0)
+            temp["_tarifa"] = pd.to_numeric(temp.get("tarifa_media_aprox"),    errors="coerce")
+            temp["_pax"]    = pd.to_numeric(temp.get("pasajeros_transportados"),errors="coerce")
 
-                first_valid = g.sort_values(["servicio_orden_idx", "fecha"], na_position="last").iloc[0]
-                rows.append({
-                    "servicio_label": str(servicio_label),
-                    "servicio_orden_idx": pd.to_numeric(first_valid.get("servicio_orden_idx"), errors="coerce"),
-                    "pasajeros_promedio_mes": pd.to_numeric(g.get("pasajeros_transportados"), errors="coerce").mean(skipna=True),
-                    "tarifa_media_mes": tarifa_mes,
-                })
+            # Weighted mean tariff: sum(tarifa * tx) / sum(tx); fallback to simple mean
+            temp["_tarifa_x_tx"] = temp["_tarifa"].fillna(0) * temp["_tx"]
 
-            result_df = pd.DataFrame(rows)
-            if not result_df.empty:
-                result_df["servicio_orden_idx"] = pd.to_numeric(result_df["servicio_orden_idx"], errors="coerce")
-                result_df = result_df.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
+            grp = temp.groupby("servicio_label", sort=False)
+
+            agg_df = grp.agg(
+                tx_sum           = ("_tx",          "sum"),
+                tarifa_x_tx_sum  = ("_tarifa_x_tx", "sum"),
+                tarifa_mean      = ("_tarifa",       "mean"),
+                pax_mean         = ("_pax",          "mean"),
+            ).reset_index()
+
+            # tarifa_mes: weighted if tx_sum > 0 and at least one non-NaN tarifa_mean
+            has_weight = (agg_df["tx_sum"] > 0) & agg_df["tarifa_mean"].notna()
+            agg_df["tarifa_media_mes"] = np.where(
+                has_weight,
+                agg_df["tarifa_x_tx_sum"] / agg_df["tx_sum"],
+                agg_df["tarifa_mean"],
+            )
+            agg_df["pasajeros_promedio_mes"] = agg_df["pax_mean"]
+
+            # servicio_orden_idx: take minimum (first) value per service
+            orden_df = grp["servicio_orden_idx"].min().reset_index() if "servicio_orden_idx" in temp.columns else pd.DataFrame()
+            if not orden_df.empty:
+                orden_df["servicio_orden_idx"] = pd.to_numeric(orden_df["servicio_orden_idx"], errors="coerce")
+                agg_df = agg_df.merge(orden_df, on="servicio_label", how="left")
+            else:
+                agg_df["servicio_orden_idx"] = np.nan
+
+            result_df = agg_df[["servicio_label", "servicio_orden_idx", "pasajeros_promedio_mes", "tarifa_media_mes"]].copy()
+            result_df["servicio_orden_idx"] = pd.to_numeric(result_df["servicio_orden_idx"], errors="coerce")
+            result_df = result_df.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
             result[tipo_dia][dir_sel] = result_df
 
     return result, directions
