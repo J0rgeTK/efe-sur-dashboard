@@ -3702,10 +3702,11 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
             grp = temp.groupby("servicio_label", sort=False)
 
             agg_df = grp.agg(
-                tx_sum           = ("_tx",          "sum"),
-                tarifa_x_tx_sum  = ("_tarifa_x_tx", "sum"),
-                tarifa_mean      = ("_tarifa",       "mean"),
-                pax_mean         = ("_pax",          "mean"),
+                tx_sum               = ("_tx",                  "sum"),
+                tarifa_x_tx_sum      = ("_tarifa_x_tx",         "sum"),
+                tarifa_mean          = ("_tarifa",              "mean"),
+                pax_mean             = ("_pax",                 "mean"),
+                servicio_display_label = ("servicio_display_label", "first"),
             ).reset_index()
 
             # tarifa_mes: weighted if tx_sum > 0 and at least one non-NaN tarifa_mean
@@ -3725,7 +3726,8 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
             else:
                 agg_df["servicio_orden_idx"] = np.nan
 
-            result_df = agg_df[["servicio_label", "servicio_orden_idx", "pasajeros_promedio_mes", "tarifa_media_mes"]].copy()
+            agg_df["servicio_display_label"] = agg_df["servicio_display_label"].fillna(agg_df["servicio_label"]).astype(str)
+            result_df = agg_df[["servicio_label", "servicio_display_label", "servicio_orden_idx", "pasajeros_promedio_mes", "tarifa_media_mes"]].copy()
             result_df["servicio_orden_idx"] = pd.to_numeric(result_df["servicio_orden_idx"], errors="coerce")
             result_df = result_df.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
             result[tipo_dia][dir_sel] = result_df
@@ -4090,7 +4092,7 @@ def render_perfil_carga(default_service: str | None = None):
                             else:
                                 showed_any = True
                                 tabla_show = tabla_dir.copy()
-                                tabla_show["Servicio"] = tabla_show["servicio_label"]
+                                tabla_show["Servicio"] = tabla_show.get("servicio_display_label", tabla_show["servicio_label"])
                                 tabla_show["Pasajeros Promedio Mes"] = pd.to_numeric(tabla_show["pasajeros_promedio_mes"], errors="coerce").apply(fmt_avg_pax)
                                 tabla_show["Tarifa Media Mes"] = pd.to_numeric(tabla_show["tarifa_media_mes"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
                                 st.dataframe(
