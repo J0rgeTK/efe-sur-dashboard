@@ -3869,7 +3869,6 @@ def render_perfil_carga(default_service: str | None = None):
                             np.nan,
                         )
 
-            servicio_sel = None
             if not service_summary.empty:
                 option_df = service_summary[["servicio_label", "servicio_display_label", "servicio_orden_idx"]].drop_duplicates(subset=["servicio_label"], keep="first").copy()
                 option_df = option_df.sort_values(["servicio_orden_idx", "servicio_label"])
@@ -4005,36 +4004,36 @@ def render_perfil_carga(default_service: str | None = None):
                     if caption_parts:
                         st.caption(" · ".join(caption_parts))
 
-            st.markdown("<div class='section-title'>Pasajeros transportados por servicio</div>", unsafe_allow_html=True)
-            if service_summary.empty:
-                st.info("No existen servicios disponibles para resumir en el día seleccionado.")
-            else:
-                fig_transport = build_service_transport_chart(
-                    service_summary,
-                    f"{profile_srv} | {linea_sel} | {dir_sel} | Pasajeros transportados por servicio",
-                )
-                show_plot(fig_transport, use_container_width=True)
+                    st.markdown("<div class='section-title'>Pasajeros transportados por servicio</div>", unsafe_allow_html=True)
+                    if service_summary.empty:
+                        st.info("No existen servicios disponibles para resumir en el día seleccionado.")
+                    else:
+                        fig_transport = build_service_transport_chart(
+                            service_summary,
+                            f"{profile_srv} | {linea_sel} | {dir_sel} | Pasajeros transportados por servicio",
+                        )
+                        show_plot(fig_transport, use_container_width=True)
 
-            st.markdown("<div class='section-title'>Detalle por servicio</div>", unsafe_allow_html=True)
-            if service_summary.empty:
-                st.info("No existen detalles de servicios para el día seleccionado.")
-            else:
-                detalle_servicios = service_summary.copy()
-                detalle_servicios = detalle_servicios.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").copy() if "servicio_orden_idx" in detalle_servicios.columns else detalle_servicios.sort_values(["servicio_label"], kind="stable", na_position="last").copy()
-                detalle_servicios["Hora salida"] = detalle_servicios["hora_salida_fmt"]
-                detalle_servicios["Servicio"] = detalle_servicios["servicio_label"]
-                detalle_servicios["Estación origen"] = detalle_servicios["estacion_origen"]
-                detalle_servicios["Pasajeros transportados"] = detalle_servicios["pasajeros_transportados"].apply(fmt_pax)
-                detalle_servicios["Máximo a bordo"] = detalle_servicios["max_abordo"].apply(fmt_pax)
-                if "tx_cruzadas" in detalle_servicios.columns:
-                    detalle_servicios["Tx cruzadas"] = pd.to_numeric(detalle_servicios["tx_cruzadas"], errors="coerce").apply(lambda v: fmt_pax(v) if pd.notna(v) else "-")
-                if "tarifa_media_aprox" in detalle_servicios.columns:
-                    detalle_servicios["Tarifa media aprox."] = pd.to_numeric(detalle_servicios["tarifa_media_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
-                if "recaudacion_aprox" in detalle_servicios.columns:
-                    detalle_servicios["Recaudación aprox."] = pd.to_numeric(detalle_servicios["recaudacion_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
-                visible_cols = ["Servicio", "Hora salida", "Estación origen", "Pasajeros transportados", "Máximo a bordo", "Tx cruzadas", "Tarifa media aprox.", "Recaudación aprox."]
-                visible_cols = [c for c in visible_cols if c in detalle_servicios.columns]
-                st.dataframe(detalle_servicios[visible_cols], use_container_width=True, hide_index=True)
+                    st.markdown("<div class='section-title'>Detalle por servicio</div>", unsafe_allow_html=True)
+                    if service_summary.empty:
+                        st.info("No existen detalles de servicios para el día seleccionado.")
+                    else:
+                        detalle_servicios = service_summary.copy()
+                        detalle_servicios = detalle_servicios.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").copy() if "servicio_orden_idx" in detalle_servicios.columns else detalle_servicios.sort_values(["servicio_label"], kind="stable", na_position="last").copy()
+                        detalle_servicios["Hora salida"] = detalle_servicios["hora_salida_fmt"]
+                        detalle_servicios["Servicio"] = detalle_servicios["servicio_label"]
+                        detalle_servicios["Estación origen"] = detalle_servicios["estacion_origen"]
+                        detalle_servicios["Pasajeros transportados"] = detalle_servicios["pasajeros_transportados"].apply(fmt_pax)
+                        detalle_servicios["Máximo a bordo"] = detalle_servicios["max_abordo"].apply(fmt_pax)
+                        if "tx_cruzadas" in detalle_servicios.columns:
+                            detalle_servicios["Tx cruzadas"] = pd.to_numeric(detalle_servicios["tx_cruzadas"], errors="coerce").apply(lambda v: fmt_pax(v) if pd.notna(v) else "-")
+                        if "tarifa_media_aprox" in detalle_servicios.columns:
+                            detalle_servicios["Tarifa media aprox."] = pd.to_numeric(detalle_servicios["tarifa_media_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
+                        if "recaudacion_aprox" in detalle_servicios.columns:
+                            detalle_servicios["Recaudación aprox."] = pd.to_numeric(detalle_servicios["recaudacion_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
+                        visible_cols = ["Servicio", "Hora salida", "Estación origen", "Pasajeros transportados", "Máximo a bordo", "Tx cruzadas", "Tarifa media aprox.", "Recaudación aprox."]
+                        visible_cols = [c for c in visible_cols if c in detalle_servicios.columns]
+                        st.dataframe(detalle_servicios[visible_cols], use_container_width=True, hide_index=True)
 
     with tab_mensual:
         st.markdown("<div class='section-title'>Promedio mensual por tipo de día</div>", unsafe_allow_html=True)
