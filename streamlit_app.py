@@ -3596,6 +3596,59 @@ def month_period_to_label(period_value) -> str:
     return f"{_MESES_LARGO.get(int(ts.month), str(ts.month))} {int(ts.year)}"
 
 
+def compute_monthly_executive_metrics(monthly_daily: pd.DataFrame,
+                                      capacity_reference: float = 605.0) -> dict:
+    """Calcula indicadores ejecutivos mensuales sobre el resumen diario por servicio."""
+    if monthly_daily is None or monthly_daily.empty:
+        return {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+
+    base = monthly_daily.copy()
+    base["_tx"] = pd.to_numeric(base.get("tx_cruzadas"), errors="coerce").fillna(0)
+    base["_tarifa"] = pd.to_numeric(base.get("tarifa_media_aprox"), errors="coerce")
+    base["_pax"] = pd.to_numeric(base.get("pasajeros_transportados"), errors="coerce").fillna(0)
+    base["_tarifa_x_tx"] = base["_tarifa"].fillna(0) * base["_tx"]
+
+    def _calc_metrics(df_group: pd.DataFrame) -> dict:
+        if df_group is None or df_group.empty:
+            return {"tarifa_media_mensual": np.nan, "tasa_ocupacion_mensual": np.nan, "servicios_realizados": 0, "pasajeros_transportados": 0.0, "tx_cruzadas": 0.0}
+        tx_sum = float(df_group["_tx"].sum())
+        tarifa_mean = df_group["_tarifa"].mean(skipna=True)
+        if tx_sum > 0 and pd.notna(tarifa_mean):
+            tarifa = float(df_group["_tarifa_x_tx"].sum()) / tx_sum
+        else:
+            tarifa = float(tarifa_mean) if pd.notna(tarifa_mean) else np.nan
+        servicios_realizados = int(len(df_group))
+        pasajeros_transportados = float(df_group["_pax"].sum())
+        denom = servicios_realizados * float(capacity_reference)
+        ocupacion = (pasajeros_transportados / denom * 100.0) if denom > 0 else np.nan
+        return {
+            "tarifa_media_mensual": tarifa,
+            "tasa_ocupacion_mensual": ocupacion,
+            "servicios_realizados": servicios_realizados,
+            "pasajeros_transportados": pasajeros_transportados,
+            "tx_cruzadas": tx_sum,
+        }
+
+    metrics = {
+        "linea": _calc_metrics(base),
+        "por_sentido": {},
+        "por_tipo_dia": {},
+    }
+
+    for dir_val, g in base.groupby("direccion_ref", sort=False):
+        metrics["por_sentido"][str(dir_val)] = _calc_metrics(g)
+
+    for tipo_dia, g_tipo in base.groupby("tipo_dia", sort=False):
+        metrics["por_tipo_dia"][str(tipo_dia)] = {
+            "linea": _calc_metrics(g_tipo),
+            "por_sentido": {},
+        }
+        for dir_val, g_dir in g_tipo.groupby("direccion_ref", sort=False):
+            metrics["por_tipo_dia"][str(tipo_dia)]["por_sentido"][str(dir_val)] = _calc_metrics(g_dir)
+
+    return metrics
+
+
 @st.cache_data(show_spinner="Calculando promedios mensuales…")
 def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
                                               profile_schema: str,
@@ -3605,23 +3658,23 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
                                               itinerary_summary_df: pd.DataFrame,
                                               service_order_df: pd.DataFrame,
                                               turnstile_df: pd.DataFrame,
-                                              turnstile_status: str) -> tuple[dict, list]:
+                                              turnstile_status: str) -> tuple[dict, list, dict]:
     if perfil_df.empty or not month_period or not linea_sel:
-        return {}, []
+        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
 
     fecha_series = pd.to_datetime(perfil_df["fecha"], errors="coerce")
     month_mask = fecha_series.dt.to_period("M").astype(str) == str(month_period)
     perfil_mes = perfil_df.loc[month_mask].copy()
     if perfil_mes.empty:
-        return {}, []
+        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
 
     perfil_mes = perfil_mes[perfil_mes["linea"].astype(str).str.strip() == str(linea_sel)].copy()
     if perfil_mes.empty:
-        return {}, []
+        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
 
     directions = [x for x in list(dict.fromkeys(perfil_mes["direccion"].dropna().astype(str).str.strip().tolist())) if x]
     if not directions:
-        return {}, []
+        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
 
     daily_rows = []
     fechas_mes = sorted([x for x in perfil_mes["fecha"].dropna().unique().tolist() if pd.notna(x)])
@@ -3677,9 +3730,10 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
             daily_rows.append(daily_summary)
 
     if not daily_rows:
-        return {}, directions
+        return {}, directions, {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
 
     monthly_daily = pd.concat(daily_rows, ignore_index=True)
+    monthly_metrics = compute_monthly_executive_metrics(monthly_daily, capacity_reference=605.0)
     result = {}
     for tipo_dia in ["Laboral", "Sábado", "Domingo"]:
         result[tipo_dia] = {}
@@ -3732,7 +3786,7 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
             result_df = result_df.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
             result[tipo_dia][dir_sel] = result_df
 
-    return result, directions
+    return result, directions, monthly_metrics
 
 def render_perfil_carga(default_service: str | None = None):
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
@@ -4067,7 +4121,7 @@ def render_perfil_carga(default_service: str | None = None):
         if not month_sel or not linea_mes_sel:
             st.info("No existen datos mensuales disponibles para los filtros seleccionados.")
         else:
-            tablas_mensuales, directions = build_monthly_profile_tables_by_direction(
+            tablas_mensuales, directions, monthly_metrics = build_monthly_profile_tables_by_direction(
                 perfil_df, profile_schema, profile_srv, month_sel, linea_mes_sel,
                 itinerary_summary_df, service_order_df, turnstile_df, turnstile_status,
             )
@@ -4075,8 +4129,36 @@ def render_perfil_carga(default_service: str | None = None):
                 st.info("No existen datos mensuales para la línea y mes seleccionados.")
             else:
                 st.caption(f"Mes analizado: {month_period_to_label(month_sel)} · Línea: {linea_mes_sel}")
+
+                line_metrics = monthly_metrics.get("linea", {}) if isinstance(monthly_metrics, dict) else {}
+                st.markdown("<div class='section-title' style='font-size:0.95rem'>Indicadores ejecutivos mensuales</div>", unsafe_allow_html=True)
+                m1, m2 = st.columns(2)
+                with m1:
+                    st.metric("Tarifa media mensual por línea", fmt_number(line_metrics.get("tarifa_media_mensual"), "CLP") if pd.notna(line_metrics.get("tarifa_media_mensual")) else "-")
+                with m2:
+                    st.metric("Tasa de ocupación mensual por línea", fmt_pct(line_metrics.get("tasa_ocupacion_mensual")) if pd.notna(line_metrics.get("tasa_ocupacion_mensual")) else "-")
+
+                dir_metrics_all = monthly_metrics.get("por_sentido", {}) if isinstance(monthly_metrics, dict) else {}
+                if directions:
+                    st.markdown("<div class='section-subtitle'>Indicadores mensuales por sentido</div>", unsafe_allow_html=True)
+                    dir_cols = st.columns(max(1, min(2, len(directions))))
+                    for idx, dir_val in enumerate(directions[:2]):
+                        with dir_cols[idx]:
+                            dm = dir_metrics_all.get(str(dir_val), {})
+                            st.markdown(f"<div class='map-note'><b>{dir_val}</b></div>", unsafe_allow_html=True)
+                            st.metric("Tarifa media mensual", fmt_number(dm.get("tarifa_media_mensual"), "CLP") if pd.notna(dm.get("tarifa_media_mensual")) else "-")
+                            st.metric("Tasa de ocupación mensual", fmt_pct(dm.get("tasa_ocupacion_mensual")) if pd.notna(dm.get("tasa_ocupacion_mensual")) else "-")
+
                 for tipo_dia in ["Laboral", "Sábado", "Domingo"]:
                     st.markdown(f"<div class='section-title' style='font-size:0.95rem'>{tipo_dia}</div>", unsafe_allow_html=True)
+                    tipo_metrics = monthly_metrics.get("por_tipo_dia", {}).get(tipo_dia, {}) if isinstance(monthly_metrics, dict) else {}
+                    tipo_line = tipo_metrics.get("linea", {}) if isinstance(tipo_metrics, dict) else {}
+                    tm1, tm2 = st.columns(2)
+                    with tm1:
+                        st.metric(f"Tarifa media mensual por línea | {tipo_dia}", fmt_number(tipo_line.get("tarifa_media_mensual"), "CLP") if pd.notna(tipo_line.get("tarifa_media_mensual")) else "-")
+                    with tm2:
+                        st.metric(f"Tasa de ocupación mensual por línea | {tipo_dia}", fmt_pct(tipo_line.get("tasa_ocupacion_mensual")) if pd.notna(tipo_line.get("tasa_ocupacion_mensual")) else "-")
+
                     dir_list = directions[:2] if directions else []
                     if not dir_list:
                         st.info(f"No existen datos para {tipo_dia.lower()}.")
@@ -4085,7 +4167,13 @@ def render_perfil_carga(default_service: str | None = None):
                     showed_any = False
                     for idx, dir_val in enumerate(dir_list):
                         with cols[idx]:
+                            dm_tipo = tipo_metrics.get("por_sentido", {}).get(str(dir_val), {}) if isinstance(tipo_metrics, dict) else {}
                             st.markdown(f"<div class='map-note'><b>Dirección:</b> {dir_val}</div>", unsafe_allow_html=True)
+                            d1, d2 = st.columns(2)
+                            with d1:
+                                st.metric("Tarifa media mensual", fmt_number(dm_tipo.get("tarifa_media_mensual"), "CLP") if pd.notna(dm_tipo.get("tarifa_media_mensual")) else "-")
+                            with d2:
+                                st.metric("Tasa de ocupación mensual", fmt_pct(dm_tipo.get("tasa_ocupacion_mensual")) if pd.notna(dm_tipo.get("tasa_ocupacion_mensual")) else "-")
                             tabla_dir = tablas_mensuales.get(tipo_dia, {}).get(dir_val, pd.DataFrame())
                             if tabla_dir is None or tabla_dir.empty:
                                 st.info("Sin datos para esta dirección.")
