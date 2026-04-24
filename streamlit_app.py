@@ -751,6 +751,78 @@ TURNSTILE_SERVICE_CONFIG = {
     },
 }
 
+PASSENGER_TYPE_DISPLAY_ORDER = [
+    "Monedero",
+    "Estudiante",
+    "Adulto Mayor",
+    "Discapacitado",
+    "Otros",
+]
+
+
+def normalize_passenger_type_series(series: pd.Series) -> pd.Series:
+    s = series.fillna("").astype(str).str.strip()
+    n = normalize_series(s)
+    values = np.select(
+        [
+            n.str.contains("monedero", regex=False),
+            n.str.contains("estudiante", regex=False) | n.str.contains("tne", regex=False),
+            n.str.contains("adulto mayor", regex=False),
+            n.str.contains("discapacitado", regex=False) | n.str.contains("capacidad", regex=False),
+        ],
+        ["Monedero", "Estudiante", "Adulto Mayor", "Discapacitado"],
+        default="Otros",
+    )
+    return pd.Series(values, index=series.index, dtype=object)
+
+
+def build_passenger_type_composition(
+    matched_df: pd.DataFrame,
+    linea_sel: str,
+    dir_sel: str,
+    servicio_sel: str,
+) -> pd.DataFrame:
+    cols = [
+        "tipo_pasajero_norm",
+        "tx_tipo",
+        "pct_tx_tipo",
+        "tarifa_media_tipo",
+        "recaudacion_tipo",
+    ]
+    if matched_df is None or matched_df.empty or "tipo_pasajero_norm" not in matched_df.columns:
+        return pd.DataFrame(columns=cols)
+
+    temp = matched_df.copy()
+    temp = temp[
+        (temp["linea"].astype(str).str.strip() == str(linea_sel)) &
+        (temp["direccion"].astype(str).str.strip() == str(dir_sel)) &
+        (temp["servicio_label"].astype(str).str.strip() == str(servicio_sel))
+    ].copy()
+    if temp.empty:
+        return pd.DataFrame(columns=cols)
+
+    temp["tipo_pasajero_norm"] = normalize_passenger_type_series(temp["tipo_pasajero_norm"])
+    temp["monto_transaccion"] = pd.to_numeric(temp["monto_transaccion"], errors="coerce")
+
+    summary = (
+        temp.groupby("tipo_pasajero_norm", as_index=False)
+        .agg(
+            tx_tipo=("monto_transaccion", "size"),
+            tarifa_media_tipo=("monto_transaccion", "mean"),
+            recaudacion_tipo=("monto_transaccion", "sum"),
+        )
+    )
+    total_tx = float(summary["tx_tipo"].sum()) if not summary.empty else 0.0
+    summary["pct_tx_tipo"] = np.where(total_tx > 0, summary["tx_tipo"] / total_tx * 100.0, np.nan)
+
+    base = pd.DataFrame({"tipo_pasajero_norm": PASSENGER_TYPE_DISPLAY_ORDER})
+    summary = base.merge(summary, how="left", on="tipo_pasajero_norm")
+    summary["tx_tipo"] = pd.to_numeric(summary["tx_tipo"], errors="coerce").fillna(0)
+    summary["pct_tx_tipo"] = pd.to_numeric(summary["pct_tx_tipo"], errors="coerce").fillna(0.0)
+    summary["tarifa_media_tipo"] = pd.to_numeric(summary["tarifa_media_tipo"], errors="coerce")
+    summary["recaudacion_tipo"] = pd.to_numeric(summary["recaudacion_tipo"], errors="coerce")
+    return summary
+
 
 def _resolve_folder(service_name: str, config_dict: dict, data_path: Path) -> tuple[list, str]:
     """Devuelve (csv_files, folder_path_str) buscando candidatos del config."""
@@ -1087,6 +1159,8 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
         "fecha_transaccion": "FECHA_TRANSACCION",
         "numero_tarjeta":    "NUMERO_TARJETA",
         "monto_transaccion": "MONTO_TRANSACCION",
+        "tipo_pasajero_norm": "tipo_pasajero_norm",
+        "tipo pasajero norm": "tipo_pasajero_norm",
     }
     col_norms = normalize_series(pd.Series(df.columns.tolist()))
     rename_map = {orig: _turnstile_col_map[norm]
@@ -1107,6 +1181,11 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
     df["tarjeta_id"] = pd.to_numeric(df["NUMERO_TARJETA"], errors="coerce")
     df["monto_transaccion"] = pd.to_numeric(df["MONTO_TRANSACCION"], errors="coerce")
     df["turnstile_tx_id"] = np.arange(1, len(df) + 1)
+
+    if "tipo_pasajero_norm" in df.columns:
+        df["tipo_pasajero_norm"] = normalize_passenger_type_series(df["tipo_pasajero_norm"])
+    else:
+        df["tipo_pasajero_norm"] = "Otros"
 
     df = df.dropna(subset=["fecha_transaccion", "fecha", "tarjeta_id", "monto_transaccion"]).copy()
     return df, folder_path, [], loaded, "ok"
@@ -3596,59 +3675,6 @@ def month_period_to_label(period_value) -> str:
     return f"{_MESES_LARGO.get(int(ts.month), str(ts.month))} {int(ts.year)}"
 
 
-def compute_monthly_executive_metrics(monthly_daily: pd.DataFrame,
-                                      capacity_reference: float = 605.0) -> dict:
-    """Calcula indicadores ejecutivos mensuales sobre el resumen diario por servicio."""
-    if monthly_daily is None or monthly_daily.empty:
-        return {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
-
-    base = monthly_daily.copy()
-    base["_tx"] = pd.to_numeric(base.get("tx_cruzadas"), errors="coerce").fillna(0)
-    base["_tarifa"] = pd.to_numeric(base.get("tarifa_media_aprox"), errors="coerce")
-    base["_pax"] = pd.to_numeric(base.get("pasajeros_transportados"), errors="coerce").fillna(0)
-    base["_tarifa_x_tx"] = base["_tarifa"].fillna(0) * base["_tx"]
-
-    def _calc_metrics(df_group: pd.DataFrame) -> dict:
-        if df_group is None or df_group.empty:
-            return {"tarifa_media_mensual": np.nan, "tasa_ocupacion_mensual": np.nan, "servicios_realizados": 0, "pasajeros_transportados": 0.0, "tx_cruzadas": 0.0}
-        tx_sum = float(df_group["_tx"].sum())
-        tarifa_mean = df_group["_tarifa"].mean(skipna=True)
-        if tx_sum > 0 and pd.notna(tarifa_mean):
-            tarifa = float(df_group["_tarifa_x_tx"].sum()) / tx_sum
-        else:
-            tarifa = float(tarifa_mean) if pd.notna(tarifa_mean) else np.nan
-        servicios_realizados = int(len(df_group))
-        pasajeros_transportados = float(df_group["_pax"].sum())
-        denom = servicios_realizados * float(capacity_reference)
-        ocupacion = (pasajeros_transportados / denom * 100.0) if denom > 0 else np.nan
-        return {
-            "tarifa_media_mensual": tarifa,
-            "tasa_ocupacion_mensual": ocupacion,
-            "servicios_realizados": servicios_realizados,
-            "pasajeros_transportados": pasajeros_transportados,
-            "tx_cruzadas": tx_sum,
-        }
-
-    metrics = {
-        "linea": _calc_metrics(base),
-        "por_sentido": {},
-        "por_tipo_dia": {},
-    }
-
-    for dir_val, g in base.groupby("direccion_ref", sort=False):
-        metrics["por_sentido"][str(dir_val)] = _calc_metrics(g)
-
-    for tipo_dia, g_tipo in base.groupby("tipo_dia", sort=False):
-        metrics["por_tipo_dia"][str(tipo_dia)] = {
-            "linea": _calc_metrics(g_tipo),
-            "por_sentido": {},
-        }
-        for dir_val, g_dir in g_tipo.groupby("direccion_ref", sort=False):
-            metrics["por_tipo_dia"][str(tipo_dia)]["por_sentido"][str(dir_val)] = _calc_metrics(g_dir)
-
-    return metrics
-
-
 @st.cache_data(show_spinner="Calculando promedios mensuales…")
 def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
                                               profile_schema: str,
@@ -3658,23 +3684,23 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
                                               itinerary_summary_df: pd.DataFrame,
                                               service_order_df: pd.DataFrame,
                                               turnstile_df: pd.DataFrame,
-                                              turnstile_status: str) -> tuple[dict, list, dict]:
+                                              turnstile_status: str) -> tuple[dict, list]:
     if perfil_df.empty or not month_period or not linea_sel:
-        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+        return {}, []
 
     fecha_series = pd.to_datetime(perfil_df["fecha"], errors="coerce")
     month_mask = fecha_series.dt.to_period("M").astype(str) == str(month_period)
     perfil_mes = perfil_df.loc[month_mask].copy()
     if perfil_mes.empty:
-        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+        return {}, []
 
     perfil_mes = perfil_mes[perfil_mes["linea"].astype(str).str.strip() == str(linea_sel)].copy()
     if perfil_mes.empty:
-        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+        return {}, []
 
     directions = [x for x in list(dict.fromkeys(perfil_mes["direccion"].dropna().astype(str).str.strip().tolist())) if x]
     if not directions:
-        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+        return {}, []
 
     daily_rows = []
     fechas_mes = sorted([x for x in perfil_mes["fecha"].dropna().unique().tolist() if pd.notna(x)])
@@ -3730,10 +3756,9 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
             daily_rows.append(daily_summary)
 
     if not daily_rows:
-        return {}, directions, {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+        return {}, directions
 
     monthly_daily = pd.concat(daily_rows, ignore_index=True)
-    monthly_metrics = compute_monthly_executive_metrics(monthly_daily, capacity_reference=605.0)
     result = {}
     for tipo_dia in ["Laboral", "Sábado", "Domingo"]:
         result[tipo_dia] = {}
@@ -3756,11 +3781,10 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
             grp = temp.groupby("servicio_label", sort=False)
 
             agg_df = grp.agg(
-                tx_sum               = ("_tx",                  "sum"),
-                tarifa_x_tx_sum      = ("_tarifa_x_tx",         "sum"),
-                tarifa_mean          = ("_tarifa",              "mean"),
-                pax_mean             = ("_pax",                 "mean"),
-                servicio_display_label = ("servicio_display_label", "first"),
+                tx_sum           = ("_tx",          "sum"),
+                tarifa_x_tx_sum  = ("_tarifa_x_tx", "sum"),
+                tarifa_mean      = ("_tarifa",       "mean"),
+                pax_mean         = ("_pax",          "mean"),
             ).reset_index()
 
             # tarifa_mes: weighted if tx_sum > 0 and at least one non-NaN tarifa_mean
@@ -3780,13 +3804,12 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
             else:
                 agg_df["servicio_orden_idx"] = np.nan
 
-            agg_df["servicio_display_label"] = agg_df["servicio_display_label"].fillna(agg_df["servicio_label"]).astype(str)
-            result_df = agg_df[["servicio_label", "servicio_display_label", "servicio_orden_idx", "pasajeros_promedio_mes", "tarifa_media_mes"]].copy()
+            result_df = agg_df[["servicio_label", "servicio_orden_idx", "pasajeros_promedio_mes", "tarifa_media_mes"]].copy()
             result_df["servicio_orden_idx"] = pd.to_numeric(result_df["servicio_orden_idx"], errors="coerce")
             result_df = result_df.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
             result[tipo_dia][dir_sel] = result_df
 
-    return result, directions, monthly_metrics
+    return result, directions
 
 def render_perfil_carga(default_service: str | None = None):
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
@@ -3885,12 +3908,13 @@ def render_perfil_carga(default_service: str | None = None):
                 schema_local = profile_schema
 
             turnstile_day = pd.DataFrame()
+            turnstile_match_df = pd.DataFrame()
             service_fare_summary = pd.DataFrame()
             turnstile_stats = {"turnstile_total": 0, "matched_total": 0, "match_pct": np.nan, "diff_mediana_min": np.nan, "tolerance_minutes": 20}
             if normalize_text(profile_srv) == "biotren" and schema_local == "transactional" and turnstile_status == "ok" and not turnstile_df.empty:
                 turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_sel].copy()
                 if not turnstile_day.empty:
-                    _, service_fare_summary, turnstile_stats = match_turnstile_transactions_to_profile(turnstile_day, perfil_fecha, tolerance_minutes=20)
+                    turnstile_match_df, service_fare_summary, turnstile_stats = match_turnstile_transactions_to_profile(turnstile_day, perfil_fecha, tolerance_minutes=20)
 
             service_summary = build_service_level_summary(perfil_dir, schema_local)
             service_summary = enrich_service_summary_with_itinerary(
@@ -4029,6 +4053,25 @@ def render_perfil_carga(default_service: str | None = None):
                         st.metric("Tarifa media aprox. servicio", fmt_number(tarifa_media_sel, "CLP") if pd.notna(tarifa_media_sel) else "-")
                         st.metric("Recaudación aprox. servicio", fmt_number(recaudacion_sel, "CLP") if pd.notna(recaudacion_sel) else "-")
 
+                    passenger_type_comp = build_passenger_type_composition(
+                        turnstile_match_df,
+                        linea_sel,
+                        dir_sel,
+                        servicio_sel,
+                    )
+                    if not passenger_type_comp.empty and float(pd.to_numeric(passenger_type_comp["tx_tipo"], errors="coerce").fillna(0).sum()) > 0:
+                        st.markdown("<div class='section-title'>Composición por tipo de pasajero</div>", unsafe_allow_html=True)
+                        st.markdown("<div class='section-subtitle'>Indicadores calculados sobre las transacciones de torniquete cruzadas al servicio seleccionado.</div>", unsafe_allow_html=True)
+                        pt_cols = st.columns(len(PASSENGER_TYPE_DISPLAY_ORDER))
+                        for idx, tipo in enumerate(PASSENGER_TYPE_DISPLAY_ORDER):
+                            row_tipo = passenger_type_comp[passenger_type_comp["tipo_pasajero_norm"] == tipo].head(1)
+                            tx_tipo = float(pd.to_numeric(row_tipo["tx_tipo"], errors="coerce").iloc[0]) if not row_tipo.empty else 0.0
+                            pct_tipo = float(pd.to_numeric(row_tipo["pct_tx_tipo"], errors="coerce").iloc[0]) if not row_tipo.empty else 0.0
+                            tarifa_tipo = pd.to_numeric(row_tipo["tarifa_media_tipo"], errors="coerce").iloc[0] if not row_tipo.empty else np.nan
+                            with pt_cols[idx]:
+                                st.metric(tipo, fmt_pax(tx_tipo), fmt_pct(pct_tipo))
+                                st.caption(f"Tarifa media: {fmt_number(tarifa_tipo, 'CLP') if pd.notna(tarifa_tipo) else '-'}")
+
                     st.caption(
                         f"La recaudación aproximada se calcula como tarifa media aproximada × pasajeros transportados del servicio seleccionado. "
                         f"La tasa de ocupación de línea se calcula como pasajeros transportados totales de la línea / (servicios realizados × {int(capacidad_referencia_linea)} pasajeros). "
@@ -4121,7 +4164,7 @@ def render_perfil_carga(default_service: str | None = None):
         if not month_sel or not linea_mes_sel:
             st.info("No existen datos mensuales disponibles para los filtros seleccionados.")
         else:
-            tablas_mensuales, directions, monthly_metrics = build_monthly_profile_tables_by_direction(
+            tablas_mensuales, directions = build_monthly_profile_tables_by_direction(
                 perfil_df, profile_schema, profile_srv, month_sel, linea_mes_sel,
                 itinerary_summary_df, service_order_df, turnstile_df, turnstile_status,
             )
@@ -4129,36 +4172,8 @@ def render_perfil_carga(default_service: str | None = None):
                 st.info("No existen datos mensuales para la línea y mes seleccionados.")
             else:
                 st.caption(f"Mes analizado: {month_period_to_label(month_sel)} · Línea: {linea_mes_sel}")
-
-                line_metrics = monthly_metrics.get("linea", {}) if isinstance(monthly_metrics, dict) else {}
-                st.markdown("<div class='section-title' style='font-size:0.95rem'>Indicadores ejecutivos mensuales</div>", unsafe_allow_html=True)
-                m1, m2 = st.columns(2)
-                with m1:
-                    st.metric("Tarifa media mensual por línea", fmt_number(line_metrics.get("tarifa_media_mensual"), "CLP") if pd.notna(line_metrics.get("tarifa_media_mensual")) else "-")
-                with m2:
-                    st.metric("Tasa de ocupación mensual por línea", fmt_pct(line_metrics.get("tasa_ocupacion_mensual")) if pd.notna(line_metrics.get("tasa_ocupacion_mensual")) else "-")
-
-                dir_metrics_all = monthly_metrics.get("por_sentido", {}) if isinstance(monthly_metrics, dict) else {}
-                if directions:
-                    st.markdown("<div class='section-subtitle'>Indicadores mensuales por sentido</div>", unsafe_allow_html=True)
-                    dir_cols = st.columns(max(1, min(2, len(directions))))
-                    for idx, dir_val in enumerate(directions[:2]):
-                        with dir_cols[idx]:
-                            dm = dir_metrics_all.get(str(dir_val), {})
-                            st.markdown(f"<div class='map-note'><b>{dir_val}</b></div>", unsafe_allow_html=True)
-                            st.metric("Tarifa media mensual", fmt_number(dm.get("tarifa_media_mensual"), "CLP") if pd.notna(dm.get("tarifa_media_mensual")) else "-")
-                            st.metric("Tasa de ocupación mensual", fmt_pct(dm.get("tasa_ocupacion_mensual")) if pd.notna(dm.get("tasa_ocupacion_mensual")) else "-")
-
                 for tipo_dia in ["Laboral", "Sábado", "Domingo"]:
                     st.markdown(f"<div class='section-title' style='font-size:0.95rem'>{tipo_dia}</div>", unsafe_allow_html=True)
-                    tipo_metrics = monthly_metrics.get("por_tipo_dia", {}).get(tipo_dia, {}) if isinstance(monthly_metrics, dict) else {}
-                    tipo_line = tipo_metrics.get("linea", {}) if isinstance(tipo_metrics, dict) else {}
-                    tm1, tm2 = st.columns(2)
-                    with tm1:
-                        st.metric(f"Tarifa media mensual por línea | {tipo_dia}", fmt_number(tipo_line.get("tarifa_media_mensual"), "CLP") if pd.notna(tipo_line.get("tarifa_media_mensual")) else "-")
-                    with tm2:
-                        st.metric(f"Tasa de ocupación mensual por línea | {tipo_dia}", fmt_pct(tipo_line.get("tasa_ocupacion_mensual")) if pd.notna(tipo_line.get("tasa_ocupacion_mensual")) else "-")
-
                     dir_list = directions[:2] if directions else []
                     if not dir_list:
                         st.info(f"No existen datos para {tipo_dia.lower()}.")
@@ -4167,20 +4182,14 @@ def render_perfil_carga(default_service: str | None = None):
                     showed_any = False
                     for idx, dir_val in enumerate(dir_list):
                         with cols[idx]:
-                            dm_tipo = tipo_metrics.get("por_sentido", {}).get(str(dir_val), {}) if isinstance(tipo_metrics, dict) else {}
                             st.markdown(f"<div class='map-note'><b>Dirección:</b> {dir_val}</div>", unsafe_allow_html=True)
-                            d1, d2 = st.columns(2)
-                            with d1:
-                                st.metric("Tarifa media mensual", fmt_number(dm_tipo.get("tarifa_media_mensual"), "CLP") if pd.notna(dm_tipo.get("tarifa_media_mensual")) else "-")
-                            with d2:
-                                st.metric("Tasa de ocupación mensual", fmt_pct(dm_tipo.get("tasa_ocupacion_mensual")) if pd.notna(dm_tipo.get("tasa_ocupacion_mensual")) else "-")
                             tabla_dir = tablas_mensuales.get(tipo_dia, {}).get(dir_val, pd.DataFrame())
                             if tabla_dir is None or tabla_dir.empty:
                                 st.info("Sin datos para esta dirección.")
                             else:
                                 showed_any = True
                                 tabla_show = tabla_dir.copy()
-                                tabla_show["Servicio"] = tabla_show.get("servicio_display_label", tabla_show["servicio_label"])
+                                tabla_show["Servicio"] = tabla_show["servicio_label"]
                                 tabla_show["Pasajeros Promedio Mes"] = pd.to_numeric(tabla_show["pasajeros_promedio_mes"], errors="coerce").apply(fmt_avg_pax)
                                 tabla_show["Tarifa Media Mes"] = pd.to_numeric(tabla_show["tarifa_media_mes"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
                                 st.dataframe(
