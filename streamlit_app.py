@@ -280,45 +280,7 @@ div[data-testid="stMetric"] {{
     background: linear-gradient(180deg,#FFFFFF 0%,#FCFDFE 100%);
     border: 1px solid #DFE7EF; padding: 0.7rem 0.85rem;
     border-radius: 18px; box-shadow: 0 10px 24px rgba(0,40,87,0.05);
-    transition: transform 0.16s ease, box-shadow 0.16s ease;
 }}
-div[data-testid="stMetric"]:hover {{
-    transform: translateY(-2px); box-shadow: 0 14px 30px rgba(0,40,87,0.08);
-}}
-/* Tarjetas por tipo de pasajero: franja lateral con color del tipo */
-.pax-type-card {{
-    background: linear-gradient(180deg,#FFFFFF 0%,#FCFDFE 100%);
-    border: 1px solid #DFE7EF; border-left: 5px solid {EFE_BLUE};
-    border-radius: 18px; padding: 0.78rem 0.95rem 0.72rem;
-    box-shadow: 0 10px 24px rgba(0,40,87,0.05);
-    transition: transform 0.16s ease, box-shadow 0.16s ease;
-    min-height: 118px; display: flex; flex-direction: column; justify-content: center;
-}}
-.pax-type-card:hover {{ transform: translateY(-2px); box-shadow: 0 14px 30px rgba(0,40,87,0.08); }}
-.pax-type-card.is-empty {{ opacity: 0.55; }}
-.pax-type-card.--monedero      {{ border-left-color: #002857; }}
-.pax-type-card.--estudiante    {{ border-left-color: #FF0016; }}
-.pax-type-card.--adulto-mayor  {{ border-left-color: #D97706; }}
-.pax-type-card.--discapacitado {{ border-left-color: #0F766E; }}
-.pax-type-card.--otros         {{ border-left-color: #6B7280; }}
-.pax-type-card .pax-card-title {{
-    font-size: 0.86rem; color: {TEXT_MUTED}; margin-bottom: 0.28rem;
-    font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
-}}
-.pax-type-card .pax-card-value {{
-    font-size: 1.55rem; font-weight: 850; color: {EFE_BLUE}; line-height: 1.05;
-    margin-bottom: 0.18rem;
-}}
-.pax-type-card .pax-card-pct {{ font-size: 0.92rem; color: {TEXT_MAIN}; font-weight: 700; }}
-.pax-type-card .pax-card-fare {{ font-size: 0.82rem; color: {TEXT_MUTED}; margin-top: 0.22rem; }}
-/* Badge visual para el cierre de integridad de la distribución */
-.integrity-badge {{
-    display: inline-flex; align-items: center; gap: 0.35rem;
-    background: #ECFDF5; color: {SUCCESS}; border: 1px solid #A7F3D0;
-    padding: 0.22rem 0.55rem; border-radius: 999px;
-    font-size: 0.78rem; font-weight: 700; margin-top: 0.35rem;
-}}
-.integrity-badge.warn {{ background: #FFF7ED; color: {WARNING}; border-color: #FED7AA; }}
 div[data-testid="stPlotlyChart"] {{
     background: rgba(255,255,255,0.98); border: 1px solid #DFE7EF;
     border-radius: 22px; padding: 0.3rem;
@@ -925,7 +887,7 @@ def load_profile_service_data(service_name: str, data_path_str: str):
     if not frames:
         return pd.DataFrame(), folder_path, required_agg_cols, loaded, "read_error"
 
-    perfil_df = pd.concat(frames, ignore_index=True, copy=False)
+    perfil_df = pd.concat(frames, ignore_index=True)
 
     has_agg_schema = all(col in perfil_df.columns for col in required_agg_cols)
     has_tx_schema = all(col in perfil_df.columns for col in required_tx_cols)
@@ -1014,7 +976,7 @@ def load_od_service_data(service_name: str, data_path_str: str):
     if not frames:
         return pd.DataFrame(), folder_path, required_display, loaded, "read_error"
 
-    od_df = pd.concat(frames, ignore_index=True, copy=False)
+    od_df = pd.concat(frames, ignore_index=True)
 
     has_new_schema = all(col in od_df.columns for col in required_new)
     has_old_schema = all(col in od_df.columns for col in required_old)
@@ -1070,13 +1032,12 @@ def load_od_service_data(service_name: str, data_path_str: str):
 
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data
 def load_turnstile_service_data(service_name: str, data_path_str: str):
     """
     Carga la base cruda de torniquetes para cruzarla con el perfil transaccional.
     Espera al menos las columnas FECHA_TRANSACCION, NUMERO_TARJETA y MONTO_TRANSACCION.
     Soporta CSV, XLSX y XLS; la fecha se parsea desde el timestamp con separador 'T'.
-    Cache con TTL de 10 minutos para recoger nuevos archivos durante la sesión.
     """
     data_path = Path(data_path_str)
     config = TURNSTILE_SERVICE_CONFIG.get(service_name, {})
@@ -1120,7 +1081,7 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
     if not frames:
         return pd.DataFrame(), folder_path, ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"], [], "read_error"
 
-    df = pd.concat(frames, ignore_index=True, copy=False)
+    df = pd.concat(frames, ignore_index=True)
 
     _turnstile_col_map = {
         "fecha_transaccion":  "FECHA_TRANSACCION",
@@ -1673,7 +1634,7 @@ def load_service_order_reference(data_path_str: str):
                 temp["__sheet_seq"] = sheet_idx
                 temp["__row_seq"] = np.arange(1, len(temp) + 1)
                 frames.append(temp)
-            return pd.concat(frames, ignore_index=True, copy=False) if frames else pd.DataFrame()
+            return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         except Exception:
             return pd.DataFrame()
 
@@ -2408,44 +2369,29 @@ def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure
                                   line=dict(color=TEXT_MUTED, width=2, dash="dash"),
                                   hovertemplate="Capacidad: %{y:,.0f}<extra></extra>"))
 
-    # Annotations vectorizadas sobre L_out_abordo. Cuando hay muchas estaciones
-    # (>14) se muestran solo los puntos más relevantes (máximo, mínimo y extremos)
-    # para evitar saturación visual; con pocas estaciones se muestran todas.
+    # Batch annotations: una sola llamada a update_layout en vez de N add_annotation
     _abordo_rows = plot_df.dropna(subset=["L_out_abordo"])
-    _annots = []
     if not _abordo_rows.empty:
-        if len(_abordo_rows) > 14:
-            # Conserva máximo, mínimo, primera y última estación
-            idx_max = _abordo_rows["L_out_abordo"].idxmax()
-            idx_min = _abordo_rows["L_out_abordo"].idxmin()
-            keep_idx = {idx_max, idx_min, _abordo_rows.index[0], _abordo_rows.index[-1]}
-            _abordo_plot = _abordo_rows.loc[list(keep_idx)]
-        else:
-            _abordo_plot = _abordo_rows
-        # Construcción vectorizada: evita iterrows
-        _x = _abordo_plot["estacion"].tolist()
-        _y = _abordo_plot["L_out_abordo"].tolist()
-        _texts = [fmt_pax(v) for v in _y]
         _annots = [
             dict(
-                x=xi, y=yi, text=ti,
+                x=row["estacion"], y=row["L_out_abordo"],
+                text=fmt_pax(row["L_out_abordo"]),
                 showarrow=False, yshift=18,
                 font=dict(size=PLOT_ANNOTATION_SIZE, color=SUCCESS),
                 bgcolor="rgba(255,255,255,0.96)",
                 bordercolor=SUCCESS, borderwidth=1, borderpad=3,
                 align="center", xref="x", yref="y",
             )
-            for xi, yi, ti in zip(_x, _y, _texts)
+            for _, row in _abordo_rows.iterrows()
         ]
+        existing_annots = list(fig.layout.annotations or [])
+        fig.update_layout(annotations=existing_annots + _annots)
 
-    # Una sola llamada a update_layout consolidada (evita updates encadenados)
     fig.update_layout(
         title=titulo, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-        margin=dict(l=20, r=20, t=55, b=20), height=580, barmode="group",
-        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
-        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
+        margin=dict(l=20,r=20,t=55,b=20), height=580, barmode="group",
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE), title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        annotations=(list(fig.layout.annotations or []) + _annots) if _annots else fig.layout.annotations,
     )
     fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
                      categoryarray=station_order or None)
@@ -4091,28 +4037,7 @@ def render_perfil_carga(default_service: str | None = None):
             if normalize_text(profile_srv) == "biotren" and schema_local == "transactional" and turnstile_status == "ok" and not turnstile_df.empty:
                 turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_sel].copy()
                 if not turnstile_day.empty:
-                    # Cache manual en session_state: el cruce depende solo de (servicio, fecha)
-                    # y no se altera al cambiar línea/dirección/servicio seleccionado.
-                    # Firma adicional por tamaño para invalidar si los archivos subyacentes cambian.
-                    _match_cache = st.session_state.setdefault("_turnstile_match_cache", {})
-                    _cache_key = (
-                        str(profile_srv), str(fecha_sel),
-                        int(len(turnstile_day)), int(len(perfil_fecha)),
-                    )
-                    _cached = _match_cache.get(_cache_key)
-                    if _cached is None:
-                        with st.spinner("Cruzando torniquetes con perfil del día…"):
-                            matched_tx_day, service_fare_summary, turnstile_stats = (
-                                match_turnstile_transactions_to_profile(
-                                    turnstile_day, perfil_fecha, tolerance_minutes=20
-                                )
-                            )
-                        # Limita el tamaño del cache para evitar crecimiento ilimitado
-                        if len(_match_cache) > 12:
-                            _match_cache.pop(next(iter(_match_cache)))
-                        _match_cache[_cache_key] = (matched_tx_day, service_fare_summary, turnstile_stats)
-                    else:
-                        matched_tx_day, service_fare_summary, turnstile_stats = _cached
+                    matched_tx_day, service_fare_summary, turnstile_stats = match_turnstile_transactions_to_profile(turnstile_day, perfil_fecha, tolerance_minutes=20)
 
             service_summary = build_service_level_summary(perfil_dir, schema_local)
             service_summary = enrich_service_summary_with_itinerary(
@@ -4316,13 +4241,6 @@ def render_perfil_carga(default_service: str | None = None):
                             # Monedero | Estudiante | Adulto Mayor | Discapacitado | Otros
                             type_cols = st.columns(len(PASSENGER_TYPE_ORDER))
                             rows_by_type = {row["tipo_pasajero"]: row for _, row in pax_type_df.iterrows()}
-                            _type_slug = {
-                                "Monedero": "--monedero",
-                                "Estudiante": "--estudiante",
-                                "Adulto Mayor": "--adulto-mayor",
-                                "Discapacitado": "--discapacitado",
-                                "Otros": "--otros",
-                            }
                             for col_container, tipo in zip(type_cols, PASSENGER_TYPE_ORDER):
                                 row = rows_by_type.get(tipo)
                                 if row is not None:
@@ -4331,35 +4249,29 @@ def render_perfil_carga(default_service: str | None = None):
                                     tarifa_val = row["tarifa_media"]
                                 else:
                                     pax_val, pct_val, tarifa_val = 0, 0.0, np.nan
+
                                 tarifa_label = fmt_number(tarifa_val, "CLP") if pd.notna(tarifa_val) else "-"
-                                empty_cls = " is-empty" if (pax_val == 0 and not pd.notna(tarifa_val)) else ""
-                                color_cls = _type_slug.get(tipo, "")
-                                card_html = (
-                                    f"<div class='pax-type-card {color_cls}{empty_cls}'>"
-                                    f"  <div class='pax-card-title'>{tipo}</div>"
-                                    f"  <div class='pax-card-value'>{fmt_pax(pax_val)}</div>"
-                                    f"  <div class='pax-card-pct'>{fmt_pct(pct_val)} del servicio</div>"
-                                    f"  <div class='pax-card-fare'>Tarifa media: {tarifa_label}</div>"
-                                    f"</div>"
-                                )
                                 with col_container:
-                                    st.markdown(card_html, unsafe_allow_html=True)
+                                    st.metric(
+                                        tipo,
+                                        fmt_pax(pax_val),
+                                        delta=f"{fmt_pct(pct_val)} · Tarifa media {tarifa_label}",
+                                        delta_color="off",
+                                    )
 
                             suma_estimados = int(pax_type_df["pasajeros_estimados"].sum())
                             pax_objetivo = int(round(float(pasajeros_transportados)))
-                            if suma_estimados == pax_objetivo:
-                                st.markdown(
-                                    f"<span class='integrity-badge'>✓ Suma por tipo ({fmt_pax(suma_estimados)}) = "
-                                    f"Pasajeros transportados ({fmt_pax(pax_objetivo)})</span>",
-                                    unsafe_allow_html=True,
+                            integridad_caption = (
+                                f"Suma por tipo: {fmt_pax(suma_estimados)} = Pasajeros transportados del servicio: "
+                                f"{fmt_pax(pax_objetivo)} ✓"
+                            )
+                            if suma_estimados != pax_objetivo:
+                                integridad_caption = (
+                                    f"Suma por tipo: {fmt_pax(suma_estimados)} · Pasajeros transportados: "
+                                    f"{fmt_pax(pax_objetivo)} "
+                                    f"(diferencia por redondeo: {fmt_pax(pax_objetivo - suma_estimados)})"
                                 )
-                            else:
-                                st.markdown(
-                                    f"<span class='integrity-badge warn'>Suma por tipo: {fmt_pax(suma_estimados)} · "
-                                    f"Pasajeros transportados: {fmt_pax(pax_objetivo)} "
-                                    f"(dif. redondeo: {fmt_pax(pax_objetivo - suma_estimados)})</span>",
-                                    unsafe_allow_html=True,
-                                )
+                            st.caption(integridad_caption)
 
                     st.markdown("<div class='section-title'>Pasajeros transportados por servicio</div>", unsafe_allow_html=True)
                     if service_summary.empty:
@@ -4377,47 +4289,20 @@ def render_perfil_carga(default_service: str | None = None):
                     else:
                         detalle_servicios = service_summary.copy()
                         detalle_servicios = detalle_servicios.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").copy() if "servicio_orden_idx" in detalle_servicios.columns else detalle_servicios.sort_values(["servicio_label"], kind="stable", na_position="last").copy()
-
-                        # Mantiene valores numéricos (en lugar de strings pre-formateados) y deja
-                        # que column_config los renderice. Esto habilita ordenamiento correcto
-                        # y presentación consistente nativa de Streamlit.
-                        tabla_detalle = pd.DataFrame({
-                            "Servicio":                 detalle_servicios["servicio_label"].astype(str),
-                            "Hora salida":              detalle_servicios["hora_salida_fmt"].astype(str),
-                            "Estación origen":          detalle_servicios["estacion_origen"].astype(str),
-                            "Pasajeros transportados":  pd.to_numeric(detalle_servicios["pasajeros_transportados"], errors="coerce"),
-                            "Máximo a bordo":           pd.to_numeric(detalle_servicios["max_abordo"], errors="coerce"),
-                        })
+                        detalle_servicios["Hora salida"] = detalle_servicios["hora_salida_fmt"]
+                        detalle_servicios["Servicio"] = detalle_servicios["servicio_label"]
+                        detalle_servicios["Estación origen"] = detalle_servicios["estacion_origen"]
+                        detalle_servicios["Pasajeros transportados"] = detalle_servicios["pasajeros_transportados"].apply(fmt_pax)
+                        detalle_servicios["Máximo a bordo"] = detalle_servicios["max_abordo"].apply(fmt_pax)
                         if "tx_cruzadas" in detalle_servicios.columns:
-                            tabla_detalle["Tx cruzadas"] = pd.to_numeric(detalle_servicios["tx_cruzadas"], errors="coerce")
+                            detalle_servicios["Tx cruzadas"] = pd.to_numeric(detalle_servicios["tx_cruzadas"], errors="coerce").apply(lambda v: fmt_pax(v) if pd.notna(v) else "-")
                         if "tarifa_media_aprox" in detalle_servicios.columns:
-                            tabla_detalle["Tarifa media aprox."] = pd.to_numeric(detalle_servicios["tarifa_media_aprox"], errors="coerce")
+                            detalle_servicios["Tarifa media aprox."] = pd.to_numeric(detalle_servicios["tarifa_media_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
                         if "recaudacion_aprox" in detalle_servicios.columns:
-                            tabla_detalle["Recaudación aprox."] = pd.to_numeric(detalle_servicios["recaudacion_aprox"], errors="coerce")
-
-                        _col_cfg = {
-                            "Pasajeros transportados": st.column_config.NumberColumn(
-                                "Pasajeros transportados", format="%d", help="Pasajeros transportados en el servicio"),
-                            "Máximo a bordo": st.column_config.NumberColumn(
-                                "Máximo a bordo", format="%d"),
-                        }
-                        if "Tx cruzadas" in tabla_detalle.columns:
-                            _col_cfg["Tx cruzadas"] = st.column_config.NumberColumn(
-                                "Tx cruzadas", format="%d",
-                                help="Transacciones de torniquete cruzadas con el servicio")
-                        if "Tarifa media aprox." in tabla_detalle.columns:
-                            _col_cfg["Tarifa media aprox."] = st.column_config.NumberColumn(
-                                "Tarifa media aprox.", format="$%d")
-                        if "Recaudación aprox." in tabla_detalle.columns:
-                            _col_cfg["Recaudación aprox."] = st.column_config.NumberColumn(
-                                "Recaudación aprox.", format="$%d")
-
-                        st.dataframe(
-                            tabla_detalle,
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config=_col_cfg,
-                        )
+                            detalle_servicios["Recaudación aprox."] = pd.to_numeric(detalle_servicios["recaudacion_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
+                        visible_cols = ["Servicio", "Hora salida", "Estación origen", "Pasajeros transportados", "Máximo a bordo", "Tx cruzadas", "Tarifa media aprox.", "Recaudación aprox."]
+                        visible_cols = [c for c in visible_cols if c in detalle_servicios.columns]
+                        st.dataframe(detalle_servicios[visible_cols], use_container_width=True, hide_index=True)
 
     with tab_mensual:
         st.markdown("<div class='section-title'>Promedio mensual por tipo de día</div>", unsafe_allow_html=True)
