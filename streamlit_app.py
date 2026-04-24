@@ -1358,11 +1358,17 @@ def build_passenger_type_distribution(matched_df: pd.DataFrame,
 
     El escalado reconoce que las Tx cruzadas son una muestra parcial (dependiente
     de la tasa de match) y proyecta la composición observada al total del servicio.
+    Adicionalmente calcula la tarifa media por tipo de pasajero como el promedio
+    de `monto_transaccion` de las transacciones cruzadas de ese tipo en el servicio.
 
-    Retorna un DataFrame con columnas:
-      tipo_pasajero, tx_cruzadas, porcentaje, pasajeros_estimados
+    Siempre retorna los 5 tipos canónicos (Monedero, Estudiante, Adulto Mayor,
+    Discapacitado, Otros) aunque alguno no tenga transacciones; en ese caso el
+    recuadro queda en 0 / NaN.
+
+    Columnas del DataFrame retornado:
+      tipo_pasajero, tx_cruzadas, porcentaje, pasajeros_estimados, tarifa_media
     """
-    columns = ["tipo_pasajero", "tx_cruzadas", "porcentaje", "pasajeros_estimados"]
+    columns = ["tipo_pasajero", "tx_cruzadas", "porcentaje", "pasajeros_estimados", "tarifa_media"]
     if matched_df is None or matched_df.empty or "tipo_pasajero" not in matched_df.columns:
         return pd.DataFrame(columns=columns)
 
@@ -1378,72 +1384,39 @@ def build_passenger_type_distribution(matched_df: pd.DataFrame,
 
     sel["tipo_pasajero"] = sel["tipo_pasajero"].fillna("Otros").astype(str).str.strip()
     sel.loc[sel["tipo_pasajero"] == "", "tipo_pasajero"] = "Otros"
+    # Agrupa cualquier tipo no reconocido bajo "Otros" (asegura los 5 canónicos)
+    sel.loc[~sel["tipo_pasajero"].isin(PASSENGER_TYPE_ORDER), "tipo_pasajero"] = "Otros"
 
-    counts = sel.groupby("tipo_pasajero", as_index=False).size().rename(columns={"size": "tx_cruzadas"})
-    if counts.empty:
+    if "monto_transaccion" in sel.columns:
+        sel["_monto"] = pd.to_numeric(sel["monto_transaccion"], errors="coerce")
+    else:
+        sel["_monto"] = np.nan
+
+    stats = (
+        sel.groupby("tipo_pasajero", as_index=False)
+           .agg(tx_cruzadas=("_monto", "size"),
+                tarifa_media=("_monto", "mean"))
+    )
+    if stats.empty:
         return pd.DataFrame(columns=columns)
 
-    total_tx = float(counts["tx_cruzadas"].sum())
-    counts["porcentaje"] = (counts["tx_cruzadas"].astype(float) / total_tx * 100.0) if total_tx > 0 else 0.0
+    total_tx = float(stats["tx_cruzadas"].sum())
+    stats["porcentaje"] = (stats["tx_cruzadas"].astype(float) / total_tx * 100.0) if total_tx > 0 else 0.0
 
     target = 0 if pd.isna(pasajeros_transportados) else int(round(float(pasajeros_transportados)))
     scaled = _scale_counts_largest_remainder(
-        counts.set_index("tipo_pasajero")["tx_cruzadas"], target
+        stats.set_index("tipo_pasajero")["tx_cruzadas"], target
     )
-    counts["pasajeros_estimados"] = counts["tipo_pasajero"].map(scaled).fillna(0).astype(int)
+    stats["pasajeros_estimados"] = stats["tipo_pasajero"].map(scaled).fillna(0).astype(int)
 
-    # Orden canónico: primero los tipos conocidos, luego el resto alfabéticamente
-    known = {t: i for i, t in enumerate(PASSENGER_TYPE_ORDER)}
-    counts["_orden"] = counts["tipo_pasajero"].map(lambda t: known.get(t, 100 + hash(t) % 1000))
-    counts = counts.sort_values(["_orden", "tipo_pasajero"]).drop(columns="_orden").reset_index(drop=True)
-    return counts[columns]
-
-
-def build_passenger_type_chart(dist_df: pd.DataFrame, titulo: str) -> go.Figure:
-    """Gráfico de barras horizontales con la distribución por tipo de pasajero (pasajeros estimados)."""
-    fig = go.Figure()
-    if dist_df is None or dist_df.empty:
-        fig.update_layout(title=titulo, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-                          height=320, margin=dict(l=20, r=20, t=55, b=20))
-        return fig
-
-    plot_df = dist_df.copy()
-    # Orden visual: mayor arriba
-    plot_df = plot_df.sort_values("pasajeros_estimados", ascending=True)
-    colors = [PASSENGER_TYPE_COLORS.get(t, EFE_BLUE) for t in plot_df["tipo_pasajero"]]
-    text_labels = [
-        f"{fmt_pax(v)} ({fmt_pct(p)})"
-        for v, p in zip(plot_df["pasajeros_estimados"], plot_df["porcentaje"])
-    ]
-    fig.add_trace(go.Bar(
-        x=plot_df["pasajeros_estimados"],
-        y=plot_df["tipo_pasajero"],
-        orientation="h",
-        marker_color=colors,
-        text=text_labels,
-        textposition="outside",
-        cliponaxis=False,
-        customdata=plot_df[["tx_cruzadas", "porcentaje"]].values,
-        hovertemplate=(
-            "<b>%{y}</b><br>"
-            "Pasajeros estimados: %{x:,.0f}<br>"
-            "Tx cruzadas: %{customdata[0]:,.0f}<br>"
-            "Participación: %{customdata[1]:,.1f}%<extra></extra>"
-        ),
-    ))
-    max_x = float(plot_df["pasajeros_estimados"].max() or 0.0)
-    fig.update_layout(
-        title=titulo, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-        margin=dict(l=20, r=60, t=55, b=20),
-        height=max(260, 70 + 48 * len(plot_df)),
-        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
-        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
-        showlegend=False,
-    )
-    fig.update_xaxes(title="Pasajeros estimados", tickfont=dict(size=PLOT_FONT_SIZE),
-                     range=[0, max_x * 1.18] if max_x > 0 else None)
-    fig.update_yaxes(title="", tickfont=dict(size=PLOT_FONT_SIZE))
-    return fig
+    # Garantiza presencia de los 5 tipos canónicos (aun sin datos) para mostrar 5 recuadros
+    base = pd.DataFrame({"tipo_pasajero": PASSENGER_TYPE_ORDER})
+    out = base.merge(stats, on="tipo_pasajero", how="left")
+    out["tx_cruzadas"] = out["tx_cruzadas"].fillna(0).astype(int)
+    out["porcentaje"] = out["porcentaje"].fillna(0.0)
+    out["pasajeros_estimados"] = out["pasajeros_estimados"].fillna(0).astype(int)
+    # tarifa_media queda NaN para tipos sin transacciones
+    return out[columns]
 
 
 
@@ -4249,7 +4222,7 @@ def render_perfil_carga(default_service: str | None = None):
                             linea_sel=linea_sel,
                             direccion_sel=dir_sel,
                         )
-                        if not pax_type_df.empty:
+                        if not pax_type_df.empty and int(pax_type_df["tx_cruzadas"].sum()) > 0:
                             st.markdown(
                                 "<div class='section-title'>Distribución por tipo de pasajero | "
                                 f"Servicio {servicio_sel}</div>",
@@ -4264,59 +4237,39 @@ def render_perfil_carga(default_service: str | None = None):
                                 unsafe_allow_html=True,
                             )
 
-                            total_tx_servicio = int(pax_type_df["tx_cruzadas"].sum())
-                            top_row = pax_type_df.sort_values("pasajeros_estimados", ascending=False).head(1)
-                            top_tipo = str(top_row.iloc[0]["tipo_pasajero"]) if not top_row.empty else "-"
-                            top_pax = int(top_row.iloc[0]["pasajeros_estimados"]) if not top_row.empty else 0
-                            top_pct = float(top_row.iloc[0]["porcentaje"]) if not top_row.empty else np.nan
-                            cobertura_pct = (total_tx_servicio / float(pasajeros_transportados) * 100.0) if float(pasajeros_transportados) > 0 else np.nan
+                            # Un recuadro por cada uno de los 5 tipos canónicos, en el mismo orden:
+                            # Monedero | Estudiante | Adulto Mayor | Discapacitado | Otros
+                            type_cols = st.columns(len(PASSENGER_TYPE_ORDER))
+                            rows_by_type = {row["tipo_pasajero"]: row for _, row in pax_type_df.iterrows()}
+                            for col_container, tipo in zip(type_cols, PASSENGER_TYPE_ORDER):
+                                row = rows_by_type.get(tipo)
+                                if row is not None:
+                                    pax_val = int(row["pasajeros_estimados"])
+                                    pct_val = float(row["porcentaje"])
+                                    tarifa_val = row["tarifa_media"]
+                                else:
+                                    pax_val, pct_val, tarifa_val = 0, 0.0, np.nan
 
-                            kc1, kc2, kc3, kc4 = st.columns(4)
-                            kc1.metric("Pasajeros transportados", fmt_pax(pasajeros_transportados))
-                            kc2.metric("Tx cruzadas del servicio", fmt_pax(total_tx_servicio))
-                            kc3.metric("Cobertura de muestra", fmt_pct(cobertura_pct) if pd.notna(cobertura_pct) else "-")
-                            kc4.metric(
-                                "Tipo predominante",
-                                f"{top_tipo} ({fmt_pax(top_pax)})" if top_tipo != "-" else "-",
-                                delta=fmt_pct(top_pct) if pd.notna(top_pct) else None,
-                            )
-
-                            chart_col, table_col = st.columns([1.25, 1.0])
-                            with chart_col:
-                                show_plot(
-                                    build_passenger_type_chart(
-                                        pax_type_df,
-                                        f"{profile_srv} | {linea_sel} | {dir_sel} | Composición pasajeros — Servicio {servicio_sel}",
-                                    ),
-                                    use_container_width=True,
-                                )
-                            with table_col:
-                                tabla_tipos = pax_type_df.copy()
-                                tabla_tipos_show = pd.DataFrame({
-                                    "Tipo de pasajero": tabla_tipos["tipo_pasajero"].astype(str),
-                                    "Tx cruzadas":      tabla_tipos["tx_cruzadas"].apply(fmt_pax),
-                                    "Participación":    tabla_tipos["porcentaje"].apply(fmt_pct),
-                                    "Pasajeros estimados": tabla_tipos["pasajeros_estimados"].apply(fmt_pax),
-                                })
-                                total_row = pd.DataFrame([{
-                                    "Tipo de pasajero": "Total",
-                                    "Tx cruzadas":      fmt_pax(total_tx_servicio),
-                                    "Participación":    fmt_pct(100.0),
-                                    "Pasajeros estimados": fmt_pax(int(tabla_tipos["pasajeros_estimados"].sum())),
-                                }])
-                                tabla_tipos_show = pd.concat([tabla_tipos_show, total_row], ignore_index=True)
-                                st.dataframe(tabla_tipos_show, use_container_width=True, hide_index=True)
+                                tarifa_label = fmt_number(tarifa_val, "CLP") if pd.notna(tarifa_val) else "-"
+                                with col_container:
+                                    st.metric(
+                                        tipo,
+                                        fmt_pax(pax_val),
+                                        delta=f"{fmt_pct(pct_val)} · Tarifa media {tarifa_label}",
+                                        delta_color="off",
+                                    )
 
                             suma_estimados = int(pax_type_df["pasajeros_estimados"].sum())
+                            pax_objetivo = int(round(float(pasajeros_transportados)))
                             integridad_caption = (
                                 f"Suma por tipo: {fmt_pax(suma_estimados)} = Pasajeros transportados del servicio: "
-                                f"{fmt_pax(int(round(float(pasajeros_transportados))))} ✓"
+                                f"{fmt_pax(pax_objetivo)} ✓"
                             )
-                            if suma_estimados != int(round(float(pasajeros_transportados))):
+                            if suma_estimados != pax_objetivo:
                                 integridad_caption = (
                                     f"Suma por tipo: {fmt_pax(suma_estimados)} · Pasajeros transportados: "
-                                    f"{fmt_pax(int(round(float(pasajeros_transportados))))} "
-                                    f"(diferencia por redondeo: {fmt_pax(int(round(float(pasajeros_transportados))) - suma_estimados)})"
+                                    f"{fmt_pax(pax_objetivo)} "
+                                    f"(diferencia por redondeo: {fmt_pax(pax_objetivo - suma_estimados)})"
                                 )
                             st.caption(integridad_caption)
 
