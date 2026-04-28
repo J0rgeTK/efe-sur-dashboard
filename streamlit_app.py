@@ -1,7 +1,7 @@
 """
 EFE Sur | KPIs e Iniciativas - Gerencia de Pasajeros
 =====================================================
-Versión optimizada v3 — mejoras de rendimiento y tiempo de carga:
+Versión optimizada v4 segura — rendimiento, caché limitada y protección multiusuario:
   ─── Globales ────────────────────────────────────────────────────────────────
   • normalize_text decorado con @lru_cache(4096): elimina recomputación repetida
   • get_time_bucket_series vectorizado con np.select (elimina .apply fila a fila)
@@ -9,6 +9,8 @@ Versión optimizada v3 — mejoras de rendimiento y tiempo de carga:
   • scale_kpi_dataframe_for_display vectorizado con np.where
   • show_plot optimizado: usa update_xaxes/update_yaxes en vez de iterar fig.layout
   • PLOTLY_CHART_CONFIG deduplicado (una sola definición canónica)
+  • st.cache_data con ttl y max_entries para limitar uso de memoria en sesiones concurrentes
+  • Cruce torniquetes-perfil con merge_asof para evitar merges cartesianos por tarjeta
   ─── Pestaña "Promedio mensual" (cuello de botella principal) ─────────────────
   • build_monthly_profile_tables_by_direction envuelto en @st.cache_data
     → la función solo se recalcula cuando cambian mes, línea o servicio
@@ -26,6 +28,7 @@ Versión optimizada v3 — mejoras de rendimiento y tiempo de carga:
 # =========================================================
 # IMPORTACIONES (sin duplicados)
 # =========================================================
+import os
 import unicodedata
 from datetime import date
 from functools import lru_cache
@@ -36,6 +39,19 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+# =========================================================
+# PARÁMETROS OPERACIONALES DE ESTABILIDAD
+# =========================================================
+# Estos límites buscan evitar saturación cuando varios usuarios consultan
+# simultáneamente el dashboard. Pueden ajustarse desde variables de entorno
+# sin modificar el código desplegado.
+CACHE_TTL_SECONDS = int(os.getenv("EFE_CACHE_TTL_SECONDS", "21600"))          # 6 horas
+CACHE_MAX_ENTRIES = int(os.getenv("EFE_CACHE_MAX_ENTRIES", "12"))
+MONTHLY_CACHE_MAX_ENTRIES = int(os.getenv("EFE_MONTHLY_CACHE_MAX_ENTRIES", "4"))
+TURNSTILE_MATCH_TOLERANCE_MINUTES = int(os.getenv("EFE_TURNSTILE_MATCH_TOLERANCE_MINUTES", "20"))
+MAX_PLOT_CATEGORIES = int(os.getenv("EFE_MAX_PLOT_CATEGORIES", "160"))
+MAX_DATAFRAME_DISPLAY_ROWS = int(os.getenv("EFE_MAX_DATAFRAME_DISPLAY_ROWS", "5000"))
 
 # =========================================================
 # CONFIGURACIÓN GENERAL
@@ -399,8 +415,8 @@ PLOTLY_CHART_CONFIG = {
 
 def show_plot(fig: go.Figure, use_container_width: bool = True, **kwargs):
     """
-    Wrapper Streamlit/Plotly optimizado:
-    Reemplaza iteración sobre fig.layout por update_xaxes/update_yaxes (una sola op).
+    Wrapper Streamlit/Plotly optimizado y seguro para multiusuario.
+    Desactiva interacciones costosas y evita que un error de render cierre la vista completa.
     """
     try:
         fig.update_layout(dragmode=False)
@@ -408,7 +424,11 @@ def show_plot(fig: go.Figure, use_container_width: bool = True, **kwargs):
         fig.update_yaxes(fixedrange=True)
     except Exception:
         pass
-    return st.plotly_chart(fig, use_container_width=use_container_width, config=PLOTLY_CHART_CONFIG, **kwargs)
+    try:
+        return st.plotly_chart(fig, use_container_width=use_container_width, config=PLOTLY_CHART_CONFIG, **kwargs)
+    except Exception as exc:
+        st.warning(f"No fue posible renderizar el gráfico en esta consulta: {exc}")
+        return None
 
 
 def periodo_to_date(value):
@@ -771,6 +791,62 @@ def _resolve_folder(service_name: str, config_dict: dict, data_path: Path) -> tu
     return [], str(fallback)
 
 
+def _safe_file_signature(path: Path) -> tuple:
+    """Firma liviana para invalidar caché si cambia tamaño o fecha del archivo."""
+    try:
+        stat = path.stat()
+        return (path.name, int(stat.st_size), int(stat.st_mtime))
+    except Exception:
+        return (path.name, 0, 0)
+
+
+def _folder_signature(folder: Path, suffixes=(".csv", ".xlsx", ".xls")) -> tuple:
+    try:
+        if not folder.exists() or not folder.is_dir():
+            return tuple()
+        files = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in suffixes and not p.name.startswith("~$")]
+        return tuple(sorted(_safe_file_signature(p) for p in files))
+    except Exception:
+        return tuple()
+
+
+def _read_tabular_selected(path: Path, keep_normalized: set[str] | None = None) -> pd.DataFrame:
+    """
+    Lee CSV/XLSX con selección de columnas cuando es posible.
+    Esto reduce memoria en bases de torniquetes, que suelen traer muchas columnas no usadas por el dashboard.
+    """
+    suffix = path.suffix.lower()
+    keep_normalized = keep_normalized or set()
+    try:
+        if suffix == ".csv":
+            if keep_normalized:
+                header = pd.read_csv(path, nrows=0)
+                cols = [c for c in header.columns if normalize_text(c) in keep_normalized]
+                if cols:
+                    return pd.read_csv(path, usecols=cols, dtype=str, low_memory=False, memory_map=True)
+            return pd.read_csv(path, low_memory=False, memory_map=True)
+        if suffix in {".xlsx", ".xls"}:
+            if keep_normalized:
+                header = pd.read_excel(path, nrows=0)
+                cols = [c for c in header.columns if normalize_text(c) in keep_normalized]
+                if cols:
+                    return pd.read_excel(path, usecols=cols, dtype=str)
+            return pd.read_excel(path)
+    except TypeError:
+        # Compatibilidad con entornos donde memory_map/usecols no esté disponible para algún backend.
+        if suffix == ".csv":
+            return pd.read_csv(path, low_memory=False)
+        return pd.read_excel(path)
+    return pd.DataFrame()
+
+
+def safe_dataframe(df: pd.DataFrame, max_rows: int = MAX_DATAFRAME_DISPLAY_ROWS) -> pd.DataFrame:
+    """Limita tablas visibles para evitar sobrecargar el navegador sin alterar los cálculos base."""
+    if df is None or df.empty or len(df) <= max_rows:
+        return df
+    return df.head(max_rows).copy()
+
+
 # =========================================================
 # CARGA DE DATOS
 # =========================================================
@@ -785,7 +861,7 @@ def get_repo_data_path() -> Path:
     st.stop()
 
 
-@st.cache_data
+@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
 def load_data():
     data_path = get_repo_data_path()
 
@@ -856,7 +932,7 @@ def load_data():
     return kpis, iniciativas, personas, servicios, estaciones, afluencia_estacion, data_path
 
 
-@st.cache_data
+@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
 def load_profile_service_data(service_name: str, data_path_str: str):
     data_path = Path(data_path_str)
 
@@ -951,7 +1027,7 @@ def load_profile_service_data(service_name: str, data_path_str: str):
 
 
 
-@st.cache_data
+@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
 def load_od_service_data(service_name: str, data_path_str: str):
     data_path = Path(data_path_str)
     csv_files, folder_path = _resolve_folder(service_name, OD_SERVICE_CONFIG, data_path)
@@ -1032,12 +1108,13 @@ def load_od_service_data(service_name: str, data_path_str: str):
 
 
 
-@st.cache_data
+@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
 def load_turnstile_service_data(service_name: str, data_path_str: str):
     """
-    Carga la base cruda de torniquetes para cruzarla con el perfil transaccional.
-    Espera al menos las columnas FECHA_TRANSACCION, NUMERO_TARJETA y MONTO_TRANSACCION.
-    Soporta CSV, XLSX y XLS; la fecha se parsea desde el timestamp con separador 'T'.
+    Carga optimizada de torniquetes.
+    - Lee solo columnas necesarias cuando el archivo trae campos adicionales.
+    - Mantiene compatibilidad con CSV, XLSX y XLS.
+    - Normaliza nombres de columnas antes de validar.
     """
     data_path = Path(data_path_str)
     config = TURNSTILE_SERVICE_CONFIG.get(service_name, {})
@@ -1051,7 +1128,12 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
         for root in search_roots:
             candidate = root / folder_name
             if candidate.exists() and candidate.is_dir():
-                found = [fp for fp in candidate.iterdir() if fp.is_file() and fp.suffix.lower() in {".csv", ".xlsx", ".xls"} and not fp.name.startswith("~$")]
+                found = [
+                    fp for fp in candidate.iterdir()
+                    if fp.is_file()
+                    and fp.suffix.lower() in {".csv", ".xlsx", ".xls"}
+                    and not fp.name.startswith("~$")
+                ]
                 if found:
                     files = sorted(found, key=lambda fp: fp.name.lower())
                     folder_path = str(candidate)
@@ -1059,17 +1141,20 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
         if files:
             break
 
+    required = ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"]
     if not files:
         fallback = (data_path / folder_names[0]) if folder_names else data_path / "transacciones_bt"
-        return pd.DataFrame(), str(fallback), ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"], [], "no_data"
+        return pd.DataFrame(), str(fallback), required, [], "no_data"
 
+    keep_norm = {
+        "fecha_transaccion", "numero_tarjeta", "monto_transaccion",
+        "tipo_pasajero_norm", "tipo pasajero", "tipo_pasajero", "tipo pasaje",
+        "nombre_producto", "producto", "linea", "servicio"
+    }
     frames, loaded = [], []
     for f in files:
         try:
-            if f.suffix.lower() == ".csv":
-                temp = pd.read_csv(f, low_memory=False)
-            else:
-                temp = pd.read_excel(f)
+            temp = _read_tabular_selected(f, keep_norm)
             if temp.empty:
                 continue
             temp["archivo_origen"] = f.name
@@ -1079,25 +1164,34 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
             continue
 
     if not frames:
-        return pd.DataFrame(), folder_path, ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"], [], "read_error"
+        return pd.DataFrame(), folder_path, required, [], "read_error"
 
-    df = pd.concat(frames, ignore_index=True)
+    df = pd.concat(frames, ignore_index=True, copy=False)
 
-    _turnstile_col_map = {
+    turnstile_col_map = {
         "fecha_transaccion": "FECHA_TRANSACCION",
-        "numero_tarjeta":    "NUMERO_TARJETA",
+        "numero_tarjeta": "NUMERO_TARJETA",
         "monto_transaccion": "MONTO_TRANSACCION",
+        "tipo_pasajero_norm": "tipo_pasajero_norm",
+        "tipo pasajero": "tipo_pasajero_norm",
+        "tipo_pasajero": "tipo_pasajero_norm",
+        "tipo pasaje": "tipo_pasajero_norm",
     }
     col_norms = normalize_series(pd.Series(df.columns.tolist()))
-    rename_map = {orig: _turnstile_col_map[norm]
-                  for orig, norm in zip(df.columns, col_norms)
-                  if norm in _turnstile_col_map}
+    rename_map = {
+        orig: turnstile_col_map[norm]
+        for orig, norm in zip(df.columns, col_norms)
+        if norm in turnstile_col_map
+    }
     df = df.rename(columns=rename_map)
 
-    required = ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"]
     missing = [c for c in required if c not in df.columns]
     if missing:
         return df, folder_path, missing, loaded, "unsupported_format"
+
+    # Reducir a columnas usadas antes de transformar tipos.
+    keep_cols = [c for c in ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION", "tipo_pasajero_norm", "archivo_origen"] if c in df.columns]
+    df = df[keep_cols].copy()
 
     timestamp_txt = df["FECHA_TRANSACCION"].fillna("").astype(str).str.strip()
     df["fecha_transaccion_txt"] = timestamp_txt
@@ -1106,24 +1200,23 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
     df["hora_transaccion"] = df["fecha_transaccion"].dt.strftime("%H:%M:%S")
     df["tarjeta_id"] = pd.to_numeric(df["NUMERO_TARJETA"], errors="coerce")
     df["monto_transaccion"] = pd.to_numeric(df["MONTO_TRANSACCION"], errors="coerce")
-    df["turnstile_tx_id"] = np.arange(1, len(df) + 1)
+    df["turnstile_tx_id"] = np.arange(1, len(df) + 1, dtype=np.int64)
 
     df = df.dropna(subset=["fecha_transaccion", "fecha", "tarjeta_id", "monto_transaccion"]).copy()
     return df, folder_path, [], loaded, "ok"
 
-
 def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
                                             profile_tx_df: pd.DataFrame,
-                                            tolerance_minutes: int = 20):
+                                            tolerance_minutes: int = TURNSTILE_MATCH_TOLERANCE_MINUTES):
     """
-    Cruza transacciones de torniquete con viajes del perfil usando:
-    - tarjeta_id exacto
-    - cercanía temporal al evento más próximo del viaje:
-      * t_entrada_viaje
-      * t_salida_viaje
+    Cruce seguro de torniquetes con viajes de perfil.
 
-    En la práctica, para la base cruda de torniquetes Biotren, FECHA_TRANSACCION puede quedar
-    más cerca de la salida que de la entrada. Por eso el match usa el evento con menor diferencia.
+    Optimización clave:
+    - Reemplaza el merge cartesiano por tarjeta por un merge_asof de evento más cercano.
+    - Cada viaje genera como máximo dos eventos candidatos: entrada y salida.
+    - Cada transacción de torniquete queda asociada como máximo a un evento dentro de la tolerancia.
+
+    Esto evita explosiones de memoria cuando una misma tarjeta aparece muchas veces en el día.
     """
     empty_summary = pd.DataFrame(columns=[
         "linea", "direccion", "servicio_label", "tx_cruzadas",
@@ -1139,108 +1232,123 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
         "pct_match_entrada": np.nan,
         "pct_match_salida": np.nan,
     }
-    if turnstile_df.empty or profile_tx_df.empty:
+    if turnstile_df is None or profile_tx_df is None or turnstile_df.empty or profile_tx_df.empty:
         return pd.DataFrame(), empty_summary, empty_stats
 
-    tx = turnstile_df.copy()
-    prof = profile_tx_df.copy()
+    required_tx = {"tarjeta_id", "fecha_transaccion", "monto_transaccion"}
+    if not required_tx.issubset(set(turnstile_df.columns)):
+        return pd.DataFrame(), empty_summary, empty_stats
 
+    keep_tx = [c for c in [
+        "turnstile_tx_id", "tarjeta_id", "fecha_transaccion", "monto_transaccion",
+        "tipo_pasajero_norm", "archivo_origen"
+    ] if c in turnstile_df.columns]
+    tx = turnstile_df[keep_tx].copy()
     tx["tarjeta_id"] = pd.to_numeric(tx["tarjeta_id"], errors="coerce")
-    prof["tarjeta_id"] = pd.to_numeric(prof["tarjeta_id"], errors="coerce")
     tx["fecha_transaccion"] = pd.to_datetime(tx["fecha_transaccion"], errors="coerce")
-    if "t_entrada_viaje" in prof.columns:
-        prof["t_entrada_viaje"] = pd.to_datetime(prof["t_entrada_viaje"], errors="coerce")
-    if "t_salida_viaje" in prof.columns:
-        prof["t_salida_viaje"] = pd.to_datetime(prof["t_salida_viaje"], errors="coerce")
-
-    keep_prof = [c for c in [
-        "tarjeta_id", "t_entrada_viaje", "t_salida_viaje", "servicio_label",
-        "linea", "direccion", "servicio_final", "viaje_idx", "origen", "destino"
-    ] if c in prof.columns]
-    if not {"tarjeta_id", "servicio_label"}.issubset(set(keep_prof)):
-        return pd.DataFrame(), empty_summary, empty_stats
-    if not any(c in keep_prof for c in ["t_entrada_viaje", "t_salida_viaje"]):
-        return pd.DataFrame(), empty_summary, empty_stats
-
+    tx["monto_transaccion"] = pd.to_numeric(tx["monto_transaccion"], errors="coerce")
     tx = tx.dropna(subset=["tarjeta_id", "fecha_transaccion", "monto_transaccion"]).copy()
-    prof = prof[keep_prof].copy()
-    prof = prof.dropna(subset=["tarjeta_id", "servicio_label"], how="any").copy()
-    # conservar filas que tengan al menos una referencia temporal
-    valid_time_mask = pd.Series(False, index=prof.index)
-    if "t_entrada_viaje" in prof.columns:
-        valid_time_mask = valid_time_mask | prof["t_entrada_viaje"].notna()
-    if "t_salida_viaje" in prof.columns:
-        valid_time_mask = valid_time_mask | prof["t_salida_viaje"].notna()
-    prof = prof[valid_time_mask].copy()
-
     empty_stats["turnstile_total"] = int(len(tx))
-    if tx.empty or prof.empty:
+    if tx.empty:
         return pd.DataFrame(), empty_summary, empty_stats
 
-    tx["turnstile_tx_id"] = pd.to_numeric(tx.get("turnstile_tx_id"), errors="coerce")
-    if tx["turnstile_tx_id"].isna().all():
-        tx["turnstile_tx_id"] = np.arange(1, len(tx) + 1)
-    tx["turnstile_tx_id"] = tx["turnstile_tx_id"].astype(int)
+    if "turnstile_tx_id" not in tx.columns or tx["turnstile_tx_id"].isna().all():
+        tx["turnstile_tx_id"] = np.arange(1, len(tx) + 1, dtype=np.int64)
+    tx["turnstile_tx_id"] = pd.to_numeric(tx["turnstile_tx_id"], errors="coerce").fillna(0).astype(np.int64)
 
-    # Pre-filtro de fecha: reduce el producto cartesiano antes del merge.
-    # Robusto ante timestamps con NaT — si el filtro falla, mantiene prof original
-    # en lugar de hacer crash.
+    prof = profile_tx_df.copy()
+    if "tarjeta_id" not in prof.columns:
+        return pd.DataFrame(), empty_summary, empty_stats
+    prof["tarjeta_id"] = pd.to_numeric(prof["tarjeta_id"], errors="coerce")
+    if "servicio_label" not in prof.columns:
+        if "servicio_final" in prof.columns:
+            prof["servicio_label"] = prof["servicio_final"].apply(format_service_id)
+        else:
+            return pd.DataFrame(), empty_summary, empty_stats
+    for col in ["linea", "direccion", "origen", "destino"]:
+        if col not in prof.columns:
+            prof[col] = ""
+    for col in ["t_entrada_viaje", "t_salida_viaje"]:
+        if col in prof.columns:
+            prof[col] = pd.to_datetime(prof[col], errors="coerce")
+
+    event_cols = ["tarjeta_id", "servicio_label", "linea", "direccion", "origen", "destino"]
+    events = []
+    if "t_entrada_viaje" in prof.columns:
+        ev_in = prof[event_cols + ["t_entrada_viaje"]].dropna(subset=["tarjeta_id", "t_entrada_viaje"]).copy()
+        if not ev_in.empty:
+            ev_in = ev_in.rename(columns={"t_entrada_viaje": "match_timestamp"})
+            ev_in["match_ref"] = "entrada"
+            events.append(ev_in)
+    if "t_salida_viaje" in prof.columns:
+        ev_out = prof[event_cols + ["t_salida_viaje"]].dropna(subset=["tarjeta_id", "t_salida_viaje"]).copy()
+        if not ev_out.empty:
+            ev_out = ev_out.rename(columns={"t_salida_viaje": "match_timestamp"})
+            ev_out["match_ref"] = "salida"
+            events.append(ev_out)
+
+    if not events:
+        return pd.DataFrame(), empty_summary, empty_stats
+
+    events_df = pd.concat(events, ignore_index=True, copy=False)
+    events_df = events_df.dropna(subset=["tarjeta_id", "match_timestamp", "servicio_label"]).copy()
+    if events_df.empty:
+        return pd.DataFrame(), empty_summary, empty_stats
+
+    # Prefiltro temporal global para reducir aún más la búsqueda.
+    tol = pd.Timedelta(minutes=float(tolerance_minutes))
+    t_min = tx["fecha_transaccion"].min() - tol
+    t_max = tx["fecha_transaccion"].max() + tol
+    events_df = events_df[(events_df["match_timestamp"] >= t_min) & (events_df["match_timestamp"] <= t_max)].copy()
+    if events_df.empty:
+        return pd.DataFrame(), empty_summary, empty_stats
+
+    tx = tx.sort_values(["fecha_transaccion", "tarjeta_id", "turnstile_tx_id"], kind="stable").reset_index(drop=True)
+    events_df = events_df.sort_values(["match_timestamp", "tarjeta_id", "servicio_label"], kind="stable").reset_index(drop=True)
+
     try:
-        if "fecha_transaccion" in tx.columns and tx["fecha_transaccion"].notna().any():
-            tx_dates = set(tx["fecha_transaccion"].dt.date.dropna())
-            if tx_dates:
-                prof_date_mask = pd.Series(False, index=prof.index)
-                if "t_entrada_viaje" in prof.columns:
-                    ent_dates = pd.to_datetime(prof["t_entrada_viaje"], errors="coerce").dt.date
-                    prof_date_mask = prof_date_mask | ent_dates.isin(tx_dates).fillna(False)
-                if "t_salida_viaje" in prof.columns:
-                    sal_dates = pd.to_datetime(prof["t_salida_viaje"], errors="coerce").dt.date
-                    prof_date_mask = prof_date_mask | sal_dates.isin(tx_dates).fillna(False)
-                # Solo aplicar el filtro si conserva al menos algunas filas;
-                # si el filtro las elimina todas (caso raro de desfase horario),
-                # se omite el prefiltro y se deja que el merge inner haga el trabajo.
-                if prof_date_mask.any():
-                    prof = prof[prof_date_mask].copy()
+        matched_df = pd.merge_asof(
+            tx,
+            events_df,
+            left_on="fecha_transaccion",
+            right_on="match_timestamp",
+            by="tarjeta_id",
+            direction="nearest",
+            tolerance=tol,
+            suffixes=("", "_perfil"),
+        )
+        matched_df = matched_df.dropna(subset=["match_timestamp", "servicio_label"]).copy()
     except Exception:
-        # Cualquier error en el prefiltro: continuar con prof completo
-        pass
+        # Respaldo conservador: procesa por tarjeta para evitar producto cartesiano global.
+        chunks = []
+        events_by_card = {k: g.sort_values("match_timestamp") for k, g in events_df.groupby("tarjeta_id", sort=False)}
+        for card, tx_card in tx.groupby("tarjeta_id", sort=False):
+            ev_card = events_by_card.get(card)
+            if ev_card is None or ev_card.empty:
+                continue
+            temp = pd.merge_asof(
+                tx_card.sort_values("fecha_transaccion"),
+                ev_card.sort_values("match_timestamp"),
+                left_on="fecha_transaccion",
+                right_on="match_timestamp",
+                direction="nearest",
+                tolerance=tol,
+                suffixes=("", "_perfil"),
+            )
+            chunks.append(temp)
+        matched_df = pd.concat(chunks, ignore_index=True, copy=False) if chunks else pd.DataFrame()
+        if not matched_df.empty:
+            matched_df = matched_df.dropna(subset=["match_timestamp", "servicio_label"]).copy()
 
-    merged = tx.merge(prof, how="inner", on="tarjeta_id", suffixes=("", "_perfil"))
-    if merged.empty:
+    if matched_df.empty:
         return pd.DataFrame(), empty_summary, empty_stats
 
-    # Diferencia contra entrada y salida
-    if "t_entrada_viaje" in merged.columns:
-        merged["diff_entrada_min"] = (merged["fecha_transaccion"] - merged["t_entrada_viaje"]).abs().dt.total_seconds() / 60.0
-    else:
-        merged["diff_entrada_min"] = np.nan
-
-    if "t_salida_viaje" in merged.columns:
-        merged["diff_salida_min"] = (merged["fecha_transaccion"] - merged["t_salida_viaje"]).abs().dt.total_seconds() / 60.0
-    else:
-        merged["diff_salida_min"] = np.nan
-
-    merged["match_diff_min"] = merged[["diff_entrada_min", "diff_salida_min"]].min(axis=1, skipna=True)
-    merged["match_ref"] = np.where(
-        merged["diff_salida_min"].fillna(np.inf) < merged["diff_entrada_min"].fillna(np.inf),
-        "salida",
-        "entrada",
-    )
-
-    # timestamp de referencia efectivamente usado
-    merged["match_timestamp"] = np.where(
-        merged["match_ref"] == "salida",
-        merged.get("t_salida_viaje"),
-        merged.get("t_entrada_viaje"),
-    )
-    merged["match_timestamp"] = pd.to_datetime(merged["match_timestamp"], errors="coerce")
-
-    merged = merged[merged["match_diff_min"] <= float(tolerance_minutes)].copy()
-    if merged.empty:
-        return pd.DataFrame(), empty_summary, empty_stats
+    matched_df["match_diff_min"] = (
+        matched_df["fecha_transaccion"] - matched_df["match_timestamp"]
+    ).abs().dt.total_seconds() / 60.0
 
     matched_df = (
-        merged.sort_values(["turnstile_tx_id", "match_diff_min", "match_timestamp"], kind="stable")
+        matched_df.sort_values(["turnstile_tx_id", "match_diff_min", "match_timestamp"], kind="stable")
         .drop_duplicates(subset=["turnstile_tx_id"], keep="first")
         .reset_index(drop=True)
     )
@@ -1255,6 +1363,11 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
         "pct_match_salida": (float((matched_df["match_ref"] == "salida").mean()) * 100.0) if not matched_df.empty else np.nan,
     }
 
+    for col in ["linea", "direccion", "servicio_label"]:
+        if col not in matched_df.columns:
+            matched_df[col] = ""
+        matched_df[col] = matched_df[col].fillna("").astype(str).str.strip()
+
     summary = (
         matched_df.groupby(["linea", "direccion", "servicio_label"], as_index=False)
         .agg(
@@ -1266,27 +1379,24 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
             diff_mediana_min=("match_diff_min", "median"),
         )
     )
-    # referencia temporal predominante por servicio
-    if not matched_df.empty:
-        ref_summary = (
-            matched_df.groupby(["linea", "direccion", "servicio_label", "match_ref"], as_index=False)
-            .size().rename(columns={"size": "n"})
-            .sort_values(["linea", "direccion", "servicio_label", "n", "match_ref"], ascending=[True, True, True, False, True])
-            .drop_duplicates(subset=["linea", "direccion", "servicio_label"], keep="first")
-            .rename(columns={"match_ref": "match_ref_principal"})
-        )
-        summary = summary.merge(
-            ref_summary[["linea", "direccion", "servicio_label", "match_ref_principal"]],
-            how="left",
-            on=["linea", "direccion", "servicio_label"],
-        )
-    else:
-        summary["match_ref_principal"] = np.nan
+
+    ref_summary = (
+        matched_df.groupby(["linea", "direccion", "servicio_label", "match_ref"], as_index=False)
+        .size().rename(columns={"size": "n"})
+        .sort_values(["linea", "direccion", "servicio_label", "n", "match_ref"], ascending=[True, True, True, False, True])
+        .drop_duplicates(subset=["linea", "direccion", "servicio_label"], keep="first")
+        .rename(columns={"match_ref": "match_ref_principal"})
+    )
+    summary = summary.merge(
+        ref_summary[["linea", "direccion", "servicio_label", "match_ref_principal"]],
+        how="left",
+        on=["linea", "direccion", "servicio_label"],
+    )
     return matched_df, summary, stats
 
 
 
-@st.cache_data
+@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
 def load_itinerary_reference(data_path_str: str):
     """
     Carga la base de itinerario generada desde PDF.
@@ -1461,8 +1571,7 @@ def enrich_service_summary_with_itinerary(summary_df: pd.DataFrame,
     return enriched
 
 
-@st.cache_data
-
+@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
 def load_service_order_reference(data_path_str: str):
     """
     Carga el orden operativo de servicios para usarlo en el selector y en el eje X.
@@ -3376,7 +3485,7 @@ def render_kpis():
         if "observacion" in detalle_kpi.columns:
             show_cols.append("observacion")
             rename_map["observacion"] = "Observación"
-        st.dataframe(detalle_kpi[show_cols].rename(columns=rename_map),
+        st.dataframe(safe_dataframe(detalle_kpi[show_cols].rename(columns=rename_map)),
                      use_container_width=True, hide_index=True)
     else:
         st.info("No existe detalle para el KPI seleccionado.")
@@ -3475,7 +3584,7 @@ def render_personas():
     rename_map = {"nombre_iniciativa":"Iniciativa","servicio":"Servicio","estado":"Estado",
                   "avance_pct":"Avance %","fecha_inicio":"Inicio","fecha_fin":"Fin",
                   "prioridad":"Prioridad","comentario":"Comentario","criticidad":"Criticidad"}
-    st.dataframe(per_df[detalle_cols].rename(columns=rename_map),
+    st.dataframe(safe_dataframe(per_df[detalle_cols].rename(columns=rename_map)),
                  use_container_width=True, hide_index=True)
     st.markdown("</div></div>", unsafe_allow_html=True)
 
@@ -3676,7 +3785,6 @@ def compute_monthly_executive_metrics(monthly_daily: pd.DataFrame,
     return metrics
 
 
-@st.cache_data(show_spinner="Calculando promedios mensuales…")
 def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
                                               profile_schema: str,
                                               profile_srv: str,
@@ -3714,7 +3822,7 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
         if normalize_text(profile_srv) == "biotren" and profile_schema == "transactional" and turnstile_status == "ok" and not turnstile_df.empty:
             turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_day].copy()
             if not turnstile_day.empty:
-                _, fare_day_all, _ = match_turnstile_transactions_to_profile(turnstile_day, perfil_day_all, tolerance_minutes=20)
+                _, fare_day_all, _ = match_turnstile_transactions_to_profile(turnstile_day, perfil_day_all, tolerance_minutes=TURNSTILE_MATCH_TOLERANCE_MINUTES)
 
         for dir_sel in directions:
             perfil_day_dir = perfil_day_all[perfil_day_all["direccion"].astype(str).str.strip() == str(dir_sel)].copy()
@@ -3828,6 +3936,31 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
 
     return result, directions, monthly_metrics
 
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=MONTHLY_CACHE_MAX_ENTRIES, show_spinner="Calculando promedios mensuales…")
+def build_monthly_profile_tables_by_direction_cached(profile_schema: str,
+                                                     profile_srv: str,
+                                                     month_period: str,
+                                                     linea_sel: str,
+                                                     data_path_str: str):
+    """
+    Wrapper de caché con argumentos livianos.
+    Evita que Streamlit tenga que hashear DataFrames completos por cada usuario/sesión.
+    """
+    perfil_df_local, _, _, _, perfil_status_local = load_profile_service_data(profile_srv, data_path_str)
+    if perfil_status_local != "ok" or perfil_df_local.empty:
+        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+
+    itinerary_summary_local, _, _, _, _ = load_itinerary_reference(data_path_str)
+    service_order_local, _, _, _ = load_service_order_reference(data_path_str)
+    turnstile_local, _, _, _, turnstile_status_local = load_turnstile_service_data(profile_srv, data_path_str)
+
+    return build_monthly_profile_tables_by_direction(
+        perfil_df_local, profile_schema, profile_srv, month_period, linea_sel,
+        itinerary_summary_local, service_order_local, turnstile_local, turnstile_status_local,
+    )
+
+
 def render_perfil_carga(default_service: str | None = None):
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Perfil de Carga</div>", unsafe_allow_html=True)
@@ -3930,7 +4063,7 @@ def render_perfil_carga(default_service: str | None = None):
             if normalize_text(profile_srv) == "biotren" and schema_local == "transactional" and turnstile_status == "ok" and not turnstile_df.empty:
                 turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_sel].copy()
                 if not turnstile_day.empty:
-                    _, service_fare_summary, turnstile_stats = match_turnstile_transactions_to_profile(turnstile_day, perfil_fecha, tolerance_minutes=20)
+                    _, service_fare_summary, turnstile_stats = match_turnstile_transactions_to_profile(turnstile_day, perfil_fecha, tolerance_minutes=TURNSTILE_MATCH_TOLERANCE_MINUTES)
 
             service_summary = build_service_level_summary(perfil_dir, schema_local)
             service_summary = enrich_service_summary_with_itinerary(
@@ -4129,7 +4262,7 @@ def render_perfil_carga(default_service: str | None = None):
                             detalle_servicios["Recaudación aprox."] = pd.to_numeric(detalle_servicios["recaudacion_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
                         visible_cols = ["Servicio", "Hora salida", "Estación origen", "Pasajeros transportados", "Máximo a bordo", "Tx cruzadas", "Tarifa media aprox.", "Recaudación aprox."]
                         visible_cols = [c for c in visible_cols if c in detalle_servicios.columns]
-                        st.dataframe(detalle_servicios[visible_cols], use_container_width=True, hide_index=True)
+                        st.dataframe(safe_dataframe(detalle_servicios[visible_cols]), use_container_width=True, hide_index=True)
 
     with tab_mensual:
         st.markdown("<div class='section-title'>Promedio mensual por tipo de día</div>", unsafe_allow_html=True)
@@ -4161,9 +4294,8 @@ def render_perfil_carga(default_service: str | None = None):
         if not month_sel or not linea_mes_sel:
             st.info("No existen datos mensuales disponibles para los filtros seleccionados.")
         else:
-            tablas_mensuales, directions, monthly_metrics = build_monthly_profile_tables_by_direction(
-                perfil_df, profile_schema, profile_srv, month_sel, linea_mes_sel,
-                itinerary_summary_df, service_order_df, turnstile_df, turnstile_status,
+            tablas_mensuales, directions, monthly_metrics = build_monthly_profile_tables_by_direction_cached(
+                profile_schema, profile_srv, month_sel, linea_mes_sel, str(data_path)
             )
             if not tablas_mensuales:
                 st.info("No existen datos mensuales para la línea y mes seleccionados.")
