@@ -1,7 +1,7 @@
 """
 EFE Sur | KPIs e Iniciativas - Gerencia de Pasajeros
 =====================================================
-Versión optimizada v4 segura — rendimiento, caché limitada y protección multiusuario:
+Versión optimizada v3 — mejoras de rendimiento y tiempo de carga:
   ─── Globales ────────────────────────────────────────────────────────────────
   • normalize_text decorado con @lru_cache(4096): elimina recomputación repetida
   • get_time_bucket_series vectorizado con np.select (elimina .apply fila a fila)
@@ -9,8 +9,6 @@ Versión optimizada v4 segura — rendimiento, caché limitada y protección mul
   • scale_kpi_dataframe_for_display vectorizado con np.where
   • show_plot optimizado: usa update_xaxes/update_yaxes en vez de iterar fig.layout
   • PLOTLY_CHART_CONFIG deduplicado (una sola definición canónica)
-  • st.cache_data con ttl y max_entries para limitar uso de memoria en sesiones concurrentes
-  • Cruce torniquetes-perfil con merge_asof para evitar merges cartesianos por tarjeta
   ─── Pestaña "Promedio mensual" (cuello de botella principal) ─────────────────
   • build_monthly_profile_tables_by_direction envuelto en @st.cache_data
     → la función solo se recalcula cuando cambian mes, línea o servicio
@@ -28,7 +26,6 @@ Versión optimizada v4 segura — rendimiento, caché limitada y protección mul
 # =========================================================
 # IMPORTACIONES (sin duplicados)
 # =========================================================
-import os
 import unicodedata
 from datetime import date
 from functools import lru_cache
@@ -39,19 +36,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-
-# =========================================================
-# PARÁMETROS OPERACIONALES DE ESTABILIDAD
-# =========================================================
-# Estos límites buscan evitar saturación cuando varios usuarios consultan
-# simultáneamente el dashboard. Pueden ajustarse desde variables de entorno
-# sin modificar el código desplegado.
-CACHE_TTL_SECONDS = int(os.getenv("EFE_CACHE_TTL_SECONDS", "21600"))          # 6 horas
-CACHE_MAX_ENTRIES = int(os.getenv("EFE_CACHE_MAX_ENTRIES", "12"))
-MONTHLY_CACHE_MAX_ENTRIES = int(os.getenv("EFE_MONTHLY_CACHE_MAX_ENTRIES", "4"))
-TURNSTILE_MATCH_TOLERANCE_MINUTES = int(os.getenv("EFE_TURNSTILE_MATCH_TOLERANCE_MINUTES", "20"))
-MAX_PLOT_CATEGORIES = int(os.getenv("EFE_MAX_PLOT_CATEGORIES", "160"))
-MAX_DATAFRAME_DISPLAY_ROWS = int(os.getenv("EFE_MAX_DATAFRAME_DISPLAY_ROWS", "5000"))
 
 # =========================================================
 # CONFIGURACIÓN GENERAL
@@ -415,8 +399,8 @@ PLOTLY_CHART_CONFIG = {
 
 def show_plot(fig: go.Figure, use_container_width: bool = True, **kwargs):
     """
-    Wrapper Streamlit/Plotly optimizado y seguro para multiusuario.
-    Desactiva interacciones costosas y evita que un error de render cierre la vista completa.
+    Wrapper Streamlit/Plotly optimizado:
+    Reemplaza iteración sobre fig.layout por update_xaxes/update_yaxes (una sola op).
     """
     try:
         fig.update_layout(dragmode=False)
@@ -424,11 +408,7 @@ def show_plot(fig: go.Figure, use_container_width: bool = True, **kwargs):
         fig.update_yaxes(fixedrange=True)
     except Exception:
         pass
-    try:
-        return st.plotly_chart(fig, use_container_width=use_container_width, config=PLOTLY_CHART_CONFIG, **kwargs)
-    except Exception as exc:
-        st.warning(f"No fue posible renderizar el gráfico en esta consulta: {exc}")
-        return None
+    return st.plotly_chart(fig, use_container_width=use_container_width, config=PLOTLY_CHART_CONFIG, **kwargs)
 
 
 def periodo_to_date(value):
@@ -771,6 +751,78 @@ TURNSTILE_SERVICE_CONFIG = {
     },
 }
 
+PASSENGER_TYPE_DISPLAY_ORDER = [
+    "Monedero",
+    "Estudiante",
+    "Adulto Mayor",
+    "Discapacitado",
+    "Otros",
+]
+
+
+def normalize_passenger_type_series(series: pd.Series) -> pd.Series:
+    s = series.fillna("").astype(str).str.strip()
+    n = normalize_series(s)
+    values = np.select(
+        [
+            n.str.contains("monedero", regex=False),
+            n.str.contains("estudiante", regex=False) | n.str.contains("tne", regex=False),
+            n.str.contains("adulto mayor", regex=False),
+            n.str.contains("discapacitado", regex=False) | n.str.contains("capacidad", regex=False),
+        ],
+        ["Monedero", "Estudiante", "Adulto Mayor", "Discapacitado"],
+        default="Otros",
+    )
+    return pd.Series(values, index=series.index, dtype=object)
+
+
+def build_passenger_type_composition(
+    matched_df: pd.DataFrame,
+    linea_sel: str,
+    dir_sel: str,
+    servicio_sel: str,
+) -> pd.DataFrame:
+    cols = [
+        "tipo_pasajero_norm",
+        "tx_tipo",
+        "pct_tx_tipo",
+        "tarifa_media_tipo",
+        "recaudacion_tipo",
+    ]
+    if matched_df is None or matched_df.empty or "tipo_pasajero_norm" not in matched_df.columns:
+        return pd.DataFrame(columns=cols)
+
+    temp = matched_df.copy()
+    temp = temp[
+        (temp["linea"].astype(str).str.strip() == str(linea_sel)) &
+        (temp["direccion"].astype(str).str.strip() == str(dir_sel)) &
+        (temp["servicio_label"].astype(str).str.strip() == str(servicio_sel))
+    ].copy()
+    if temp.empty:
+        return pd.DataFrame(columns=cols)
+
+    temp["tipo_pasajero_norm"] = normalize_passenger_type_series(temp["tipo_pasajero_norm"])
+    temp["monto_transaccion"] = pd.to_numeric(temp["monto_transaccion"], errors="coerce")
+
+    summary = (
+        temp.groupby("tipo_pasajero_norm", as_index=False)
+        .agg(
+            tx_tipo=("monto_transaccion", "size"),
+            tarifa_media_tipo=("monto_transaccion", "mean"),
+            recaudacion_tipo=("monto_transaccion", "sum"),
+        )
+    )
+    total_tx = float(summary["tx_tipo"].sum()) if not summary.empty else 0.0
+    summary["pct_tx_tipo"] = np.where(total_tx > 0, summary["tx_tipo"] / total_tx * 100.0, np.nan)
+
+    base = pd.DataFrame({"tipo_pasajero_norm": PASSENGER_TYPE_DISPLAY_ORDER})
+    summary = base.merge(summary, how="left", on="tipo_pasajero_norm")
+    summary["tx_tipo"] = pd.to_numeric(summary["tx_tipo"], errors="coerce").fillna(0)
+    summary["pct_tx_tipo"] = pd.to_numeric(summary["pct_tx_tipo"], errors="coerce").fillna(0.0)
+    summary["tarifa_media_tipo"] = pd.to_numeric(summary["tarifa_media_tipo"], errors="coerce")
+    summary["recaudacion_tipo"] = pd.to_numeric(summary["recaudacion_tipo"], errors="coerce")
+    return summary
+
 
 def _resolve_folder(service_name: str, config_dict: dict, data_path: Path) -> tuple[list, str]:
     """Devuelve (csv_files, folder_path_str) buscando candidatos del config."""
@@ -791,62 +843,6 @@ def _resolve_folder(service_name: str, config_dict: dict, data_path: Path) -> tu
     return [], str(fallback)
 
 
-def _safe_file_signature(path: Path) -> tuple:
-    """Firma liviana para invalidar caché si cambia tamaño o fecha del archivo."""
-    try:
-        stat = path.stat()
-        return (path.name, int(stat.st_size), int(stat.st_mtime))
-    except Exception:
-        return (path.name, 0, 0)
-
-
-def _folder_signature(folder: Path, suffixes=(".csv", ".xlsx", ".xls")) -> tuple:
-    try:
-        if not folder.exists() or not folder.is_dir():
-            return tuple()
-        files = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in suffixes and not p.name.startswith("~$")]
-        return tuple(sorted(_safe_file_signature(p) for p in files))
-    except Exception:
-        return tuple()
-
-
-def _read_tabular_selected(path: Path, keep_normalized: set[str] | None = None) -> pd.DataFrame:
-    """
-    Lee CSV/XLSX con selección de columnas cuando es posible.
-    Esto reduce memoria en bases de torniquetes, que suelen traer muchas columnas no usadas por el dashboard.
-    """
-    suffix = path.suffix.lower()
-    keep_normalized = keep_normalized or set()
-    try:
-        if suffix == ".csv":
-            if keep_normalized:
-                header = pd.read_csv(path, nrows=0)
-                cols = [c for c in header.columns if normalize_text(c) in keep_normalized]
-                if cols:
-                    return pd.read_csv(path, usecols=cols, dtype=str, low_memory=False, memory_map=True)
-            return pd.read_csv(path, low_memory=False, memory_map=True)
-        if suffix in {".xlsx", ".xls"}:
-            if keep_normalized:
-                header = pd.read_excel(path, nrows=0)
-                cols = [c for c in header.columns if normalize_text(c) in keep_normalized]
-                if cols:
-                    return pd.read_excel(path, usecols=cols, dtype=str)
-            return pd.read_excel(path)
-    except TypeError:
-        # Compatibilidad con entornos donde memory_map/usecols no esté disponible para algún backend.
-        if suffix == ".csv":
-            return pd.read_csv(path, low_memory=False)
-        return pd.read_excel(path)
-    return pd.DataFrame()
-
-
-def safe_dataframe(df: pd.DataFrame, max_rows: int = MAX_DATAFRAME_DISPLAY_ROWS) -> pd.DataFrame:
-    """Limita tablas visibles para evitar sobrecargar el navegador sin alterar los cálculos base."""
-    if df is None or df.empty or len(df) <= max_rows:
-        return df
-    return df.head(max_rows).copy()
-
-
 # =========================================================
 # CARGA DE DATOS
 # =========================================================
@@ -861,7 +857,7 @@ def get_repo_data_path() -> Path:
     st.stop()
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
+@st.cache_data
 def load_data():
     data_path = get_repo_data_path()
 
@@ -932,7 +928,7 @@ def load_data():
     return kpis, iniciativas, personas, servicios, estaciones, afluencia_estacion, data_path
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
+@st.cache_data
 def load_profile_service_data(service_name: str, data_path_str: str):
     data_path = Path(data_path_str)
 
@@ -1027,7 +1023,7 @@ def load_profile_service_data(service_name: str, data_path_str: str):
 
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
+@st.cache_data
 def load_od_service_data(service_name: str, data_path_str: str):
     data_path = Path(data_path_str)
     csv_files, folder_path = _resolve_folder(service_name, OD_SERVICE_CONFIG, data_path)
@@ -1108,13 +1104,12 @@ def load_od_service_data(service_name: str, data_path_str: str):
 
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
+@st.cache_data
 def load_turnstile_service_data(service_name: str, data_path_str: str):
     """
-    Carga optimizada de torniquetes.
-    - Lee solo columnas necesarias cuando el archivo trae campos adicionales.
-    - Mantiene compatibilidad con CSV, XLSX y XLS.
-    - Normaliza nombres de columnas antes de validar.
+    Carga la base cruda de torniquetes para cruzarla con el perfil transaccional.
+    Espera al menos las columnas FECHA_TRANSACCION, NUMERO_TARJETA y MONTO_TRANSACCION.
+    Soporta CSV, XLSX y XLS; la fecha se parsea desde el timestamp con separador 'T'.
     """
     data_path = Path(data_path_str)
     config = TURNSTILE_SERVICE_CONFIG.get(service_name, {})
@@ -1128,12 +1123,7 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
         for root in search_roots:
             candidate = root / folder_name
             if candidate.exists() and candidate.is_dir():
-                found = [
-                    fp for fp in candidate.iterdir()
-                    if fp.is_file()
-                    and fp.suffix.lower() in {".csv", ".xlsx", ".xls"}
-                    and not fp.name.startswith("~$")
-                ]
+                found = [fp for fp in candidate.iterdir() if fp.is_file() and fp.suffix.lower() in {".csv", ".xlsx", ".xls"} and not fp.name.startswith("~$")]
                 if found:
                     files = sorted(found, key=lambda fp: fp.name.lower())
                     folder_path = str(candidate)
@@ -1141,20 +1131,17 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
         if files:
             break
 
-    required = ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"]
     if not files:
         fallback = (data_path / folder_names[0]) if folder_names else data_path / "transacciones_bt"
-        return pd.DataFrame(), str(fallback), required, [], "no_data"
+        return pd.DataFrame(), str(fallback), ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"], [], "no_data"
 
-    keep_norm = {
-        "fecha_transaccion", "numero_tarjeta", "monto_transaccion",
-        "tipo_pasajero_norm", "tipo pasajero", "tipo_pasajero", "tipo pasaje",
-        "nombre_producto", "producto", "linea", "servicio"
-    }
     frames, loaded = [], []
     for f in files:
         try:
-            temp = _read_tabular_selected(f, keep_norm)
+            if f.suffix.lower() == ".csv":
+                temp = pd.read_csv(f, low_memory=False)
+            else:
+                temp = pd.read_excel(f)
             if temp.empty:
                 continue
             temp["archivo_origen"] = f.name
@@ -1164,34 +1151,27 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
             continue
 
     if not frames:
-        return pd.DataFrame(), folder_path, required, [], "read_error"
+        return pd.DataFrame(), folder_path, ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"], [], "read_error"
 
-    df = pd.concat(frames, ignore_index=True, copy=False)
+    df = pd.concat(frames, ignore_index=True)
 
-    turnstile_col_map = {
+    _turnstile_col_map = {
         "fecha_transaccion": "FECHA_TRANSACCION",
-        "numero_tarjeta": "NUMERO_TARJETA",
+        "numero_tarjeta":    "NUMERO_TARJETA",
         "monto_transaccion": "MONTO_TRANSACCION",
         "tipo_pasajero_norm": "tipo_pasajero_norm",
-        "tipo pasajero": "tipo_pasajero_norm",
-        "tipo_pasajero": "tipo_pasajero_norm",
-        "tipo pasaje": "tipo_pasajero_norm",
+        "tipo pasajero norm": "tipo_pasajero_norm",
     }
     col_norms = normalize_series(pd.Series(df.columns.tolist()))
-    rename_map = {
-        orig: turnstile_col_map[norm]
-        for orig, norm in zip(df.columns, col_norms)
-        if norm in turnstile_col_map
-    }
+    rename_map = {orig: _turnstile_col_map[norm]
+                  for orig, norm in zip(df.columns, col_norms)
+                  if norm in _turnstile_col_map}
     df = df.rename(columns=rename_map)
 
+    required = ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"]
     missing = [c for c in required if c not in df.columns]
     if missing:
         return df, folder_path, missing, loaded, "unsupported_format"
-
-    # Reducir a columnas usadas antes de transformar tipos.
-    keep_cols = [c for c in ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION", "tipo_pasajero_norm", "archivo_origen"] if c in df.columns]
-    df = df[keep_cols].copy()
 
     timestamp_txt = df["FECHA_TRANSACCION"].fillna("").astype(str).str.strip()
     df["fecha_transaccion_txt"] = timestamp_txt
@@ -1200,23 +1180,29 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
     df["hora_transaccion"] = df["fecha_transaccion"].dt.strftime("%H:%M:%S")
     df["tarjeta_id"] = pd.to_numeric(df["NUMERO_TARJETA"], errors="coerce")
     df["monto_transaccion"] = pd.to_numeric(df["MONTO_TRANSACCION"], errors="coerce")
-    df["turnstile_tx_id"] = np.arange(1, len(df) + 1, dtype=np.int64)
+    df["turnstile_tx_id"] = np.arange(1, len(df) + 1)
+
+    if "tipo_pasajero_norm" in df.columns:
+        df["tipo_pasajero_norm"] = normalize_passenger_type_series(df["tipo_pasajero_norm"])
+    else:
+        df["tipo_pasajero_norm"] = "Otros"
 
     df = df.dropna(subset=["fecha_transaccion", "fecha", "tarjeta_id", "monto_transaccion"]).copy()
     return df, folder_path, [], loaded, "ok"
 
+
 def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
                                             profile_tx_df: pd.DataFrame,
-                                            tolerance_minutes: int = TURNSTILE_MATCH_TOLERANCE_MINUTES):
+                                            tolerance_minutes: int = 20):
     """
-    Cruce seguro de torniquetes con viajes de perfil.
+    Cruza transacciones de torniquete con viajes del perfil usando:
+    - tarjeta_id exacto
+    - cercanía temporal al evento más próximo del viaje:
+      * t_entrada_viaje
+      * t_salida_viaje
 
-    Optimización clave:
-    - Reemplaza el merge cartesiano por tarjeta por un merge_asof de evento más cercano.
-    - Cada viaje genera como máximo dos eventos candidatos: entrada y salida.
-    - Cada transacción de torniquete queda asociada como máximo a un evento dentro de la tolerancia.
-
-    Esto evita explosiones de memoria cuando una misma tarjeta aparece muchas veces en el día.
+    En la práctica, para la base cruda de torniquetes Biotren, FECHA_TRANSACCION puede quedar
+    más cerca de la salida que de la entrada. Por eso el match usa el evento con menor diferencia.
     """
     empty_summary = pd.DataFrame(columns=[
         "linea", "direccion", "servicio_label", "tx_cruzadas",
@@ -1232,123 +1218,96 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
         "pct_match_entrada": np.nan,
         "pct_match_salida": np.nan,
     }
-    if turnstile_df is None or profile_tx_df is None or turnstile_df.empty or profile_tx_df.empty:
+    if turnstile_df.empty or profile_tx_df.empty:
         return pd.DataFrame(), empty_summary, empty_stats
 
-    required_tx = {"tarjeta_id", "fecha_transaccion", "monto_transaccion"}
-    if not required_tx.issubset(set(turnstile_df.columns)):
-        return pd.DataFrame(), empty_summary, empty_stats
-
-    keep_tx = [c for c in [
-        "turnstile_tx_id", "tarjeta_id", "fecha_transaccion", "monto_transaccion",
-        "tipo_pasajero_norm", "archivo_origen"
-    ] if c in turnstile_df.columns]
-    tx = turnstile_df[keep_tx].copy()
-    tx["tarjeta_id"] = pd.to_numeric(tx["tarjeta_id"], errors="coerce")
-    tx["fecha_transaccion"] = pd.to_datetime(tx["fecha_transaccion"], errors="coerce")
-    tx["monto_transaccion"] = pd.to_numeric(tx["monto_transaccion"], errors="coerce")
-    tx = tx.dropna(subset=["tarjeta_id", "fecha_transaccion", "monto_transaccion"]).copy()
-    empty_stats["turnstile_total"] = int(len(tx))
-    if tx.empty:
-        return pd.DataFrame(), empty_summary, empty_stats
-
-    if "turnstile_tx_id" not in tx.columns or tx["turnstile_tx_id"].isna().all():
-        tx["turnstile_tx_id"] = np.arange(1, len(tx) + 1, dtype=np.int64)
-    tx["turnstile_tx_id"] = pd.to_numeric(tx["turnstile_tx_id"], errors="coerce").fillna(0).astype(np.int64)
-
+    tx = turnstile_df.copy()
     prof = profile_tx_df.copy()
-    if "tarjeta_id" not in prof.columns:
-        return pd.DataFrame(), empty_summary, empty_stats
+
+    tx["tarjeta_id"] = pd.to_numeric(tx["tarjeta_id"], errors="coerce")
     prof["tarjeta_id"] = pd.to_numeric(prof["tarjeta_id"], errors="coerce")
-    if "servicio_label" not in prof.columns:
-        if "servicio_final" in prof.columns:
-            prof["servicio_label"] = prof["servicio_final"].apply(format_service_id)
-        else:
-            return pd.DataFrame(), empty_summary, empty_stats
-    for col in ["linea", "direccion", "origen", "destino"]:
-        if col not in prof.columns:
-            prof[col] = ""
-    for col in ["t_entrada_viaje", "t_salida_viaje"]:
-        if col in prof.columns:
-            prof[col] = pd.to_datetime(prof[col], errors="coerce")
-
-    event_cols = ["tarjeta_id", "servicio_label", "linea", "direccion", "origen", "destino"]
-    events = []
+    tx["fecha_transaccion"] = pd.to_datetime(tx["fecha_transaccion"], errors="coerce")
     if "t_entrada_viaje" in prof.columns:
-        ev_in = prof[event_cols + ["t_entrada_viaje"]].dropna(subset=["tarjeta_id", "t_entrada_viaje"]).copy()
-        if not ev_in.empty:
-            ev_in = ev_in.rename(columns={"t_entrada_viaje": "match_timestamp"})
-            ev_in["match_ref"] = "entrada"
-            events.append(ev_in)
+        prof["t_entrada_viaje"] = pd.to_datetime(prof["t_entrada_viaje"], errors="coerce")
     if "t_salida_viaje" in prof.columns:
-        ev_out = prof[event_cols + ["t_salida_viaje"]].dropna(subset=["tarjeta_id", "t_salida_viaje"]).copy()
-        if not ev_out.empty:
-            ev_out = ev_out.rename(columns={"t_salida_viaje": "match_timestamp"})
-            ev_out["match_ref"] = "salida"
-            events.append(ev_out)
+        prof["t_salida_viaje"] = pd.to_datetime(prof["t_salida_viaje"], errors="coerce")
 
-    if not events:
+    keep_prof = [c for c in [
+        "tarjeta_id", "t_entrada_viaje", "t_salida_viaje", "servicio_label",
+        "linea", "direccion", "servicio_final", "viaje_idx", "origen", "destino"
+    ] if c in prof.columns]
+    if not {"tarjeta_id", "servicio_label"}.issubset(set(keep_prof)):
+        return pd.DataFrame(), empty_summary, empty_stats
+    if not any(c in keep_prof for c in ["t_entrada_viaje", "t_salida_viaje"]):
         return pd.DataFrame(), empty_summary, empty_stats
 
-    events_df = pd.concat(events, ignore_index=True, copy=False)
-    events_df = events_df.dropna(subset=["tarjeta_id", "match_timestamp", "servicio_label"]).copy()
-    if events_df.empty:
+    tx = tx.dropna(subset=["tarjeta_id", "fecha_transaccion", "monto_transaccion"]).copy()
+    prof = prof[keep_prof].copy()
+    prof = prof.dropna(subset=["tarjeta_id", "servicio_label"], how="any").copy()
+    # conservar filas que tengan al menos una referencia temporal
+    valid_time_mask = False
+    if "t_entrada_viaje" in prof.columns:
+        valid_time_mask = valid_time_mask | prof["t_entrada_viaje"].notna()
+    if "t_salida_viaje" in prof.columns:
+        valid_time_mask = valid_time_mask | prof["t_salida_viaje"].notna()
+    prof = prof[valid_time_mask].copy()
+
+    empty_stats["turnstile_total"] = int(len(tx))
+    if tx.empty or prof.empty:
         return pd.DataFrame(), empty_summary, empty_stats
 
-    # Prefiltro temporal global para reducir aún más la búsqueda.
-    tol = pd.Timedelta(minutes=float(tolerance_minutes))
-    t_min = tx["fecha_transaccion"].min() - tol
-    t_max = tx["fecha_transaccion"].max() + tol
-    events_df = events_df[(events_df["match_timestamp"] >= t_min) & (events_df["match_timestamp"] <= t_max)].copy()
-    if events_df.empty:
+    tx["turnstile_tx_id"] = pd.to_numeric(tx.get("turnstile_tx_id"), errors="coerce")
+    if tx["turnstile_tx_id"].isna().all():
+        tx["turnstile_tx_id"] = np.arange(1, len(tx) + 1)
+    tx["turnstile_tx_id"] = tx["turnstile_tx_id"].astype(int)
+
+    # Pre-filtro de fecha: reduce el producto cartesiano antes del merge
+    if "fecha_transaccion" in tx.columns and tx["fecha_transaccion"].notna().any():
+        tx_dates = set(tx["fecha_transaccion"].dt.date.dropna())
+        if tx_dates:
+            prof_date_mask = pd.Series(False, index=prof.index)
+            if "t_entrada_viaje" in prof.columns:
+                prof_date_mask |= pd.to_datetime(prof["t_entrada_viaje"], errors="coerce").dt.date.isin(tx_dates)
+            if "t_salida_viaje" in prof.columns:
+                prof_date_mask |= pd.to_datetime(prof["t_salida_viaje"], errors="coerce").dt.date.isin(tx_dates)
+            prof = prof[prof_date_mask].copy()
+
+    merged = tx.merge(prof, how="inner", on="tarjeta_id", suffixes=("", "_perfil"))
+    if merged.empty:
         return pd.DataFrame(), empty_summary, empty_stats
 
-    tx = tx.sort_values(["fecha_transaccion", "tarjeta_id", "turnstile_tx_id"], kind="stable").reset_index(drop=True)
-    events_df = events_df.sort_values(["match_timestamp", "tarjeta_id", "servicio_label"], kind="stable").reset_index(drop=True)
+    # Diferencia contra entrada y salida
+    if "t_entrada_viaje" in merged.columns:
+        merged["diff_entrada_min"] = (merged["fecha_transaccion"] - merged["t_entrada_viaje"]).abs().dt.total_seconds() / 60.0
+    else:
+        merged["diff_entrada_min"] = np.nan
 
-    try:
-        matched_df = pd.merge_asof(
-            tx,
-            events_df,
-            left_on="fecha_transaccion",
-            right_on="match_timestamp",
-            by="tarjeta_id",
-            direction="nearest",
-            tolerance=tol,
-            suffixes=("", "_perfil"),
-        )
-        matched_df = matched_df.dropna(subset=["match_timestamp", "servicio_label"]).copy()
-    except Exception:
-        # Respaldo conservador: procesa por tarjeta para evitar producto cartesiano global.
-        chunks = []
-        events_by_card = {k: g.sort_values("match_timestamp") for k, g in events_df.groupby("tarjeta_id", sort=False)}
-        for card, tx_card in tx.groupby("tarjeta_id", sort=False):
-            ev_card = events_by_card.get(card)
-            if ev_card is None or ev_card.empty:
-                continue
-            temp = pd.merge_asof(
-                tx_card.sort_values("fecha_transaccion"),
-                ev_card.sort_values("match_timestamp"),
-                left_on="fecha_transaccion",
-                right_on="match_timestamp",
-                direction="nearest",
-                tolerance=tol,
-                suffixes=("", "_perfil"),
-            )
-            chunks.append(temp)
-        matched_df = pd.concat(chunks, ignore_index=True, copy=False) if chunks else pd.DataFrame()
-        if not matched_df.empty:
-            matched_df = matched_df.dropna(subset=["match_timestamp", "servicio_label"]).copy()
+    if "t_salida_viaje" in merged.columns:
+        merged["diff_salida_min"] = (merged["fecha_transaccion"] - merged["t_salida_viaje"]).abs().dt.total_seconds() / 60.0
+    else:
+        merged["diff_salida_min"] = np.nan
 
-    if matched_df.empty:
+    merged["match_diff_min"] = merged[["diff_entrada_min", "diff_salida_min"]].min(axis=1, skipna=True)
+    merged["match_ref"] = np.where(
+        merged["diff_salida_min"].fillna(np.inf) < merged["diff_entrada_min"].fillna(np.inf),
+        "salida",
+        "entrada",
+    )
+
+    # timestamp de referencia efectivamente usado
+    merged["match_timestamp"] = np.where(
+        merged["match_ref"] == "salida",
+        merged.get("t_salida_viaje"),
+        merged.get("t_entrada_viaje"),
+    )
+    merged["match_timestamp"] = pd.to_datetime(merged["match_timestamp"], errors="coerce")
+
+    merged = merged[merged["match_diff_min"] <= float(tolerance_minutes)].copy()
+    if merged.empty:
         return pd.DataFrame(), empty_summary, empty_stats
-
-    matched_df["match_diff_min"] = (
-        matched_df["fecha_transaccion"] - matched_df["match_timestamp"]
-    ).abs().dt.total_seconds() / 60.0
 
     matched_df = (
-        matched_df.sort_values(["turnstile_tx_id", "match_diff_min", "match_timestamp"], kind="stable")
+        merged.sort_values(["turnstile_tx_id", "match_diff_min", "match_timestamp"], kind="stable")
         .drop_duplicates(subset=["turnstile_tx_id"], keep="first")
         .reset_index(drop=True)
     )
@@ -1363,11 +1322,6 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
         "pct_match_salida": (float((matched_df["match_ref"] == "salida").mean()) * 100.0) if not matched_df.empty else np.nan,
     }
 
-    for col in ["linea", "direccion", "servicio_label"]:
-        if col not in matched_df.columns:
-            matched_df[col] = ""
-        matched_df[col] = matched_df[col].fillna("").astype(str).str.strip()
-
     summary = (
         matched_df.groupby(["linea", "direccion", "servicio_label"], as_index=False)
         .agg(
@@ -1379,24 +1333,27 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
             diff_mediana_min=("match_diff_min", "median"),
         )
     )
-
-    ref_summary = (
-        matched_df.groupby(["linea", "direccion", "servicio_label", "match_ref"], as_index=False)
-        .size().rename(columns={"size": "n"})
-        .sort_values(["linea", "direccion", "servicio_label", "n", "match_ref"], ascending=[True, True, True, False, True])
-        .drop_duplicates(subset=["linea", "direccion", "servicio_label"], keep="first")
-        .rename(columns={"match_ref": "match_ref_principal"})
-    )
-    summary = summary.merge(
-        ref_summary[["linea", "direccion", "servicio_label", "match_ref_principal"]],
-        how="left",
-        on=["linea", "direccion", "servicio_label"],
-    )
+    # referencia temporal predominante por servicio
+    if not matched_df.empty:
+        ref_summary = (
+            matched_df.groupby(["linea", "direccion", "servicio_label", "match_ref"], as_index=False)
+            .size().rename(columns={"size": "n"})
+            .sort_values(["linea", "direccion", "servicio_label", "n", "match_ref"], ascending=[True, True, True, False, True])
+            .drop_duplicates(subset=["linea", "direccion", "servicio_label"], keep="first")
+            .rename(columns={"match_ref": "match_ref_principal"})
+        )
+        summary = summary.merge(
+            ref_summary[["linea", "direccion", "servicio_label", "match_ref_principal"]],
+            how="left",
+            on=["linea", "direccion", "servicio_label"],
+        )
+    else:
+        summary["match_ref_principal"] = np.nan
     return matched_df, summary, stats
 
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
+@st.cache_data
 def load_itinerary_reference(data_path_str: str):
     """
     Carga la base de itinerario generada desde PDF.
@@ -1571,7 +1528,8 @@ def enrich_service_summary_with_itinerary(summary_df: pd.DataFrame,
     return enriched
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=CACHE_MAX_ENTRIES, show_spinner=False)
+@st.cache_data
+
 def load_service_order_reference(data_path_str: str):
     """
     Carga el orden operativo de servicios para usarlo en el selector y en el eje X.
@@ -2237,45 +2195,38 @@ def build_transactional_service_profile(service_tx: pd.DataFrame) -> pd.DataFram
     profile["D_bajadas"] = pd.to_numeric(profile["D_bajadas"], errors="coerce").fillna(0)
 
     # ── Vectorized onboard calculation: O(K) instead of O(N×K) ─────────────────
-    # Build boarding/alighting sparse arrays, then cumsum to get passengers onboard.
-    # Robusto ante casos vacíos: si no hay estaciones o no hay tx válidos, llena con 0.
+    # Build boarding/alighting sparse arrays, then cumsum to get passengers onboard
     n_stations = len(order_df)
-    if n_stations == 0:
-        profile["L_in_abordo"]  = []
-        profile["L_out_abordo"] = []
-    else:
-        board_arr  = np.zeros(n_stations, dtype=np.int64)
-        alight_arr = np.zeros(n_stations, dtype=np.int64)
+    board_arr  = np.zeros(n_stations, dtype=np.int64)
+    alight_arr = np.zeros(n_stations, dtype=np.int64)
 
-        if not valid_tx.empty:
-            orig_arr = valid_tx["origen_idx"].to_numpy(dtype=np.int64)
-            dest_arr = valid_tx["destino_idx"].to_numpy(dtype=np.int64)
-            # np.add.at hace acumulación segura aunque haya índices repetidos;
-            # también es más rápido que el loop Python.
-            mask_o = (orig_arr >= 0) & (orig_arr < n_stations)
-            mask_d = (dest_arr >= 0) & (dest_arr < n_stations)
-            np.add.at(board_arr,  orig_arr[mask_o], 1)
-            np.add.at(alight_arr, dest_arr[mask_d], 1)
+    orig_arr = valid_tx["origen_idx"].to_numpy(dtype=np.int64)
+    dest_arr = valid_tx["destino_idx"].to_numpy(dtype=np.int64)
 
-        # L_in_abordo[i]  = pasajeros a bordo cuando el tren llega a la estación i
-        #                 = cumsum(board) hasta i-1 - cumsum(alight) hasta i-1
-        # L_out_abordo[i] = pasajeros a bordo después de partir de la estación i
-        #                 = cumsum(board) hasta i   - cumsum(alight) hasta i
-        cum_board  = np.cumsum(board_arr)
-        cum_alight = np.cumsum(alight_arr)
+    # Count boardings at each origin station and alightings at each destination
+    for idx in orig_arr:
+        if 0 <= idx < n_stations:
+            board_arr[idx] += 1
+    for idx in dest_arr:
+        if 0 <= idx < n_stations:
+            alight_arr[idx] += 1
 
-        station_indices = profile["station_idx"].to_numpy(dtype=np.int64)
-        # Clamp por seguridad (si por error hubiera índices fuera de rango)
-        safe_indices = np.clip(station_indices, 0, n_stations - 1) if n_stations > 0 else station_indices
-        prev_indices = np.clip(safe_indices - 1, 0, n_stations - 1) if n_stations > 0 else safe_indices
+    # L_in_abordo[i]  = passengers already on board as train arrives at station i
+    #                 = cumsum(board) up to i-1 - cumsum(alight) up to i-1
+    # L_out_abordo[i] = passengers on board after train departs station i
+    #                 = cumsum(board) up to i   - cumsum(alight) up to i
+    cum_board  = np.cumsum(board_arr)
+    cum_alight = np.cumsum(alight_arr)
 
-        l_in_arr  = np.where(safe_indices > 0,
-                             cum_board[prev_indices] - cum_alight[prev_indices],
-                             0)
-        l_out_arr = cum_board[safe_indices] - cum_alight[safe_indices]
+    # station indices in profile order
+    station_indices = profile["station_idx"].to_numpy(dtype=np.int64)
+    l_in_arr  = np.where(station_indices > 0,
+                         cum_board[station_indices - 1] - cum_alight[station_indices - 1],
+                         0)
+    l_out_arr = cum_board[station_indices] - cum_alight[station_indices]
 
-        profile["L_in_abordo"]  = l_in_arr.tolist()
-        profile["L_out_abordo"] = l_out_arr.tolist()
+    profile["L_in_abordo"]  = l_in_arr.tolist()
+    profile["L_out_abordo"] = l_out_arr.tolist()
 
     profile["t_arr_est"] = pd.to_datetime(profile["t_arr_est"], errors="coerce")
     profile["t_dep_est"] = pd.to_datetime(profile["t_dep_est"], errors="coerce")
@@ -2351,31 +2302,23 @@ def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure
                                   line=dict(color=TEXT_MUTED, width=2, dash="dash"),
                                   hovertemplate="Capacidad: %{y:,.0f}<extra></extra>"))
 
-    # Annotations: una sola llamada a update_layout. Plotly no acepta valores
-    # Categorical en annotations.x → se convierte explícitamente a str.
+    # Batch annotations: una sola llamada a update_layout en vez de N add_annotation
     _abordo_rows = plot_df.dropna(subset=["L_out_abordo"])
     if not _abordo_rows.empty:
-        _annots = []
-        for _, row in _abordo_rows.iterrows():
-            est_val = row["estacion"]
-            try:
-                est_str = str(est_val) if est_val is not None and not (isinstance(est_val, float) and pd.isna(est_val)) else ""
-            except Exception:
-                est_str = ""
-            if not est_str:
-                continue
-            _annots.append(dict(
-                x=est_str, y=row["L_out_abordo"],
+        _annots = [
+            dict(
+                x=row["estacion"], y=row["L_out_abordo"],
                 text=fmt_pax(row["L_out_abordo"]),
                 showarrow=False, yshift=18,
                 font=dict(size=PLOT_ANNOTATION_SIZE, color=SUCCESS),
                 bgcolor="rgba(255,255,255,0.96)",
                 bordercolor=SUCCESS, borderwidth=1, borderpad=3,
                 align="center", xref="x", yref="y",
-            ))
-        if _annots:
-            existing_annots = list(fig.layout.annotations or [])
-            fig.update_layout(annotations=existing_annots + _annots)
+            )
+            for _, row in _abordo_rows.iterrows()
+        ]
+        existing_annots = list(fig.layout.annotations or [])
+        fig.update_layout(annotations=existing_annots + _annots)
 
     fig.update_layout(
         title=titulo, plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
@@ -3485,7 +3428,7 @@ def render_kpis():
         if "observacion" in detalle_kpi.columns:
             show_cols.append("observacion")
             rename_map["observacion"] = "Observación"
-        st.dataframe(safe_dataframe(detalle_kpi[show_cols].rename(columns=rename_map)),
+        st.dataframe(detalle_kpi[show_cols].rename(columns=rename_map),
                      use_container_width=True, hide_index=True)
     else:
         st.info("No existe detalle para el KPI seleccionado.")
@@ -3584,7 +3527,7 @@ def render_personas():
     rename_map = {"nombre_iniciativa":"Iniciativa","servicio":"Servicio","estado":"Estado",
                   "avance_pct":"Avance %","fecha_inicio":"Inicio","fecha_fin":"Fin",
                   "prioridad":"Prioridad","comentario":"Comentario","criticidad":"Criticidad"}
-    st.dataframe(safe_dataframe(per_df[detalle_cols].rename(columns=rename_map)),
+    st.dataframe(per_df[detalle_cols].rename(columns=rename_map),
                  use_container_width=True, hide_index=True)
     st.markdown("</div></div>", unsafe_allow_html=True)
 
@@ -3732,59 +3675,7 @@ def month_period_to_label(period_value) -> str:
     return f"{_MESES_LARGO.get(int(ts.month), str(ts.month))} {int(ts.year)}"
 
 
-def compute_monthly_executive_metrics(monthly_daily: pd.DataFrame,
-                                      capacity_reference: float = 605.0) -> dict:
-    """Calcula indicadores ejecutivos mensuales sobre el resumen diario por servicio."""
-    if monthly_daily is None or monthly_daily.empty:
-        return {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
-
-    base = monthly_daily.copy()
-    base["_tx"] = pd.to_numeric(base.get("tx_cruzadas"), errors="coerce").fillna(0)
-    base["_tarifa"] = pd.to_numeric(base.get("tarifa_media_aprox"), errors="coerce")
-    base["_pax"] = pd.to_numeric(base.get("pasajeros_transportados"), errors="coerce").fillna(0)
-    base["_tarifa_x_tx"] = base["_tarifa"].fillna(0) * base["_tx"]
-
-    def _calc_metrics(df_group: pd.DataFrame) -> dict:
-        if df_group is None or df_group.empty:
-            return {"tarifa_media_mensual": np.nan, "tasa_ocupacion_mensual": np.nan, "servicios_realizados": 0, "pasajeros_transportados": 0.0, "tx_cruzadas": 0.0}
-        tx_sum = float(df_group["_tx"].sum())
-        tarifa_mean = df_group["_tarifa"].mean(skipna=True)
-        if tx_sum > 0 and pd.notna(tarifa_mean):
-            tarifa = float(df_group["_tarifa_x_tx"].sum()) / tx_sum
-        else:
-            tarifa = float(tarifa_mean) if pd.notna(tarifa_mean) else np.nan
-        servicios_realizados = int(len(df_group))
-        pasajeros_transportados = float(df_group["_pax"].sum())
-        denom = servicios_realizados * float(capacity_reference)
-        ocupacion = (pasajeros_transportados / denom * 100.0) if denom > 0 else np.nan
-        return {
-            "tarifa_media_mensual": tarifa,
-            "tasa_ocupacion_mensual": ocupacion,
-            "servicios_realizados": servicios_realizados,
-            "pasajeros_transportados": pasajeros_transportados,
-            "tx_cruzadas": tx_sum,
-        }
-
-    metrics = {
-        "linea": _calc_metrics(base),
-        "por_sentido": {},
-        "por_tipo_dia": {},
-    }
-
-    for dir_val, g in base.groupby("direccion_ref", sort=False):
-        metrics["por_sentido"][str(dir_val)] = _calc_metrics(g)
-
-    for tipo_dia, g_tipo in base.groupby("tipo_dia", sort=False):
-        metrics["por_tipo_dia"][str(tipo_dia)] = {
-            "linea": _calc_metrics(g_tipo),
-            "por_sentido": {},
-        }
-        for dir_val, g_dir in g_tipo.groupby("direccion_ref", sort=False):
-            metrics["por_tipo_dia"][str(tipo_dia)]["por_sentido"][str(dir_val)] = _calc_metrics(g_dir)
-
-    return metrics
-
-
+@st.cache_data(show_spinner="Calculando promedios mensuales…")
 def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
                                               profile_schema: str,
                                               profile_srv: str,
@@ -3793,23 +3684,23 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
                                               itinerary_summary_df: pd.DataFrame,
                                               service_order_df: pd.DataFrame,
                                               turnstile_df: pd.DataFrame,
-                                              turnstile_status: str) -> tuple[dict, list, dict]:
+                                              turnstile_status: str) -> tuple[dict, list]:
     if perfil_df.empty or not month_period or not linea_sel:
-        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+        return {}, []
 
     fecha_series = pd.to_datetime(perfil_df["fecha"], errors="coerce")
     month_mask = fecha_series.dt.to_period("M").astype(str) == str(month_period)
     perfil_mes = perfil_df.loc[month_mask].copy()
     if perfil_mes.empty:
-        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+        return {}, []
 
     perfil_mes = perfil_mes[perfil_mes["linea"].astype(str).str.strip() == str(linea_sel)].copy()
     if perfil_mes.empty:
-        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+        return {}, []
 
     directions = [x for x in list(dict.fromkeys(perfil_mes["direccion"].dropna().astype(str).str.strip().tolist())) if x]
     if not directions:
-        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+        return {}, []
 
     daily_rows = []
     fechas_mes = sorted([x for x in perfil_mes["fecha"].dropna().unique().tolist() if pd.notna(x)])
@@ -3822,7 +3713,7 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
         if normalize_text(profile_srv) == "biotren" and profile_schema == "transactional" and turnstile_status == "ok" and not turnstile_df.empty:
             turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_day].copy()
             if not turnstile_day.empty:
-                _, fare_day_all, _ = match_turnstile_transactions_to_profile(turnstile_day, perfil_day_all, tolerance_minutes=TURNSTILE_MATCH_TOLERANCE_MINUTES)
+                _, fare_day_all, _ = match_turnstile_transactions_to_profile(turnstile_day, perfil_day_all, tolerance_minutes=20)
 
         for dir_sel in directions:
             perfil_day_dir = perfil_day_all[perfil_day_all["direccion"].astype(str).str.strip() == str(dir_sel)].copy()
@@ -3865,10 +3756,9 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
             daily_rows.append(daily_summary)
 
     if not daily_rows:
-        return {}, directions, {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
+        return {}, directions
 
     monthly_daily = pd.concat(daily_rows, ignore_index=True)
-    monthly_metrics = compute_monthly_executive_metrics(monthly_daily, capacity_reference=605.0)
     result = {}
     for tipo_dia in ["Laboral", "Sábado", "Domingo"]:
         result[tipo_dia] = {}
@@ -3890,32 +3780,18 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
 
             grp = temp.groupby("servicio_label", sort=False)
 
-            # Si servicio_display_label no existe en alguna fila (fallback poco común),
-            # créala derivada de servicio_label antes de agregar.
-            if "servicio_display_label" not in temp.columns:
-                temp["servicio_display_label"] = temp["servicio_label"].astype(str)
-
             agg_df = grp.agg(
-                tx_sum               = ("_tx",                  "sum"),
-                tarifa_x_tx_sum      = ("_tarifa_x_tx",         "sum"),
-                tarifa_mean          = ("_tarifa",              "mean"),
-                pax_mean             = ("_pax",                 "mean"),
-                servicio_display_label = ("servicio_display_label", "first"),
+                tx_sum           = ("_tx",          "sum"),
+                tarifa_x_tx_sum  = ("_tarifa_x_tx", "sum"),
+                tarifa_mean      = ("_tarifa",       "mean"),
+                pax_mean         = ("_pax",          "mean"),
             ).reset_index()
 
             # tarifa_mes: weighted if tx_sum > 0 and at least one non-NaN tarifa_mean
             has_weight = (agg_df["tx_sum"] > 0) & agg_df["tarifa_mean"].notna()
-            # Evita divide-by-zero: usa np.divide con where para silenciar warnings
-            with np.errstate(divide="ignore", invalid="ignore"):
-                weighted = np.divide(
-                    agg_df["tarifa_x_tx_sum"].to_numpy(dtype=float),
-                    agg_df["tx_sum"].to_numpy(dtype=float),
-                    out=np.full(len(agg_df), np.nan, dtype=float),
-                    where=(agg_df["tx_sum"].to_numpy(dtype=float) > 0),
-                )
             agg_df["tarifa_media_mes"] = np.where(
                 has_weight,
-                weighted,
+                agg_df["tarifa_x_tx_sum"] / agg_df["tx_sum"],
                 agg_df["tarifa_mean"],
             )
             agg_df["pasajeros_promedio_mes"] = agg_df["pax_mean"]
@@ -3928,38 +3804,12 @@ def build_monthly_profile_tables_by_direction(perfil_df: pd.DataFrame,
             else:
                 agg_df["servicio_orden_idx"] = np.nan
 
-            agg_df["servicio_display_label"] = agg_df["servicio_display_label"].fillna(agg_df["servicio_label"]).astype(str)
-            result_df = agg_df[["servicio_label", "servicio_display_label", "servicio_orden_idx", "pasajeros_promedio_mes", "tarifa_media_mes"]].copy()
+            result_df = agg_df[["servicio_label", "servicio_orden_idx", "pasajeros_promedio_mes", "tarifa_media_mes"]].copy()
             result_df["servicio_orden_idx"] = pd.to_numeric(result_df["servicio_orden_idx"], errors="coerce")
             result_df = result_df.sort_values(["servicio_orden_idx", "servicio_label"], kind="stable", na_position="last").reset_index(drop=True)
             result[tipo_dia][dir_sel] = result_df
 
-    return result, directions, monthly_metrics
-
-
-@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=MONTHLY_CACHE_MAX_ENTRIES, show_spinner="Calculando promedios mensuales…")
-def build_monthly_profile_tables_by_direction_cached(profile_schema: str,
-                                                     profile_srv: str,
-                                                     month_period: str,
-                                                     linea_sel: str,
-                                                     data_path_str: str):
-    """
-    Wrapper de caché con argumentos livianos.
-    Evita que Streamlit tenga que hashear DataFrames completos por cada usuario/sesión.
-    """
-    perfil_df_local, _, _, _, perfil_status_local = load_profile_service_data(profile_srv, data_path_str)
-    if perfil_status_local != "ok" or perfil_df_local.empty:
-        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}
-
-    itinerary_summary_local, _, _, _, _ = load_itinerary_reference(data_path_str)
-    service_order_local, _, _, _ = load_service_order_reference(data_path_str)
-    turnstile_local, _, _, _, turnstile_status_local = load_turnstile_service_data(profile_srv, data_path_str)
-
-    return build_monthly_profile_tables_by_direction(
-        perfil_df_local, profile_schema, profile_srv, month_period, linea_sel,
-        itinerary_summary_local, service_order_local, turnstile_local, turnstile_status_local,
-    )
-
+    return result, directions
 
 def render_perfil_carga(default_service: str | None = None):
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
@@ -4058,12 +3908,13 @@ def render_perfil_carga(default_service: str | None = None):
                 schema_local = profile_schema
 
             turnstile_day = pd.DataFrame()
+            turnstile_match_df = pd.DataFrame()
             service_fare_summary = pd.DataFrame()
             turnstile_stats = {"turnstile_total": 0, "matched_total": 0, "match_pct": np.nan, "diff_mediana_min": np.nan, "tolerance_minutes": 20}
             if normalize_text(profile_srv) == "biotren" and schema_local == "transactional" and turnstile_status == "ok" and not turnstile_df.empty:
                 turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_sel].copy()
                 if not turnstile_day.empty:
-                    _, service_fare_summary, turnstile_stats = match_turnstile_transactions_to_profile(turnstile_day, perfil_fecha, tolerance_minutes=TURNSTILE_MATCH_TOLERANCE_MINUTES)
+                    turnstile_match_df, service_fare_summary, turnstile_stats = match_turnstile_transactions_to_profile(turnstile_day, perfil_fecha, tolerance_minutes=20)
 
             service_summary = build_service_level_summary(perfil_dir, schema_local)
             service_summary = enrich_service_summary_with_itinerary(
@@ -4202,6 +4053,25 @@ def render_perfil_carga(default_service: str | None = None):
                         st.metric("Tarifa media aprox. servicio", fmt_number(tarifa_media_sel, "CLP") if pd.notna(tarifa_media_sel) else "-")
                         st.metric("Recaudación aprox. servicio", fmt_number(recaudacion_sel, "CLP") if pd.notna(recaudacion_sel) else "-")
 
+                    passenger_type_comp = build_passenger_type_composition(
+                        turnstile_match_df,
+                        linea_sel,
+                        dir_sel,
+                        servicio_sel,
+                    )
+                    if not passenger_type_comp.empty and float(pd.to_numeric(passenger_type_comp["tx_tipo"], errors="coerce").fillna(0).sum()) > 0:
+                        st.markdown("<div class='section-title'>Composición por tipo de pasajero</div>", unsafe_allow_html=True)
+                        st.markdown("<div class='section-subtitle'>Indicadores calculados sobre las transacciones de torniquete cruzadas al servicio seleccionado.</div>", unsafe_allow_html=True)
+                        pt_cols = st.columns(len(PASSENGER_TYPE_DISPLAY_ORDER))
+                        for idx, tipo in enumerate(PASSENGER_TYPE_DISPLAY_ORDER):
+                            row_tipo = passenger_type_comp[passenger_type_comp["tipo_pasajero_norm"] == tipo].head(1)
+                            tx_tipo = float(pd.to_numeric(row_tipo["tx_tipo"], errors="coerce").iloc[0]) if not row_tipo.empty else 0.0
+                            pct_tipo = float(pd.to_numeric(row_tipo["pct_tx_tipo"], errors="coerce").iloc[0]) if not row_tipo.empty else 0.0
+                            tarifa_tipo = pd.to_numeric(row_tipo["tarifa_media_tipo"], errors="coerce").iloc[0] if not row_tipo.empty else np.nan
+                            with pt_cols[idx]:
+                                st.metric(tipo, fmt_pax(tx_tipo), fmt_pct(pct_tipo))
+                                st.caption(f"Tarifa media: {fmt_number(tarifa_tipo, 'CLP') if pd.notna(tarifa_tipo) else '-'}")
+
                     st.caption(
                         f"La recaudación aproximada se calcula como tarifa media aproximada × pasajeros transportados del servicio seleccionado. "
                         f"La tasa de ocupación de línea se calcula como pasajeros transportados totales de la línea / (servicios realizados × {int(capacidad_referencia_linea)} pasajeros). "
@@ -4262,7 +4132,7 @@ def render_perfil_carga(default_service: str | None = None):
                             detalle_servicios["Recaudación aprox."] = pd.to_numeric(detalle_servicios["recaudacion_aprox"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
                         visible_cols = ["Servicio", "Hora salida", "Estación origen", "Pasajeros transportados", "Máximo a bordo", "Tx cruzadas", "Tarifa media aprox.", "Recaudación aprox."]
                         visible_cols = [c for c in visible_cols if c in detalle_servicios.columns]
-                        st.dataframe(safe_dataframe(detalle_servicios[visible_cols]), use_container_width=True, hide_index=True)
+                        st.dataframe(detalle_servicios[visible_cols], use_container_width=True, hide_index=True)
 
     with tab_mensual:
         st.markdown("<div class='section-title'>Promedio mensual por tipo de día</div>", unsafe_allow_html=True)
@@ -4294,43 +4164,16 @@ def render_perfil_carga(default_service: str | None = None):
         if not month_sel or not linea_mes_sel:
             st.info("No existen datos mensuales disponibles para los filtros seleccionados.")
         else:
-            tablas_mensuales, directions, monthly_metrics = build_monthly_profile_tables_by_direction_cached(
-                profile_schema, profile_srv, month_sel, linea_mes_sel, str(data_path)
+            tablas_mensuales, directions = build_monthly_profile_tables_by_direction(
+                perfil_df, profile_schema, profile_srv, month_sel, linea_mes_sel,
+                itinerary_summary_df, service_order_df, turnstile_df, turnstile_status,
             )
             if not tablas_mensuales:
                 st.info("No existen datos mensuales para la línea y mes seleccionados.")
             else:
                 st.caption(f"Mes analizado: {month_period_to_label(month_sel)} · Línea: {linea_mes_sel}")
-
-                line_metrics = monthly_metrics.get("linea", {}) if isinstance(monthly_metrics, dict) else {}
-                st.markdown("<div class='section-title' style='font-size:0.95rem'>Indicadores ejecutivos mensuales</div>", unsafe_allow_html=True)
-                m1, m2 = st.columns(2)
-                with m1:
-                    st.metric("Tarifa media mensual por línea", fmt_number(line_metrics.get("tarifa_media_mensual"), "CLP") if pd.notna(line_metrics.get("tarifa_media_mensual")) else "-")
-                with m2:
-                    st.metric("Tasa de ocupación mensual por línea", fmt_pct(line_metrics.get("tasa_ocupacion_mensual")) if pd.notna(line_metrics.get("tasa_ocupacion_mensual")) else "-")
-
-                dir_metrics_all = monthly_metrics.get("por_sentido", {}) if isinstance(monthly_metrics, dict) else {}
-                if directions:
-                    st.markdown("<div class='section-subtitle'>Indicadores mensuales por sentido</div>", unsafe_allow_html=True)
-                    dir_cols = st.columns(max(1, min(2, len(directions))))
-                    for idx, dir_val in enumerate(directions[:2]):
-                        with dir_cols[idx]:
-                            dm = dir_metrics_all.get(str(dir_val), {})
-                            st.markdown(f"<div class='map-note'><b>{dir_val}</b></div>", unsafe_allow_html=True)
-                            st.metric("Tarifa media mensual", fmt_number(dm.get("tarifa_media_mensual"), "CLP") if pd.notna(dm.get("tarifa_media_mensual")) else "-")
-                            st.metric("Tasa de ocupación mensual", fmt_pct(dm.get("tasa_ocupacion_mensual")) if pd.notna(dm.get("tasa_ocupacion_mensual")) else "-")
-
                 for tipo_dia in ["Laboral", "Sábado", "Domingo"]:
                     st.markdown(f"<div class='section-title' style='font-size:0.95rem'>{tipo_dia}</div>", unsafe_allow_html=True)
-                    tipo_metrics = monthly_metrics.get("por_tipo_dia", {}).get(tipo_dia, {}) if isinstance(monthly_metrics, dict) else {}
-                    tipo_line = tipo_metrics.get("linea", {}) if isinstance(tipo_metrics, dict) else {}
-                    tm1, tm2 = st.columns(2)
-                    with tm1:
-                        st.metric(f"Tarifa media mensual por línea | {tipo_dia}", fmt_number(tipo_line.get("tarifa_media_mensual"), "CLP") if pd.notna(tipo_line.get("tarifa_media_mensual")) else "-")
-                    with tm2:
-                        st.metric(f"Tasa de ocupación mensual por línea | {tipo_dia}", fmt_pct(tipo_line.get("tasa_ocupacion_mensual")) if pd.notna(tipo_line.get("tasa_ocupacion_mensual")) else "-")
-
                     dir_list = directions[:2] if directions else []
                     if not dir_list:
                         st.info(f"No existen datos para {tipo_dia.lower()}.")
@@ -4339,20 +4182,14 @@ def render_perfil_carga(default_service: str | None = None):
                     showed_any = False
                     for idx, dir_val in enumerate(dir_list):
                         with cols[idx]:
-                            dm_tipo = tipo_metrics.get("por_sentido", {}).get(str(dir_val), {}) if isinstance(tipo_metrics, dict) else {}
                             st.markdown(f"<div class='map-note'><b>Dirección:</b> {dir_val}</div>", unsafe_allow_html=True)
-                            d1, d2 = st.columns(2)
-                            with d1:
-                                st.metric("Tarifa media mensual", fmt_number(dm_tipo.get("tarifa_media_mensual"), "CLP") if pd.notna(dm_tipo.get("tarifa_media_mensual")) else "-")
-                            with d2:
-                                st.metric("Tasa de ocupación mensual", fmt_pct(dm_tipo.get("tasa_ocupacion_mensual")) if pd.notna(dm_tipo.get("tasa_ocupacion_mensual")) else "-")
                             tabla_dir = tablas_mensuales.get(tipo_dia, {}).get(dir_val, pd.DataFrame())
                             if tabla_dir is None or tabla_dir.empty:
                                 st.info("Sin datos para esta dirección.")
                             else:
                                 showed_any = True
                                 tabla_show = tabla_dir.copy()
-                                tabla_show["Servicio"] = tabla_show.get("servicio_display_label", tabla_show["servicio_label"])
+                                tabla_show["Servicio"] = tabla_show["servicio_label"]
                                 tabla_show["Pasajeros Promedio Mes"] = pd.to_numeric(tabla_show["pasajeros_promedio_mes"], errors="coerce").apply(fmt_avg_pax)
                                 tabla_show["Tarifa Media Mes"] = pd.to_numeric(tabla_show["tarifa_media_mes"], errors="coerce").apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
                                 st.dataframe(
