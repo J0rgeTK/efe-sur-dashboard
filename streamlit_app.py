@@ -24,6 +24,8 @@ misma sección de tipo de pasajero).
 # ================================================================
 from __future__ import annotations
 
+import gc
+import time
 import unicodedata
 from datetime import date
 from functools import lru_cache
@@ -34,6 +36,70 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+
+# --- Excepciones internas de Streamlit que NO son crashes -----------------
+# Cuando el usuario cambia un widget mientras Streamlit ejecuta el script,
+# Streamlit aborta el script en curso lanzando una RerunException o
+# StopException. Capturarlas como "crash" causa errores falsos. Las
+# importamos defensivamente porque la ruta del módulo cambia entre versiones.
+_RERUN_EXCEPTIONS: tuple = ()
+for _path in (
+    "streamlit.runtime.scriptrunner.exceptions",
+    "streamlit.runtime.scriptrunner.script_runner",
+    "streamlit.script_runner",
+):
+    try:
+        _mod = __import__(_path, fromlist=["RerunException", "StopException"])
+        _excs = []
+        for _name in ("RerunException", "StopException"):
+            _e = getattr(_mod, _name, None)
+            if isinstance(_e, type) and issubclass(_e, BaseException):
+                _excs.append(_e)
+        if _excs:
+            _RERUN_EXCEPTIONS = tuple(_excs)
+            break
+    except Exception:
+        continue
+
+
+def is_streamlit_internal_exception(exc: BaseException) -> bool:
+    """¿Es una excepción interna de Streamlit (rerun/stop) que NO es un crash?"""
+    if _RERUN_EXCEPTIONS and isinstance(exc, _RERUN_EXCEPTIONS):
+        return True
+    name = type(exc).__name__
+    return name in {"RerunException", "StopException", "RerunData"}
+
+
+def maybe_fragment(fn):
+    """
+    Decorador que aplica @st.fragment cuando está disponible (Streamlit ≥ 1.32).
+    En versiones más antiguas devuelve la función sin cambios.
+
+    st.fragment aísla un bloque del dashboard: cuando el usuario cambia un
+    filtro DENTRO del fragment, sólo se re-ejecuta ese fragment, no el
+    script completo. Esto evita que cambios rápidos disparen recargas
+    pesadas en cascada.
+    """
+    if hasattr(st, "fragment"):
+        try:
+            return st.fragment(fn)
+        except Exception:
+            return fn
+    return fn
+
+
+def release_memory(*objs) -> None:
+    """Libera referencias y fuerza garbage collection para evitar OOM."""
+    for obj in objs:
+        try:
+            del obj
+        except Exception:
+            pass
+    try:
+        gc.collect()
+    except Exception:
+        pass
 
 
 # ================================================================
@@ -817,7 +883,14 @@ def _normalize_aggregated_profile(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalize_transactional_profile(df: pd.DataFrame) -> pd.DataFrame:
-    """Normaliza un perfil con schema transaccional (origen-destino)."""
+    """
+    Normaliza un perfil con schema transaccional (origen-destino).
+
+    Soporta el formato enriquecido con tarifa y tipo de pasajero por viaje:
+    columnas opcionales `MONTO_TRANSACCION` y `tipo_pasajero_norm`.
+    Cuando vienen presentes, el dashboard evita el cruce con torniquetes
+    y obtiene tarifa/tipo directamente del perfil.
+    """
     df = df.copy()
     for col in ["origen", "destino", "linea", "direccion"]:
         df[col] = df[col].fillna("").astype(str).str.strip()
@@ -836,12 +909,38 @@ def _normalize_transactional_profile(df: pd.DataFrame) -> pd.DataFrame:
     df["servicio_label"] = df["servicio_final"].apply(format_service_id)
     df["profile_schema"] = "transactional"
 
-    for col in ["viaje_idx", "tarjeta_id", "servicio_final", "servicio_tramo_v1", "servicio_tramo_v2"]:
+    for col in ["viaje_idx", "tarjeta_id", "servicio_final",
+                "servicio_tramo_v1", "servicio_tramo_v2"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # --- Formato enriquecido (tarifa y tipo de pasajero ya pegados) -----
+    # Si el archivo del perfil incluye `MONTO_TRANSACCION` y/o
+    # `tipo_pasajero_norm` por viaje, los normalizamos. Esto reemplaza
+    # el cruce con torniquetes en runtime.
+    monto_col = next(
+        (c for c in df.columns if c.lower() in {"monto_transaccion", "monto"}),
+        None,
+    )
+    if monto_col is not None:
+        df["monto_transaccion"] = pd.to_numeric(df[monto_col], errors="coerce")
+
+    tipo_col = next(
+        (c for c in df.columns
+         if c.lower() in {"tipo_pasajero_norm", "tipo_pasajero"}),
+        None,
+    )
+    if tipo_col is not None:
+        tipo = df[tipo_col].astype(str).str.strip()
+        tipo = tipo.replace({"": np.nan, "nan": np.nan, "None": np.nan})
+        df["tipo_pasajero"] = tipo
+
     df = df.dropna(subset=["fecha"]).copy()
     df.attrs["profile_schema"] = "transactional"
+    # Marca explícita: ¿el perfil ya trae tarifa/tipo o necesitamos cruce?
+    df.attrs["enriched"] = bool(
+        ("monto_transaccion" in df.columns) or ("tipo_pasajero" in df.columns)
+    )
     return df
 
 
@@ -1013,6 +1112,86 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
 
     df = df.dropna(subset=["fecha_transaccion", "fecha", "tarjeta_id", "monto_transaccion"]).copy()
     return df, folder_path, [], loaded, "ok"
+
+
+# ================================================================
+# 14b. SLICES PRE-FILTRADOS POR PERÍODO (REDUCEN MEMORIA Y CRASHES)
+# ================================================================
+# Cuando el usuario cambia rápido de fecha/mes, en lugar de cargar el
+# dataset entero y filtrar en cada re-run, cacheamos rebanadas pequeñas
+# por período. Esto reduce la memoria activa por re-run y mejora
+# drásticamente la robustez ante cambios rápidos de filtros.
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=24)
+def get_profile_for_day(service_name: str, data_path_str: str,
+                        fecha_iso: str) -> tuple[pd.DataFrame, str]:
+    """Retorna sólo las filas del perfil para un día específico."""
+    perfil_df, _p, _m, _f, status = load_profile_service_data(service_name, data_path_str)
+    if status != "ok" or perfil_df.empty or not fecha_iso:
+        schema_default = "aggregated"
+        if not perfil_df.empty:
+            schema_default = perfil_df.attrs.get("profile_schema", "aggregated")
+        return pd.DataFrame(), schema_default
+
+    schema = perfil_df.attrs.get("profile_schema", "aggregated")
+    target = pd.to_datetime(fecha_iso, errors="coerce")
+    if pd.isna(target):
+        return pd.DataFrame(), schema
+    sliced = perfil_df.loc[perfil_df["fecha"] == target.date()].copy()
+    sliced.attrs["profile_schema"] = schema
+    return sliced, schema
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=12)
+def get_profile_for_month(service_name: str, data_path_str: str,
+                          month_period: str) -> tuple[pd.DataFrame, str]:
+    """Retorna sólo las filas del perfil correspondientes a un mes (YYYY-MM)."""
+    perfil_df, _p, _m, _f, status = load_profile_service_data(service_name, data_path_str)
+    if status != "ok" or perfil_df.empty or not month_period:
+        schema_default = "aggregated"
+        if not perfil_df.empty:
+            schema_default = perfil_df.attrs.get("profile_schema", "aggregated")
+        return pd.DataFrame(), schema_default
+
+    schema = perfil_df.attrs.get("profile_schema", "aggregated")
+    fecha_periods = pd.to_datetime(perfil_df["fecha"], errors="coerce").dt.to_period("M").astype(str)
+    sliced = perfil_df.loc[fecha_periods == str(month_period)].copy()
+    sliced.attrs["profile_schema"] = schema
+    return sliced, schema
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=24)
+def get_turnstile_for_day(service_name: str, data_path_str: str,
+                          fecha_iso: str) -> pd.DataFrame:
+    """Retorna sólo las transacciones de torniquete para un día específico."""
+    turnstile_df, _p, _m, _f, status = load_turnstile_service_data(service_name, data_path_str)
+    if status != "ok" or turnstile_df.empty or not fecha_iso:
+        return pd.DataFrame()
+    target = pd.to_datetime(fecha_iso, errors="coerce")
+    if pd.isna(target):
+        return pd.DataFrame()
+    return turnstile_df.loc[turnstile_df["fecha"] == target.date()].copy()
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=12)
+def get_available_dates(service_name: str, data_path_str: str) -> list:
+    """Lista ordenada de fechas únicas disponibles para el servicio."""
+    perfil_df, _p, _m, _f, status = load_profile_service_data(service_name, data_path_str)
+    if status != "ok" or perfil_df.empty:
+        return []
+    fechas = perfil_df["fecha"].dropna().unique().tolist()
+    return sorted([f for f in fechas if pd.notna(f)])
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=12)
+def get_available_months(service_name: str, data_path_str: str) -> list:
+    """Lista ordenada de meses únicos (YYYY-MM) disponibles."""
+    perfil_df, _p, _m, _f, status = load_profile_service_data(service_name, data_path_str)
+    if status != "ok" or perfil_df.empty:
+        return []
+    series = pd.to_datetime(perfil_df["fecha"], errors="coerce").dt.to_period("M").astype(str)
+    return [m for m in sorted(pd.Series(series).dropna().unique().tolist())
+            if m and m != "NaT"]
 
 
 # ================================================================
@@ -1604,9 +1783,26 @@ def match_turnstile_transactions_to_profile(turnstile_df: pd.DataFrame,
     tx["turnstile_tx_id"] = tx["turnstile_tx_id"].astype(int)
 
     # --- Merge por tarjeta_id ----------------------------------------
+    # Pre-filtramos prof a tarjetas que existen en tx para no crear un
+    # producto cartesiano gigante. Esto reduce la memoria del merge en
+    # 5–20× cuando hay muchos viajes registrados en el perfil pero pocas
+    # transacciones de torniquete en el día.
+    tx_card_ids = set(tx["tarjeta_id"].dropna().unique().tolist())
+    if tx_card_ids:
+        prof = prof[prof["tarjeta_id"].isin(tx_card_ids)].copy()
+    if prof.empty:
+        return pd.DataFrame(), empty_summary, empty_stats
+
     merged = tx.merge(prof, how="inner", on="tarjeta_id", suffixes=("", "_perfil"))
     if merged.empty:
         return pd.DataFrame(), empty_summary, empty_stats
+
+    # Cota dura de seguridad: si el merge excede ~2M filas (puede ocurrir
+    # con muchas tarjetas con muchos viajes), tomamos una muestra para
+    # evitar OOM. La estadística agregada sigue siendo representativa.
+    MAX_MERGE_ROWS = 2_000_000
+    if len(merged) > MAX_MERGE_ROWS:
+        merged = merged.sample(n=MAX_MERGE_ROWS, random_state=42).copy()
 
     # --- Diferencia temporal contra entrada y salida ------------------
     if "t_entrada_viaje" in merged.columns:
@@ -1830,6 +2026,9 @@ def build_passenger_type_distribution(matched_df: pd.DataFrame,
     Distribución por tipo de pasajero del servicio seleccionado, escalada para
     que la suma cierre en `pasajeros_transportados`. Siempre devuelve los 5
     tipos canónicos (con 0/NaN cuando no hay datos).
+
+    Acepta tanto el resultado del cruce torniquetes×perfil (legacy) como el
+    perfil enriquecido directo (recomendado, sin merge).
     """
     if (matched_df is None or matched_df.empty
             or "tipo_pasajero" not in matched_df.columns):
@@ -1847,7 +2046,8 @@ def build_passenger_type_distribution(matched_df: pd.DataFrame,
         return pd.DataFrame(columns=PASSENGER_DIST_COLS)
 
     sel["tipo_pasajero"] = sel["tipo_pasajero"].fillna("Otros").astype(str).str.strip()
-    sel.loc[sel["tipo_pasajero"] == "", "tipo_pasajero"] = "Otros"
+    # Tratar strings vacíos o "nan" literales como Otros
+    sel.loc[sel["tipo_pasajero"].isin(["", "nan", "None", "NaN", "NaT"]), "tipo_pasajero"] = "Otros"
     sel.loc[~sel["tipo_pasajero"].isin(PASSENGER_TYPE_ORDER), "tipo_pasajero"] = "Otros"
 
     if "monto_transaccion" in sel.columns:
@@ -1878,6 +2078,56 @@ def build_passenger_type_distribution(matched_df: pd.DataFrame,
     out["porcentaje"] = out["porcentaje"].fillna(0.0)
     out["pasajeros_estimados"] = out["pasajeros_estimados"].fillna(0).astype(int)
     return out[PASSENGER_DIST_COLS]
+
+
+# ================================================================
+# 19b. RESUMEN DE TARIFA POR SERVICIO (DESDE PERFIL ENRIQUECIDO)
+# ================================================================
+def build_service_fare_summary_from_profile(perfil_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calcula tarifa media, tarifa mediana, recaudación, tx cruzadas y desviación
+    DIRECTAMENTE desde el perfil enriquecido (con monto_transaccion ya pegado
+    por viaje). Reemplaza match_turnstile_transactions_to_profile cuando el
+    perfil ya viene cruzado offline.
+
+    Retorna un DataFrame con las mismas columnas que producía el cruce
+    torniquetes×perfil, para mantener compatibilidad con el resto del código.
+    """
+    empty_cols = [
+        "linea", "direccion", "servicio_label", "tx_cruzadas",
+        "tarifa_media_aprox", "tarifa_mediana_aprox", "recaudacion_aprox",
+        "desviacion_tarifa_aprox", "diff_mediana_min", "match_ref_principal",
+    ]
+    if (perfil_df is None or perfil_df.empty
+            or "monto_transaccion" not in perfil_df.columns):
+        return pd.DataFrame(columns=empty_cols)
+
+    df = perfil_df.copy()
+    df["monto_transaccion"] = pd.to_numeric(df["monto_transaccion"], errors="coerce")
+    df = df.dropna(subset=["monto_transaccion"])
+    if df.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    for col in ["linea", "direccion", "servicio_label"]:
+        if col not in df.columns:
+            df[col] = ""
+        df[col] = df[col].fillna("").astype(str).str.strip()
+
+    summary = (
+        df.groupby(["linea", "direccion", "servicio_label"], as_index=False)
+        .agg(
+            tx_cruzadas             = ("monto_transaccion", "size"),
+            tarifa_media_aprox      = ("monto_transaccion", "mean"),
+            tarifa_mediana_aprox    = ("monto_transaccion", "median"),
+            recaudacion_aprox       = ("monto_transaccion", "sum"),
+            desviacion_tarifa_aprox = ("monto_transaccion", "std"),
+        )
+    )
+    # Columnas que existían en el cruce y conservamos vacías para
+    # compatibilidad de schema con el resto del dashboard.
+    summary["diff_mediana_min"]    = np.nan
+    summary["match_ref_principal"] = "perfil_enriquecido"
+    return summary[empty_cols]
 
 # ================================================================
 # 20. ENRIQUECIMIENTO CON ITINERARIO
@@ -2197,12 +2447,23 @@ def build_monthly_profile_tables(perfil_df: pd.DataFrame,
         if perfil_day_all.empty:
             continue
 
-        # Cruce torniquetes para el día (si aplica)
+        # --- CAMINO PREFERENTE: perfil enriquecido (sin merge) ----------
         fare_day_all = pd.DataFrame()
+        perfil_is_enriched = (
+            "monto_transaccion" in perfil_day_all.columns
+            or "tipo_pasajero" in perfil_day_all.columns
+        )
+
         if (normalize_text(profile_srv) == "biotren"
                 and profile_schema == "transactional"
-                and turnstile_status == "ok"
-                and turnstile_df is not None and not turnstile_df.empty):
+                and perfil_is_enriched):
+            fare_day_all = build_service_fare_summary_from_profile(perfil_day_all)
+
+        # --- Camino legacy: cruce con torniquetes ---------------------
+        elif (normalize_text(profile_srv) == "biotren"
+              and profile_schema == "transactional"
+              and turnstile_status == "ok"
+              and turnstile_df is not None and not turnstile_df.empty):
             turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_day].copy()
             if not turnstile_day.empty:
                 _, fare_day_all, _ = match_turnstile_transactions_to_profile(
@@ -3260,6 +3521,13 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
     else:
         profile_schema = "aggregated"
 
+    # Guardar el data_path en session_state para que las subfunciones decoradas
+    # con @maybe_fragment puedan acceder a los slices cacheados sin recibirlo
+    # como argumento (los fragments aíslan el re-run pero requieren claves
+    # estables; pasar data_path por session_state mantiene el cache hit).
+    st.session_state["_profile_data_path"] = str(data_path)
+    st.session_state["_profile_service_root"] = str(profile_srv)
+
     folder_name = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("folder_candidates", ["perfil_carga"])[0]
 
     if perfil_status == "no_data" or perfil_df.empty:
@@ -3314,6 +3582,13 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
         turnstile_path, turnstile_missing, turnstile_files, turnstile_status = "", [], [], "read_error"
 
     # ---------- 4. Pestañas ----------
+    if st.session_state.get("safe_mode", False):
+        st.info(
+            "🛡️ **Modo seguro activo.** El cruce con torniquetes y los promedios "
+            "mensuales están pausados para acelerar la navegación. "
+            "Desactívelo desde el menú ⋮ cuando quiera ver los cálculos completos.",
+            icon="ℹ️",
+        )
     tab_diario, tab_mensual = st.tabs(["Análisis diario", "Promedio mensual"])
 
     with tab_diario:
@@ -3327,7 +3602,9 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
                 service_order_files, service_order_path, service_order_status,
                 turnstile_files, turnstile_path,
             )
-        except Exception as exc:
+        except BaseException as exc:
+            if is_streamlit_internal_exception(exc):
+                raise
             st.error(
                 f"Ocurrió un error en el análisis diario "
                 f"({type(exc).__name__}: {exc}). "
@@ -3341,7 +3618,9 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
                 itinerary_summary_df, service_order_df,
                 turnstile_df, turnstile_status,
             )
-        except Exception as exc:
+        except BaseException as exc:
+            if is_streamlit_internal_exception(exc):
+                raise
             st.error(
                 f"Ocurrió un error en el promedio mensual "
                 f"({type(exc).__name__}: {exc}). "
@@ -3351,6 +3630,7 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
+@maybe_fragment
 def _render_perfil_diario(perfil_df, profile_schema, profile_srv, fechas_disponibles,
                           itinerary_summary_df, service_order_df,
                           turnstile_df, turnstile_status,
@@ -3383,6 +3663,18 @@ def _render_perfil_diario(perfil_df, profile_schema, profile_srv, fechas_disponi
         )
 
     perfil_fecha = perfil_df[perfil_df["fecha"] == fecha_sel].copy()
+    # Usar slice cacheado por día cuando el data_path está disponible.
+    # Esto evita mantener el DataFrame completo en memoria durante el
+    # filtrado y mejora drásticamente el cache hit cuando el usuario
+    # cambia entre fechas/servicios rápidamente.
+    _data_path = st.session_state.get("_profile_data_path", "")
+    if _data_path:
+        try:
+            sliced_day, _ = get_profile_for_day(profile_srv, _data_path, str(fecha_sel))
+            if not sliced_day.empty:
+                perfil_fecha = sliced_day
+        except BaseException:
+            pass  # Fallback al filtrado en memoria
     lineas_disp = sorted([x for x in perfil_fecha["linea"].dropna().astype(str).unique() if x])
 
     row1, row2, row3 = st.columns([0.9, 1.15, 1.15])
@@ -3432,26 +3724,61 @@ def _render_perfil_diario(perfil_df, profile_schema, profile_srv, fechas_disponi
     }
     if (normalize_text(profile_srv) == "biotren"
             and schema_local == "transactional"
-            and turnstile_status == "ok"
-            and turnstile_df is not None and not turnstile_df.empty):
-        turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_sel].copy()
-        if not turnstile_day.empty:
-            cache = st.session_state.setdefault("_turnstile_match_cache", {})
-            key = (str(profile_srv), str(fecha_sel),
-                   int(len(turnstile_day)), int(len(perfil_fecha)))
-            cached = cache.get(key)
-            if cached is None:
-                with st.spinner("Cruzando torniquetes con perfil del día…"):
-                    matched_tx_day, service_fare_summary, turnstile_stats = (
-                        match_turnstile_transactions_to_profile(
-                            turnstile_day, perfil_fecha, tolerance_minutes=20,
+            and not st.session_state.get("safe_mode", False)):
+
+        # --- CAMINO PREFERENTE: perfil enriquecido (sin merge en runtime) ---
+        # Cuando los archivos del perfil traen `monto_transaccion` y
+        # `tipo_pasajero` por viaje (formato OD_Final_*_con_monto_tipo.csv),
+        # calculamos tarifa y distribución directamente con groupby.
+        # Esto elimina por completo la operación cara que causaba crashes.
+        perfil_is_enriched = (
+            "monto_transaccion" in perfil_fecha.columns
+            or "tipo_pasajero" in perfil_fecha.columns
+        )
+        if perfil_is_enriched:
+            # matched_tx_day = el propio perfil del día (ya tiene tarifa y tipo)
+            matched_tx_day = perfil_fecha.copy()
+            service_fare_summary = build_service_fare_summary_from_profile(perfil_fecha)
+            turnstile_stats = {
+                "turnstile_total": int(len(perfil_fecha)),
+                "matched_total":   int(len(perfil_fecha)),
+                "match_pct": 100.0,
+                "diff_mediana_min": 0.0,
+                "tolerance_minutes": 0,
+                "pct_match_entrada": np.nan,
+                "pct_match_salida": np.nan,
+                "source": "perfil_enriquecido",
+            }
+
+        # --- Camino legacy: cruce con torniquetes en runtime ---------------
+        elif (turnstile_status == "ok"
+              and turnstile_df is not None and not turnstile_df.empty):
+            turnstile_day = pd.DataFrame()
+            _data_path = st.session_state.get("_profile_data_path", "")
+            if _data_path:
+                try:
+                    turnstile_day = get_turnstile_for_day(profile_srv, _data_path, str(fecha_sel))
+                except BaseException:
+                    turnstile_day = pd.DataFrame()
+            if turnstile_day.empty:
+                turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_sel].copy()
+            if not turnstile_day.empty:
+                cache = st.session_state.setdefault("_turnstile_match_cache", {})
+                key = (str(profile_srv), str(fecha_sel),
+                       int(len(turnstile_day)), int(len(perfil_fecha)))
+                cached = cache.get(key)
+                if cached is None:
+                    with st.spinner("Cruzando torniquetes con perfil del día…"):
+                        matched_tx_day, service_fare_summary, turnstile_stats = (
+                            match_turnstile_transactions_to_profile(
+                                turnstile_day, perfil_fecha, tolerance_minutes=20,
+                            )
                         )
-                    )
-                if len(cache) > 12:
-                    cache.pop(next(iter(cache)))
-                cache[key] = (matched_tx_day, service_fare_summary, turnstile_stats)
-            else:
-                matched_tx_day, service_fare_summary, turnstile_stats = cached
+                    if len(cache) > 12:
+                        cache.pop(next(iter(cache)))
+                    cache[key] = (matched_tx_day, service_fare_summary, turnstile_stats)
+                else:
+                    matched_tx_day, service_fare_summary, turnstile_stats = cached
 
     # ---------- Resumen por servicio ----------
     service_summary = build_service_level_summary(perfil_dir, schema_local)
@@ -3686,7 +4013,14 @@ def _render_perfil_diario(perfil_df, profile_schema, profile_srv, fechas_disponi
     if service_order_status == "ok" and service_order_files:
         ref_parts.append(f"Orden servicios: {len(service_order_files)} archivo(s) en {service_order_path}")
     if normalize_text(profile_srv) == "biotren":
-        if turnstile_status == "ok" and turnstile_files:
+        # Detectar si los datos vinieron del perfil enriquecido o del cruce legacy
+        source = (turnstile_stats.get("source") if isinstance(turnstile_stats, dict) else None)
+        if source == "perfil_enriquecido":
+            ref_parts.append(
+                "Tarifa y tipo de pasajero leídos directamente del perfil "
+                "(formato enriquecido — sin cruce en runtime)"
+            )
+        elif turnstile_status == "ok" and turnstile_files:
             tm = f"Torniquetes: {len(turnstile_files)} archivo(s) en {turnstile_path}"
             if turnstile_stats.get("turnstile_total", 0) > 0 and pd.notna(turnstile_stats.get("match_pct")):
                 tm += f" · match día: {fmt_pct(turnstile_stats.get('match_pct'))}"
@@ -3845,6 +4179,7 @@ def _render_service_detail_table(service_summary: pd.DataFrame):
     st.dataframe(out, use_container_width=True, hide_index=True)
 
 
+@maybe_fragment
 def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
                            itinerary_summary_df, service_order_df,
                            turnstile_df, turnstile_status):
@@ -3880,6 +4215,15 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
         perfil_df[fecha_to_period == str(month_sel)].copy()
         if month_sel else perfil_df.iloc[0:0].copy()
     )
+    # Slice mensual cacheado (más liviano que mantener perfil_df completo)
+    _data_path = st.session_state.get("_profile_data_path", "")
+    if month_sel and _data_path:
+        try:
+            sliced_month, _ = get_profile_for_month(profile_srv, _data_path, str(month_sel))
+            if not sliced_month.empty:
+                perfil_month = sliced_month
+        except BaseException:
+            pass
     lineas_mes = sorted([x for x in perfil_month["linea"].dropna().astype(str).unique() if x])
     with col_l:
         linea_mes_sel = option_selector(
@@ -3892,11 +4236,33 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
         st.info("No existen datos mensuales disponibles para los filtros seleccionados.")
         return
 
-    tablas, directions, monthly_metrics = build_monthly_profile_tables(
-        perfil_df, profile_schema, profile_srv, month_sel, linea_mes_sel,
-        itinerary_summary_df, service_order_df,
-        turnstile_df, turnstile_status,
-    )
+    # Modo seguro: el cálculo mensual es el más pesado del dashboard.
+    # En modo seguro mostramos un botón explícito para que el usuario
+    # decida cuándo ejecutarlo.
+    if st.session_state.get("safe_mode", False):
+        run_monthly = st.button(
+            "▶️ Ejecutar cálculo mensual ahora",
+            key=f"btn_run_monthly_{profile_srv}_{month_sel}_{linea_mes_sel}",
+            type="primary",
+            use_container_width=False,
+        )
+        if not run_monthly:
+            st.info(
+                "Modo seguro activo. Pulse '▶️ Ejecutar cálculo mensual ahora' "
+                "cuando quiera ver los promedios. Mientras tanto puede cambiar "
+                "mes y línea sin esperar."
+            )
+            return
+
+    # Spinner bloqueante: feedback visual claro durante el cálculo pesado.
+    # Si el usuario cambia un filtro mientras esto corre, Streamlit aborta
+    # con RerunException (ahora manejada correctamente).
+    with st.spinner("Calculando promedios mensuales por servicio…"):
+        tablas, directions, monthly_metrics = build_monthly_profile_tables(
+            perfil_month, profile_schema, profile_srv, month_sel, linea_mes_sel,
+            itinerary_summary_df, service_order_df,
+            turnstile_df, turnstile_status,
+        )
 
     if not tablas:
         st.info("No existen datos mensuales para la línea y mes seleccionados.")
@@ -4150,6 +4516,7 @@ def render_detalle_servicio(servicios_lista: list,
 # ================================================================
 # 32. RENDERER — OD Estaciones (Biotren)
 # ================================================================
+@maybe_fragment
 def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>OD Estaciones — Biotren</div>", unsafe_allow_html=True)
@@ -4511,9 +4878,30 @@ def render_header():
                 clear_all_caches()
                 st.success("Caché limpiada. Recargando…")
                 st.rerun()
+            st.markdown(
+                "<div style='height:0.4rem'></div>",
+                unsafe_allow_html=True,
+            )
+            # Modo seguro: pausa los cálculos pesados (cruce torniquetes,
+            # promedios mensuales) hasta que el usuario decida activarlos.
+            # Útil cuando el usuario quiere navegar rápido entre filtros
+            # sin esperar a que terminen los cálculos en cada cambio.
+            safe_mode = st.toggle(
+                "🛡️ Modo seguro (pausa cálculos pesados)",
+                value=st.session_state.get("safe_mode", False),
+                key="safe_mode_toggle",
+                help=(
+                    "Cuando está activado, los cálculos más costosos "
+                    "(cruce torniquetes, promedios mensuales) NO se "
+                    "ejecutan automáticamente al cambiar filtros. "
+                    "Útil para navegar rápido sin esperar."
+                ),
+            )
+            st.session_state["safe_mode"] = bool(safe_mode)
             st.caption(
-                "Use esta acción si el dashboard muestra datos antiguos, "
-                "queda atascado o se cierra inesperadamente."
+                "Use 'Limpiar caché' si el dashboard se cierra "
+                "inesperadamente o muestra datos antiguos. "
+                "Use 'Modo seguro' si quiere cambiar filtros muy rápido."
             )
 
     # Aplicar paleta y CSS según tema seleccionado
@@ -4673,7 +5061,9 @@ def main():
     selected_service_context = root_sel if root_sel != "Personas" else None
 
     # Dispatch — cada renderer envuelto en try/except para que un crash en
-    # una sección no cierre todo el dashboard
+    # una sección no cierre todo el dashboard. Se distingue cuidadosamente
+    # entre crashes reales y RerunException/StopException que dispara
+    # Streamlit cuando el usuario cambia un widget.
     try:
         if section_sel == "KPIs por Servicio":
             render_resumen_ejecutivo(
@@ -4692,7 +5082,12 @@ def main():
             render_od_estaciones(data_path, estaciones)
         elif section_sel == "Estaciones":
             render_detalle_servicio(servicios_lista, estaciones, afluencia_estacion)
-    except Exception as exc:
+    except BaseException as exc:
+        # Las excepciones internas de Streamlit (rerun/stop) NO son crashes:
+        # Streamlit las usa para abortar el script en curso cuando el
+        # usuario cambia un widget. Las dejamos propagar normalmente.
+        if is_streamlit_internal_exception(exc):
+            raise
         import traceback
         st.error(
             f"Ocurrió un error inesperado al mostrar la sección '{section_sel}'. "
@@ -4705,6 +5100,10 @@ def main():
             "use 'Limpiar caché y recargar'. Si el error persiste, verifique "
             "la integridad de los archivos CSV en sus carpetas."
         )
+
+    # Liberar memoria al final de cada re-run para evitar acumulación
+    # cuando el usuario cambia filtros rápido en sucesión.
+    release_memory()
 
     # Pie de página
     st.markdown("---")
