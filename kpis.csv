@@ -170,3 +170,7 @@
 169,Tarifa Media,Financiero,Tren Araucanía,686.737984794005,707.179479238361,CLP/pax,2026-03,-2.89056668702712,alerta,169,
 170,Tarifa Media,Financiero,Laja Talcahuano,1276.9502641182,1471.31234905226,CLP/pax,2026-03,-13.2101171487656,alerta,170,
 171,Tarifa Media,Financiero,Llanquihue Puerto Montt,916.546999248841,392.745381017292,CLP/pax,2026-03,133.369262516798,ok,171,
+172,Pasajeros,Afluencia,Biotren,1102481,1076802.22702698,pax,2026-04,2.38472509886248,ok,172,Sin reproceso
+173,Pasajeros,Afluencia,Tren Araucanía,80374,100216.570069294,pax,2026-04,-19.7996898672287,alerta,173,
+174,Pasajeros,Afluencia,Laja Talcahuano,40219,39887.5062962583,pax,2026-04,0.831071517180416,ok,174,
+175,Pasajeros,Afluencia,Llanquihue Puerto Montt,31118,51655.748375,pax,2026-04,-39.7588826434266,critico,175,
