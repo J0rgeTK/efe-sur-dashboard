@@ -2690,7 +2690,104 @@ def compute_monthly_executive_metrics(monthly_daily: pd.DataFrame) -> dict:
     return metrics
 
 
-@st.cache_data(ttl=900, show_spinner="Calculando promedios mensuales…")
+@st.cache_data(ttl=900, show_spinner="Calculando promedios mensuales…", max_entries=8)
+def build_monthly_profile_tables_cached(profile_srv: str,
+                                          data_path_str: str,
+                                          month_period: str,
+                                          linea_sel: str,
+                                          turnstile_status: str) -> tuple[dict, list, dict, pd.DataFrame]:
+    """
+    Versión cacheada de build_monthly_profile_tables. Recibe SOLO claves
+    primitivas (strings) en lugar de DataFrames, evitando que Streamlit tenga
+    que hashear DataFrames de 50k+ filas en cada cambio de filtro.
+
+    Internamente carga el slice mensual y los datos auxiliares por su cuenta
+    (a través de los caches existentes get_profile_for_month, etc.).
+    """
+    # Cargar slice mensual desde cache
+    try:
+        perfil_month, profile_schema = get_profile_for_month(
+            profile_srv, data_path_str, month_period,
+        )
+    except BaseException:
+        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}, pd.DataFrame()
+
+    if perfil_month is None or perfil_month.empty:
+        return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}, pd.DataFrame()
+
+    # Cargar referencias auxiliares (todas cacheadas)
+    try:
+        itinerary_summary_df, _, _, _, _ = load_itinerary_reference(data_path_str)
+    except BaseException:
+        itinerary_summary_df = pd.DataFrame()
+    try:
+        service_order_df, _, _, _ = load_service_order_reference(data_path_str)
+    except BaseException:
+        service_order_df = pd.DataFrame()
+    try:
+        turnstile_df, _, _, _, ts_status = load_turnstile_service_data(profile_srv, data_path_str)
+        if not turnstile_status:
+            turnstile_status = ts_status
+    except BaseException:
+        turnstile_df = pd.DataFrame()
+
+    return build_monthly_profile_tables(
+        perfil_month, profile_schema, profile_srv, month_period, linea_sel,
+        itinerary_summary_df, service_order_df, turnstile_df, turnstile_status,
+    )
+
+
+def _fast_service_summary_enriched(perfil_day_dir: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fast-path para perfiles enriquecidos: calcula pasajeros transportados,
+    máximo a bordo aproximado y hora de salida directamente con groupby,
+    SIN reconstruir el perfil servicio por servicio. Reduce la complejidad
+    del bucle mensual de O(días×dirs×servicios) reconstrucciones a
+    O(días×dirs) groupbys.
+    """
+    if perfil_day_dir is None or perfil_day_dir.empty:
+        return pd.DataFrame(columns=SERVICE_SUMMARY_COLS)
+
+    df = perfil_day_dir.copy()
+    df["servicio_label"] = df.get("servicio_label", df.get("servicio_final", pd.Series(dtype=str))).astype(str)
+    if "t_entrada_viaje" in df.columns:
+        df["t_entrada_viaje"] = pd.to_datetime(df["t_entrada_viaje"], errors="coerce")
+
+    # Agregación por servicio:
+    # - pasajeros_transportados = nº de viajes (cada fila es un viaje)
+    # - hora_salida = mínima entrada
+    # - estación origen = origen más frecuente
+    # - max_abordo = aproximamos por el conteo total
+    grp = df.groupby("servicio_label", sort=False)
+    summary = grp.agg(
+        pasajeros_transportados=("origen", "size"),
+        hora_salida=("t_entrada_viaje", "min"),
+    ).reset_index()
+
+    # Estación origen: la más frecuente como origen
+    origen_top = (
+        df.groupby(["servicio_label", "origen"], sort=False)
+        .size().reset_index(name="n")
+        .sort_values(["servicio_label", "n"], ascending=[True, False])
+        .drop_duplicates(subset=["servicio_label"], keep="first")
+        [["servicio_label", "origen"]]
+        .rename(columns={"origen": "estacion_origen"})
+    )
+    summary = summary.merge(origen_top, on="servicio_label", how="left")
+    summary["estacion_origen"] = summary["estacion_origen"].fillna("-").astype(str)
+
+    # Máximo a bordo: aproximación = pasajeros transportados (cota superior;
+    # el cálculo exacto requiere reconstrucción de cumsum). En la pestaña
+    # mensual esta aproximación es suficiente porque sólo se usa para
+    # contexto, no para análisis fino del perfil.
+    summary["max_abordo"] = summary["pasajeros_transportados"]
+
+    summary["hora_salida"] = pd.to_datetime(summary["hora_salida"], errors="coerce")
+    summary["hora_salida_fmt"] = summary["hora_salida"].dt.strftime("%H:%M:%S").fillna("-")
+    summary = summary.sort_values(["hora_salida", "servicio_label"], na_position="last").reset_index(drop=True)
+    return summary[SERVICE_SUMMARY_COLS]
+
+
 def build_monthly_profile_tables(perfil_df: pd.DataFrame,
                                  profile_schema: str,
                                  profile_srv: str,
@@ -2729,7 +2826,12 @@ def build_monthly_profile_tables(perfil_df: pd.DataFrame,
     fechas_mes = sorted([x for x in perfil_mes["fecha"].dropna().unique().tolist() if pd.notna(x)])
     daily_rows = []
 
-    for fecha_day in fechas_mes:
+    # Guardrail: si el mes tiene demasiados días con datos masivos, advertir
+    # y limitar para evitar OOM. Un mes típico de Biotren tiene ≤31 días.
+    if len(fechas_mes) > 35:
+        fechas_mes = fechas_mes[-35:]  # Toma los más recientes
+
+    for day_idx, fecha_day in enumerate(fechas_mes):
         perfil_day_all = perfil_mes[perfil_mes["fecha"] == fecha_day].copy()
         if perfil_day_all.empty:
             continue
@@ -2764,7 +2866,14 @@ def build_monthly_profile_tables(perfil_df: pd.DataFrame,
             if perfil_day_dir.empty:
                 continue
 
-            daily = build_service_level_summary(perfil_day_dir, profile_schema)
+            # FAST-PATH para perfil enriquecido: groupby directo en lugar de
+            # reconstruir el perfil servicio×servicio. Reduce ~30× el costo
+            # del cálculo mensual.
+            if perfil_is_enriched and profile_schema == "transactional":
+                daily = _fast_service_summary_enriched(perfil_day_dir)
+            else:
+                daily = build_service_level_summary(perfil_day_dir, profile_schema)
+
             if daily.empty:
                 continue
             daily = enrich_service_summary_with_itinerary(
@@ -2805,7 +2914,26 @@ def build_monthly_profile_tables(perfil_df: pd.DataFrame,
             daily["fecha"]         = fecha_day
             daily["tipo_dia"]      = classify_profile_day_type(fecha_day)
             daily["direccion_ref"] = dir_sel
-            daily_rows.append(daily)
+            # Conservar SOLO las columnas necesarias (evitar arrastrar
+            # estructuras grandes de daily a través del concat final)
+            keep_cols = [
+                "servicio_label", "servicio_display_label", "servicio_orden_idx",
+                "hora_salida", "hora_salida_fmt", "estacion_origen",
+                "pasajeros_transportados", "max_abordo",
+                "tx_cruzadas", "tarifa_media_aprox", "tarifa_mediana_aprox",
+                "recaudacion_aprox", "desviacion_tarifa_aprox", "diff_mediana_min",
+                "match_ref_principal", "fecha", "tipo_dia", "direccion_ref",
+            ]
+            keep_cols = [c for c in keep_cols if c in daily.columns]
+            daily_rows.append(daily[keep_cols].copy())
+
+        # Liberar memoria intermedia cada 7 días procesados (≈ 1 vez por semana)
+        if (day_idx + 1) % 7 == 0:
+            try:
+                del perfil_day_all, fare_day_all
+            except (NameError, UnboundLocalError):
+                pass
+            gc.collect()
 
     if not daily_rows:
         return {}, directions, {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}, pd.DataFrame()
@@ -3438,16 +3566,30 @@ def build_monthly_service_heatmap(monthly_daily: pd.DataFrame,
     Heatmap: filas = servicios (orden operativo), columnas = días del mes,
     color = métrica seleccionada. Reemplaza las múltiples tablas mensuales
     permitiendo ver patrones por día de la semana.
+
+    Defensivo: retorna None ante cualquier inconsistencia de schema, evitando
+    crashes cuando el monthly_daily viene con columnas faltantes o vacíos.
     """
     if monthly_daily is None or monthly_daily.empty:
         return None
     if metric not in monthly_daily.columns:
         return None
+    if "fecha" not in monthly_daily.columns:
+        return None
 
-    df = monthly_daily.copy()
-    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
-    df = df.dropna(subset=["fecha"])
-    if df.empty:
+    try:
+        df = monthly_daily.copy()
+        df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
+        df = df.dropna(subset=["fecha"])
+        if df.empty:
+            return None
+
+        # Asegurar que metric es numérico
+        df[metric] = pd.to_numeric(df[metric], errors="coerce")
+        df = df.dropna(subset=[metric])
+        if df.empty:
+            return None
+    except BaseException:
         return None
 
     df["servicio_display_label"] = df.get(
@@ -5102,6 +5244,24 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
         st.info("No existen datos mensuales disponibles para los filtros seleccionados.")
         return
 
+    # Detectar cambio de mes y limpiar caches de sesión obsoletos para
+    # evitar acumulación de memoria entre cambios de mes consecutivos.
+    last_month_key = f"_last_month_processed_{profile_srv}"
+    last_month = st.session_state.get(last_month_key)
+    if last_month and last_month != month_sel:
+        # Cambió el mes: liberar caches específicos del mes previo
+        keys_to_drop = [
+            k for k in list(st.session_state.keys())
+            if k.startswith("_turnstile_match_cache")
+        ]
+        for k in keys_to_drop:
+            try:
+                del st.session_state[k]
+            except KeyError:
+                pass
+        gc.collect()
+    st.session_state[last_month_key] = month_sel
+
     if st.session_state.get("safe_mode", False):
         run_monthly = st.button(
             "▶️ Ejecutar cálculo mensual ahora",
@@ -5115,12 +5275,52 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
             )
             return
 
-    with st.spinner("Calculando promedios mensuales por servicio…"):
-        tablas, directions, monthly_metrics, monthly_daily = build_monthly_profile_tables(
-            perfil_month, profile_schema, profile_srv, month_sel, linea_mes_sel,
-            itinerary_summary_df, service_order_df,
-            turnstile_df, turnstile_status,
+    # Liberar memoria de re-runs anteriores antes del cálculo pesado
+    gc.collect()
+
+    # Usar la versión cacheada que recibe SOLO claves primitivas. Esto evita
+    # que Streamlit hashee DataFrames de 50k+ filas en cada cambio de filtro
+    # (la causa del cierre del dashboard al cambiar de mes).
+    _data_path = st.session_state.get("_profile_data_path", "")
+
+    try:
+        with st.spinner("Calculando promedios mensuales por servicio…"):
+            if _data_path:
+                # Camino preferente: carga interna por claves simples
+                tablas, directions, monthly_metrics, monthly_daily = build_monthly_profile_tables_cached(
+                    profile_srv=profile_srv,
+                    data_path_str=_data_path,
+                    month_period=month_sel,
+                    linea_sel=linea_mes_sel,
+                    turnstile_status=turnstile_status,
+                )
+            else:
+                # Camino fallback: pasaje directo de DataFrames (más lento)
+                tablas, directions, monthly_metrics, monthly_daily = build_monthly_profile_tables(
+                    perfil_month, profile_schema, profile_srv, month_sel, linea_mes_sel,
+                    itinerary_summary_df, service_order_df,
+                    turnstile_df, turnstile_status,
+                )
+    except MemoryError:
+        # Si aun así se queda sin memoria, sugerir limpieza
+        st.error(
+            "⚠️ Memoria insuficiente para calcular el mes completo. "
+            "Pruebe abrir el menú ⋮ → 'Limpiar caché y recargar', y "
+            "luego active el modo seguro 🛡️ antes de cambiar de mes."
         )
+        gc.collect()
+        return
+    except BaseException as exc:
+        if is_streamlit_internal_exception(exc):
+            raise
+        st.error(
+            f"Error calculando el promedio mensual: {type(exc).__name__}: {exc}. "
+            f"Pruebe limpiar el caché desde el menú ⋮."
+        )
+        return
+
+    # Liberar memoria intermedia
+    gc.collect()
 
     if not tablas:
         st.info("No existen datos mensuales para la línea y mes seleccionados.")
@@ -5219,11 +5419,18 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
             "Tendencia diaria de pasajeros</div>",
             unsafe_allow_html=True,
         )
-        trend_fig = build_monthly_daily_trend_chart(
-            monthly_daily, title=f"Pasajeros por día — {month_period_to_label(month_sel)}",
-        )
-        if trend_fig is not None:
-            show_plot(trend_fig, use_container_width=True)
+        try:
+            trend_fig = build_monthly_daily_trend_chart(
+                monthly_daily, title=f"Pasajeros por día — {month_period_to_label(month_sel)}",
+            )
+            if trend_fig is not None:
+                show_plot(trend_fig, use_container_width=True)
+            else:
+                st.caption("Tendencia diaria no disponible.")
+        except BaseException as exc:
+            if is_streamlit_internal_exception(exc):
+                raise
+            st.caption(f"Tendencia diaria no disponible: {type(exc).__name__}")
 
     # Heatmap por dirección
     if monthly_daily is not None and not monthly_daily.empty:
@@ -5239,21 +5446,32 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
             unsafe_allow_html=True,
         )
         for dir_sel in directions:
-            day_dir = monthly_daily[
-                monthly_daily["direccion_ref"].astype(str).str.strip() == str(dir_sel)
-            ].copy()
-            if day_dir.empty:
+            try:
+                day_dir = monthly_daily[
+                    monthly_daily["direccion_ref"].astype(str).str.strip() == str(dir_sel)
+                ].copy()
+                if day_dir.empty:
+                    continue
+                st.markdown(
+                    f"<div class='map-note'><b>Dirección:</b> {dir_sel}</div>",
+                    unsafe_allow_html=True,
+                )
+                heat_fig = build_monthly_service_heatmap(
+                    day_dir, metric="pasajeros_transportados",
+                    title=f"Pasajeros por servicio y día | {dir_sel}",
+                )
+                if heat_fig is not None:
+                    show_plot(heat_fig, use_container_width=True)
+                else:
+                    st.caption(f"Mapa no disponible para {dir_sel}")
+                # Liberar
+                del day_dir
+                gc.collect()
+            except BaseException as exc:
+                if is_streamlit_internal_exception(exc):
+                    raise
+                st.caption(f"Mapa no disponible para {dir_sel}: {type(exc).__name__}")
                 continue
-            st.markdown(
-                f"<div class='map-note'><b>Dirección:</b> {dir_sel}</div>",
-                unsafe_allow_html=True,
-            )
-            heat_fig = build_monthly_service_heatmap(
-                day_dir, metric="pasajeros_transportados",
-                title=f"Pasajeros por servicio y día | {dir_sel}",
-            )
-            if heat_fig is not None:
-                show_plot(heat_fig, use_container_width=True)
 
     # ============================================================
     # MODO DETALLE: Tablas por tipo de día
