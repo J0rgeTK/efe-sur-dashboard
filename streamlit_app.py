@@ -44,13 +44,19 @@ import streamlit as st
 # emite un warning en cada re-run; con docenas de widgets esto satura el
 # logger y consume CPU. Hasta migrar todas las llamadas, los silenciamos.
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="streamlit")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="plotly")
 warnings.filterwarnings("ignore", message=".*use_container_width.*")
+warnings.filterwarnings("ignore", message=".*scattermapbox.*")
+warnings.filterwarnings("ignore", message=".*mapbox.*")
 
 # Bajar el nivel del logger de Streamlit a ERROR para que los warnings
 # repetidos no llenen los logs de Streamlit Cloud (≥ 1k entradas observadas
 # en sesiones cortas, lo que satura la cola de mensajes y puede provocar
 # que el servidor mate el proceso por presión de I/O).
-for _logger_name in ("streamlit", "streamlit.runtime", "streamlit.runtime.scriptrunner"):
+for _logger_name in (
+    "streamlit", "streamlit.runtime", "streamlit.runtime.scriptrunner",
+    "plotly", "plotly.graph_objects",
+):
     try:
         logging.getLogger(_logger_name).setLevel(logging.ERROR)
     except Exception:
@@ -697,18 +703,32 @@ PLOTLY_CHART_CONFIG = {
 }
 
 
-def show_plot(fig: go.Figure, use_container_width: bool = True, **kwargs):
-    """Wrapper de plotly_chart con configuración estándar y safe-fallback."""
+def show_plot(fig: go.Figure, width: str = "stretch", **kwargs):
+    """Wrapper de plotly_chart con configuración estándar y safe-fallback.
+
+    En Streamlit ≥ 1.36 se usa `width='stretch'` o `width='content'`.
+    `use_container_width` quedó deprecado y emite warning en cada llamada.
+    """
     try:
         fig.update_layout(dragmode=False)
         fig.update_xaxes(fixedrange=True)
         fig.update_yaxes(fixedrange=True)
     except Exception:
         pass
-    return st.plotly_chart(
-        fig, use_container_width=use_container_width,
-        config=PLOTLY_CHART_CONFIG, **kwargs,
-    )
+    # Compatibilidad: si llaman con use_container_width, mapear a width
+    if "use_container_width" in kwargs:
+        ucw = kwargs.pop("use_container_width")
+        width = "stretch" if ucw else "content"
+    try:
+        return st.plotly_chart(
+            fig, width=width, config=PLOTLY_CHART_CONFIG, **kwargs,
+        )
+    except TypeError:
+        # Fallback para Streamlit < 1.36 (no debería ocurrir en producción)
+        return st.plotly_chart(
+            fig, use_container_width=(width == "stretch"),
+            config=PLOTLY_CHART_CONFIG, **kwargs,
+        )
 
 
 def option_selector(label: str, options: list, key: str,
@@ -3849,7 +3869,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
     """Mapa de afluencia por estación."""
     fig = go.Figure()
     if valid_map_df is None or valid_map_df.empty:
-        fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=700)
+        fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=520)
         return fig
 
     plot_df = valid_map_df.copy()
@@ -3857,7 +3877,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
     plot_df["longitud"] = pd.to_numeric(plot_df["longitud"], errors="coerce")
     plot_df = plot_df.dropna(subset=["latitud", "longitud"]).copy()
     if plot_df.empty:
-        fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=700)
+        fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=520)
         return fig
 
     plot_df["label_mapa"]    = plot_df["estacion"].fillna("").astype(str).str.strip()
@@ -3875,7 +3895,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
 
     bounds = compute_map_bounds(plot_df)
 
-    fig.add_trace(go.Scattermapbox(
+    fig.add_trace(go.Scattermap(
         lat=plot_df["latitud"].astype(float).tolist(),
         lon=plot_df["longitud"].astype(float).tolist(),
         mode="markers+text",
@@ -3893,7 +3913,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
         showlegend=False,
     ))
     fig.update_layout(
-        mapbox=dict(
+        map=dict(
             style="white-bg",
             layers=[dict(
                 sourcetype="raster",
@@ -3902,7 +3922,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
             )],
             bounds=bounds,
         ),
-        margin=dict(l=0, r=0, t=0, b=0), height=700, showlegend=False,
+        margin=dict(l=0, r=0, t=0, b=0), height=520, showlegend=False,
     )
     return fig
 
@@ -4032,6 +4052,13 @@ def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
     )
     plot_df = plot_df.dropna(subset=["latitud", "longitud"]).copy()
 
+    # OPTIMIZACIÓN MEMORIA: limitar el bubble map a las 15 estaciones más
+    # relevantes. Plotly 6 con muchos marcadores en `Scattermap` consume
+    # gran cantidad de memoria por trace, lo cual contribuye al OOM en
+    # Streamlit Cloud al navegar entre páginas.
+    if len(plot_df) > 15:
+        plot_df = plot_df.nlargest(15, "viajes").copy()
+
     if not plot_df.empty and float(plot_df["viajes"].max()) > float(plot_df["viajes"].min()):
         plot_df["marker_size"] = 12 + (
             (plot_df["viajes"] - plot_df["viajes"].min()) /
@@ -4057,7 +4084,7 @@ def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
 
     fig = go.Figure()
     if not plot_df.empty:
-        fig.add_trace(go.Scattermapbox(
+        fig.add_trace(go.Scattermap(
             lat=plot_df["latitud"].astype(float).tolist(),
             lon=plot_df["longitud"].astype(float).tolist(),
             mode="markers+text",
@@ -4071,7 +4098,7 @@ def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
             showlegend=False,
         ))
 
-    fig.add_trace(go.Scattermapbox(
+    fig.add_trace(go.Scattermap(
         lat=[float(sel_row["latitud"])],
         lon=[float(sel_row["longitud"])],
         mode="markers+text",
@@ -4085,7 +4112,7 @@ def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
 
     fig.update_layout(
         title=title_text,
-        mapbox=dict(
+        map=dict(
             style="white-bg",
             layers=[dict(
                 sourcetype="raster",
@@ -4274,7 +4301,7 @@ def render_resumen_ejecutivo(kpis: pd.DataFrame, kpis_hist: pd.DataFrame,
     hist_plot = hist_sel.groupby("periodo", as_index=False)["valor"].sum()
     fig = build_trend_line_chart(hist_plot, resumen_kpi_sel, unit_hist, resumen_srv)
     fig.update_layout(height=470)
-    show_plot(fig, use_container_width=True)
+    show_plot(fig, width="stretch")
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
@@ -4305,7 +4332,7 @@ def render_personas(iniciativas: pd.DataFrame, servicios_lista: list,
             st.multiselect("Responsable", options=responsables,
                            default=st.session_state.get("responsable_body_filter", responsables),
                            key="responsable_body_filter")
-            if st.button("Restablecer", key="reset_personas_filters", use_container_width=True):
+            if st.button("Restablecer", key="reset_personas_filters", width="stretch"):
                 st.session_state["estado_body_filter"]      = estados_ini
                 st.session_state["prioridad_body_filter"]   = prioridades
                 st.session_state["responsable_body_filter"] = responsables
@@ -4367,7 +4394,7 @@ def render_personas(iniciativas: pd.DataFrame, servicios_lista: list,
                 title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
             )
             fig.update_xaxes(title="Avance %"); fig.update_yaxes(title="")
-            show_plot(fig, use_container_width=True)
+            show_plot(fig, width="stretch")
     with right_p:
         estado_persona = per_df["estado"].value_counts().reset_index()
         estado_persona.columns = ["estado", "cantidad"]
@@ -4388,7 +4415,7 @@ def render_personas(iniciativas: pd.DataFrame, servicios_lista: list,
                 title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
                 showlegend=False,
             )
-            show_plot(fig2, use_container_width=True)
+            show_plot(fig2, width="stretch")
 
     st.markdown("<div class='section-title'>Detalle por responsable</div>", unsafe_allow_html=True)
     detalle_cols = ["nombre_iniciativa", "servicio", "estado", "avance_pct",
@@ -4401,7 +4428,7 @@ def render_personas(iniciativas: pd.DataFrame, servicios_lista: list,
         "prioridad": "Prioridad", "comentario": "Comentario",
     }
     st.dataframe(per_df[detalle_cols].rename(columns=rename_map),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 # ================================================================
@@ -4981,7 +5008,7 @@ def _render_perfil_diario(perfil_df, profile_schema, profile_srv, fechas_disponi
         fig_main = build_perfil_comparativo_chart(perfil_servicio, avg_profile, titulo, tipo_label)
     else:
         fig_main = build_perfil_carga_chart(perfil_servicio, titulo)
-    show_plot(fig_main, use_container_width=True)
+    show_plot(fig_main, width="stretch")
 
     # ---------- Panel de saturación del servicio ----------
     saturation = compute_saturation_metrics(perfil_servicio, capacidad_referencia)
@@ -5037,7 +5064,7 @@ def _render_perfil_diario(perfil_df, profile_schema, profile_srv, fechas_disponi
             service_summary,
             f"{profile_srv} | {linea_sel} | {dir_sel} | Pasajeros transportados por servicio",
         )
-        show_plot(fig, use_container_width=True)
+        show_plot(fig, width="stretch")
 
     # ---------- Detalle por servicio ----------
     st.markdown("<div class='section-title'>Detalle por servicio</div>", unsafe_allow_html=True)
@@ -5167,7 +5194,7 @@ def _render_service_detail_table(service_summary: pd.DataFrame):
             lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-"
         )
 
-    st.dataframe(out, use_container_width=True, hide_index=True)
+    st.dataframe(out, width="stretch", hide_index=True)
 
 
 @maybe_fragment
@@ -5284,7 +5311,7 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
         run_monthly = st.button(
             "▶️ Ejecutar cálculo mensual ahora",
             key=f"btn_run_monthly_{profile_srv}_{month_sel}_{linea_mes_sel}",
-            type="primary", use_container_width=False,
+            type="primary", width="content",
         )
         if not run_monthly:
             st.info(
@@ -5442,7 +5469,7 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
                 monthly_daily, title=f"Pasajeros por día — {month_period_to_label(month_sel)}",
             )
             if trend_fig is not None:
-                show_plot(trend_fig, use_container_width=True)
+                show_plot(trend_fig, width="stretch")
             else:
                 st.caption("Tendencia diaria no disponible.")
         except BaseException as exc:
@@ -5504,7 +5531,7 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
                         show_df["Tarifa Media Mes"] = pd.to_numeric(
                             tabla_dir["tarifa_media_mes"], errors="coerce",
                         ).apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
-                        st.dataframe(show_df, use_container_width=True, hide_index=True)
+                        st.dataframe(show_df, width="stretch", hide_index=True)
 
             if not showed_any:
                 st.info(f"No existen datos para {tipo_dia.lower()} con los filtros seleccionados.")
@@ -5663,7 +5690,7 @@ def render_detalle_servicio(servicios_lista: list,
         if valid_map.empty:
             st.warning("No existen coordenadas válidas para graficar.")
         else:
-            show_plot(build_station_map(valid_map), use_container_width=True)
+            show_plot(build_station_map(valid_map), width="stretch")
     with top_r:
         total_entradas = detail_df["entradas"].sum(min_count=1)
         total_meta     = detail_df["meta_entradas"].sum(min_count=1)
@@ -5697,7 +5724,7 @@ def render_detalle_servicio(servicios_lista: list,
             fig.update_xaxes(title="", tickangle=-90, categoryorder="array",
                              categoryarray=station_order)
             fig.update_yaxes(title="Pasajeros")
-            show_plot(fig, use_container_width=True)
+            show_plot(fig, width="stretch")
 
     st.markdown("</div></div>", unsafe_allow_html=True)
 
@@ -5894,7 +5921,7 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
     )
     show_plot(
         build_station_flow_chart(station_flow, station_bucket_order, station_sel, granularity),
-        use_container_width=True,
+        width="stretch",
     )
 
     total_entries_day = int(station_entries["cantidad"].sum()) if not station_entries.empty else 0
@@ -6016,7 +6043,7 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
             f"Destinos desde {station_sel} | {bloques_label}", EFE_BLUE,
         )
         if fig:
-            show_plot(fig, use_container_width=True)
+            show_plot(fig, width="stretch")
         else:
             st.info("No existen viajes desde la estación en el periodo seleccionado.")
     with bar_r:
@@ -6025,7 +6052,7 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
             f"Orígenes hacia {station_sel} | {bloques_label}", EFE_RED,
         )
         if fig:
-            show_plot(fig, use_container_width=True)
+            show_plot(fig, width="stretch")
         else:
             st.info("No existen viajes hacia la estación en el periodo seleccionado.")
 
@@ -6036,7 +6063,7 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
             f"Mapa de destinos desde {station_sel} | {bloques_label}", EFE_BLUE,
         )
         if fig:
-            show_plot(fig, use_container_width=True)
+            show_plot(fig, width="stretch")
         else:
             st.info("Sin coordenadas válidas para el mapa de destinos.")
     with map_r:
@@ -6045,7 +6072,7 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
             f"Mapa de orígenes hacia {station_sel} | {bloques_label}", EFE_RED,
         )
         if fig:
-            show_plot(fig, use_container_width=True)
+            show_plot(fig, width="stretch")
         else:
             st.info("Sin coordenadas válidas para el mapa de orígenes.")
 
@@ -6108,7 +6135,7 @@ def render_header():
             )
             if st.button("🧹 Limpiar caché y recargar",
                          key="btn_clear_cache",
-                         use_container_width=True):
+                         width="stretch"):
                 clear_all_caches()
                 st.success("Caché limpiada. Recargando…")
                 st.rerun()
@@ -6174,7 +6201,7 @@ def render_header():
                 Path(__file__).resolve().parent / "logoefe-azul.png",
             ]:
                 if logo_path.exists():
-                    st.image(str(logo_path), use_container_width=True)
+                    st.image(str(logo_path), width="stretch")
                     break
         with title_col:
             st.markdown(
@@ -6316,6 +6343,28 @@ def main():
     # Navegación
     root_sel, section_sel = render_navigation()
     selected_service_context = root_sel if root_sel != "Personas" else None
+
+    # CRÍTICO: detectar cambio de página y liberar memoria intermedia.
+    # Cuando el usuario navega de "OD Estaciones" (con mapas Plotly) a
+    # "Perfil de Carga", los traces y figures de mapa permanecen en
+    # memoria de Plotly hasta el próximo gc.collect(). En Streamlit Cloud
+    # con Python 3.14 + Plotly 6.7 + Pandas 3.0 esto puede acumular
+    # cientos de MB de objetos basura entre re-runs y disparar OOM.
+    last_section_key = "_last_section_rendered"
+    last_section = st.session_state.get(last_section_key)
+    if last_section and last_section != section_sel:
+        # Cambió de página: limpiar caches volátiles y forzar gc
+        for k in list(st.session_state.keys()):
+            if k.startswith("_turnstile_match_cache"):
+                try:
+                    del st.session_state[k]
+                except KeyError:
+                    pass
+        try:
+            gc.collect()
+        except Exception:
+            pass
+    st.session_state[last_section_key] = section_sel
 
     # Dispatch — cada renderer envuelto en try/except para que un crash en
     # una sección no cierre todo el dashboard. Se distingue cuidadosamente
