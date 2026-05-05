@@ -25,8 +25,10 @@ misma sección de tipo de pasajero).
 from __future__ import annotations
 
 import gc
+import logging
 import time
 import unicodedata
+import warnings
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -36,6 +38,23 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+# --- Suprimir warnings ruidosos que saturan el log y degradan rendimiento --
+# Streamlit 1.36+ deprecó `use_container_width`. Cada widget que use el flag
+# emite un warning en cada re-run; con docenas de widgets esto satura el
+# logger y consume CPU. Hasta migrar todas las llamadas, los silenciamos.
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="streamlit")
+warnings.filterwarnings("ignore", message=".*use_container_width.*")
+
+# Bajar el nivel del logger de Streamlit a ERROR para que los warnings
+# repetidos no llenen los logs de Streamlit Cloud (≥ 1k entradas observadas
+# en sesiones cortas, lo que satura la cola de mensajes y puede provocar
+# que el servidor mate el proceso por presión de I/O).
+for _logger_name in ("streamlit", "streamlit.runtime", "streamlit.runtime.scriptrunner"):
+    try:
+        logging.getLogger(_logger_name).setLevel(logging.ERROR)
+    except Exception:
+        pass
 
 
 # --- Excepciones internas de Streamlit que NO son crashes -----------------
@@ -347,6 +366,41 @@ div[data-testid="stPlotlyChart"] {{
     margin-top: 0.3rem; font-size: 0.78rem; font-weight: 700;
     color: {TEXT_MUTED};
 }}
+.efe-card-yoy {{
+    margin-top: 0.25rem; font-size: 0.82rem; font-weight: 700;
+    color: {EFE_BLUE};
+    background: rgba(0,40,87,0.06);
+    padding: 0.2rem 0.5rem; border-radius: 999px;
+    display: inline-block;
+}}
+.efe-cumulative-card {{
+    background: linear-gradient(135deg, {EFE_BLUE} 0%, #1A4A8C 100%);
+    color: #FFFFFF;
+    border-radius: 18px;
+    padding: 1.0rem 1.15rem;
+    margin: 0.5rem 0 0.85rem;
+    box-shadow: 0 12px 28px rgba(0,40,87,0.20);
+}}
+.efe-cumulative-card .efe-cumulative-label {{
+    font-size: 0.78rem; font-weight: 700; opacity: 0.82;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    margin-bottom: 0.35rem;
+}}
+.efe-cumulative-card .efe-cumulative-value {{
+    font-size: 2.2rem; font-weight: 850; line-height: 1.05;
+    margin-bottom: 0.3rem;
+}}
+.efe-cumulative-card .efe-cumulative-comparison {{
+    display: inline-block;
+    background: rgba(255,255,255,0.92);
+    padding: 0.25rem 0.7rem; border-radius: 999px;
+    font-size: 0.86rem; font-weight: 800;
+    margin-bottom: 0.35rem;
+}}
+.efe-cumulative-card .efe-cumulative-sub {{
+    font-size: 0.82rem; opacity: 0.85;
+}}
+.efe-cumulative-card .efe-cumulative-sub strong {{ color: #FFFFFF; }}
 .efe-narrative {{
     background: linear-gradient(135deg, rgba(0,40,87,0.06) 0%, rgba(0,40,87,0.02) 100%);
     border: 1px solid #C7D9EC; border-left: 4px solid {EFE_BLUE};
@@ -742,15 +796,108 @@ def build_sparkline_svg(values: list, width: int = 110, height: int = 28,
     )
 
 
+def is_afluencia_kpi(kpi_name: str) -> bool:
+    """¿Es un KPI de afluencia/pasajeros (acumula bien por año)?"""
+    name = normalize_text(kpi_name or "")
+    return any(kw in name for kw in ["afluencia", "pasajeros", "transportados"])
+
+
+def render_yearly_cumulative_card(history_df: pd.DataFrame,
+                                   current_period: str,
+                                   kpi_name: str,
+                                   unit: str = "") -> None:
+    """
+    Recuadro fijo acumulativo: muestra los pasajeros acumulados en el año
+    hasta el período seleccionado, comparados con el mismo rango del año
+    anterior.
+    """
+    if history_df is None or history_df.empty:
+        return
+    if "periodo" not in history_df.columns or "valor" not in history_df.columns:
+        return
+
+    try:
+        current_dt = periodo_to_date(current_period)
+        if pd.isna(current_dt):
+            return
+
+        df = history_df.copy()
+        df["periodo_dt"] = df["periodo"].apply(periodo_to_date)
+        df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
+        df = df.dropna(subset=["periodo_dt", "valor"])
+        if df.empty:
+            return
+
+        current_year = int(current_dt.year)
+        # Acumulado del año actual: enero hasta el mes actual (inclusive)
+        mask_curr = (
+            (df["periodo_dt"].dt.year == current_year)
+            & (df["periodo_dt"] <= current_dt)
+        )
+        acumulado_actual = float(df.loc[mask_curr, "valor"].sum())
+
+        # Acumulado del año anterior: enero hasta el mismo mes
+        prev_year = current_year - 1
+        prev_until = current_dt - pd.DateOffset(years=1)
+        mask_prev = (
+            (df["periodo_dt"].dt.year == prev_year)
+            & (df["periodo_dt"] <= prev_until)
+        )
+        acumulado_anterior = float(df.loc[mask_prev, "valor"].sum())
+
+        # Determinar si tenemos comparación válida
+        has_comparison = acumulado_anterior > 0
+
+        if has_comparison:
+            diff_pct = (acumulado_actual - acumulado_anterior) / acumulado_anterior * 100.0
+            arrow = "↑" if diff_pct >= 0 else "↓"
+            sign = "+" if diff_pct >= 0 else ""
+            comparison_label = f"{arrow} {sign}{diff_pct:.1f}% vs {prev_year}"
+            comparison_color = SUCCESS if diff_pct >= 0 else DANGER
+            sub_html = (
+                f"Año anterior (mismo período): "
+                f"<strong>{fmt_number(acumulado_anterior, unit, kpi_name)}</strong>"
+            )
+        else:
+            comparison_label = f"Sin datos de {prev_year}"
+            comparison_color = TEXT_MUTED
+            sub_html = "Sin comparativa con año anterior"
+
+        current_label = periodo_to_label(current_period)
+        cumul_html = (
+            f"<div class='efe-cumulative-card'>"
+            f"<div class='efe-cumulative-label'>"
+            f"📈 Acumulado año {current_year} (ene–{current_label.split('-')[0]})"
+            f"</div>"
+            f"<div class='efe-cumulative-value'>"
+            f"{fmt_number(acumulado_actual, unit, kpi_name)}"
+            f"</div>"
+            f"<div class='efe-cumulative-comparison' "
+            f"style='color:{comparison_color};'>"
+            f"{comparison_label}"
+            f"</div>"
+            f"<div class='efe-cumulative-sub'>{sub_html}</div>"
+            f"</div>"
+        )
+        st.markdown(cumul_html, unsafe_allow_html=True)
+    except BaseException:
+        return
+
+
 def render_kpi_card_with_sparkline(title, value, meta, delta_text, status,
                                     history_values: list | None = None,
-                                    streak_text: str | None = None):
-    """Tarjeta KPI con sparkline pequeño y, opcionalmente, indicador de racha."""
+                                    streak_text: str | None = None,
+                                    yoy_text: str | None = None):
+    """Tarjeta KPI con sparkline pequeño, racha y comparación año anterior."""
     color = status_color(status)
     spark_svg = build_sparkline_svg(history_values, color=color) if history_values else ""
     streak_html = (
         f"<div class='efe-card-streak'>{streak_text}</div>"
         if streak_text else ""
+    )
+    yoy_html = (
+        f"<div class='efe-card-yoy'>{yoy_text}</div>"
+        if yoy_text else ""
     )
     spark_html = (
         f"<div class='efe-card-spark'>{spark_svg}</div>" if spark_svg else ""
@@ -761,9 +908,55 @@ def render_kpi_card_with_sparkline(title, value, meta, delta_text, status,
         <div class="efe-card-value">{value}</div>
         <div class="efe-card-meta">{meta}</div>
         <div class="efe-card-delta" style="color:{color};">{delta_text}</div>
+        {yoy_html}
         {spark_html}
         {streak_html}
     </div>""", unsafe_allow_html=True)
+
+
+# ================================================================
+# 9c-2. COMPARACIÓN AÑO ANTERIOR (YoY)
+# ================================================================
+def compute_yoy_comparison(history_df: pd.DataFrame, current_period: str,
+                           kpi_name: str) -> str | None:
+    """
+    Calcula la variación vs mismo mes del año anterior.
+    history_df: histórico del KPI con columnas 'periodo' y 'valor'.
+    current_period: período actual en formato 'YYYY-MM'.
+    Retorna string formato '↑ +5,2% vs abr-25' o None si no hay dato anterior.
+    """
+    if history_df is None or history_df.empty:
+        return None
+    if "periodo" not in history_df.columns or "valor" not in history_df.columns:
+        return None
+
+    try:
+        current_dt = periodo_to_date(current_period)
+        if pd.isna(current_dt):
+            return None
+        prev_year_dt = current_dt - pd.DateOffset(years=1)
+        prev_period = prev_year_dt.strftime("%Y-%m")
+
+        df = history_df.copy()
+        df["periodo_str"] = df["periodo"].astype(str).str[:7]
+        current_row = df[df["periodo_str"] == str(current_period)[:7]]
+        prev_row = df[df["periodo_str"] == prev_period]
+        if current_row.empty or prev_row.empty:
+            return None
+
+        current_val = pd.to_numeric(current_row["valor"], errors="coerce").iloc[0]
+        prev_val = pd.to_numeric(prev_row["valor"], errors="coerce").iloc[0]
+        if pd.isna(current_val) or pd.isna(prev_val) or prev_val == 0:
+            return None
+
+        diff_pct = (current_val - prev_val) / abs(prev_val) * 100.0
+        # Flecha siempre indica la dirección del cambio numérico
+        arrow = "↑" if diff_pct >= 0 else "↓"
+        prev_label = periodo_to_label(prev_period)
+        sign = "+" if diff_pct >= 0 else ""
+        return f"{arrow} {sign}{diff_pct:.1f}% vs {prev_label}"
+    except BaseException:
+        return None
 
 
 # ================================================================
@@ -2690,7 +2883,7 @@ def compute_monthly_executive_metrics(monthly_daily: pd.DataFrame) -> dict:
     return metrics
 
 
-@st.cache_data(ttl=900, show_spinner="Calculando promedios mensuales…", max_entries=8)
+@st.cache_data(ttl=600, show_spinner="Calculando promedios mensuales…", max_entries=3)
 def build_monthly_profile_tables_cached(profile_srv: str,
                                           data_path_str: str,
                                           month_period: str,
@@ -3457,204 +3650,6 @@ def compute_avg_profile_by_day_type(perfil_df: pd.DataFrame,
     return avg
 
 
-# ================================================================
-# 24d. HEATMAP DE OCUPACIÓN SERVICIO × TRAMO
-# ================================================================
-def build_service_tramo_heatmap(perfil_dir_today: pd.DataFrame,
-                                 schema_local: str,
-                                 station_order: list,
-                                 capacidad_referencia: float = 605.0,
-                                 servicios_orden: list | None = None) -> go.Figure | None:
-    """
-    Heatmap: filas = servicios (en orden operativo), columnas = estaciones,
-    color = ocupación (% de capacidad). Identifica patrones de saturación
-    de un vistazo.
-    """
-    if perfil_dir_today is None or perfil_dir_today.empty:
-        return None
-
-    cap = float(capacidad_referencia) if capacidad_referencia > 0 else 605.0
-
-    # Construir matriz por servicio
-    matrix_rows = []
-    if schema_local == "transactional":
-        servicios_iter = (
-            servicios_orden if servicios_orden
-            else perfil_dir_today["servicio_label"].dropna().astype(str).unique().tolist()
-        )
-        for srv_label in servicios_iter:
-            svc_df = perfil_dir_today[
-                perfil_dir_today["servicio_label"].astype(str) == str(srv_label)
-            ]
-            if svc_df.empty:
-                continue
-            profile = build_transactional_service_profile(svc_df)
-            if profile.empty:
-                continue
-            profile["estacion"] = profile["estacion"].astype(str)
-            profile = profile[profile["estacion"].isin(station_order)]
-            if profile.empty:
-                continue
-            row = {"servicio": str(srv_label)}
-            for est in station_order:
-                est_row = profile[profile["estacion"] == est]
-                if not est_row.empty:
-                    abordo = float(pd.to_numeric(est_row["L_out_abordo"].iloc[0], errors="coerce") or 0)
-                    row[est] = abordo / cap * 100.0
-                else:
-                    row[est] = 0.0
-            matrix_rows.append(row)
-    else:
-        # Schema agregado: agrupar por servicio_label y reusar valores existentes
-        for srv_label, svc_df in perfil_dir_today.groupby("servicio_label", sort=False):
-            row = {"servicio": str(srv_label)}
-            for est in station_order:
-                est_rows = svc_df[svc_df["estacion"].astype(str) == est]
-                if not est_rows.empty:
-                    abordo = float(pd.to_numeric(est_rows["L_out_abordo"].iloc[0], errors="coerce") or 0)
-                    row[est] = abordo / cap * 100.0
-                else:
-                    row[est] = 0.0
-            matrix_rows.append(row)
-
-    if not matrix_rows:
-        return None
-
-    mat_df = pd.DataFrame(matrix_rows)
-    if servicios_orden:
-        mat_df["__order"] = mat_df["servicio"].apply(
-            lambda s: servicios_orden.index(s) if s in servicios_orden else 9999
-        )
-        mat_df = mat_df.sort_values("__order").drop(columns="__order")
-    mat_df = mat_df.set_index("servicio")
-
-    z = mat_df[station_order].values
-    fig = go.Figure(data=go.Heatmap(
-        z=z,
-        x=station_order,
-        y=mat_df.index.tolist(),
-        colorscale=[
-            [0.0,  "#ECFDF5"],   # Vacío: verde claro
-            [0.4,  "#FBBF24"],   # 40%: amarillo
-            [0.7,  "#F97316"],   # 70%: naranja
-            [1.0,  "#B91C1C"],   # >100%: rojo intenso
-        ],
-        zmin=0, zmax=120,
-        colorbar=dict(title="% Ocup.", thickness=14, len=0.7),
-        hovertemplate="<b>Servicio %{y}</b><br>%{x}<br>Ocupación: %{z:.0f}%<extra></extra>",
-    ))
-    fig.update_layout(
-        title="Ocupación por servicio y tramo",
-        plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-        margin=dict(l=20, r=20, t=50, b=20),
-        height=max(360, min(660, 24 * len(mat_df) + 100)),
-        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
-        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
-    )
-    fig.update_xaxes(tickangle=-90)
-    fig.update_yaxes(autorange="reversed", title="Servicio")
-    return fig
-
-
-# ================================================================
-# 24e. HEATMAP MENSUAL: SERVICIO × DÍA
-# ================================================================
-def build_monthly_service_heatmap(monthly_daily: pd.DataFrame,
-                                   metric: str = "pasajeros_transportados",
-                                   title: str = "Pasajeros por servicio y día") -> go.Figure | None:
-    """
-    Heatmap: filas = servicios (orden operativo), columnas = días del mes,
-    color = métrica seleccionada. Reemplaza las múltiples tablas mensuales
-    permitiendo ver patrones por día de la semana.
-
-    Defensivo: retorna None ante cualquier inconsistencia de schema, evitando
-    crashes cuando el monthly_daily viene con columnas faltantes o vacíos.
-    """
-    if monthly_daily is None or monthly_daily.empty:
-        return None
-    if metric not in monthly_daily.columns:
-        return None
-    if "fecha" not in monthly_daily.columns:
-        return None
-
-    try:
-        df = monthly_daily.copy()
-        df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
-        df = df.dropna(subset=["fecha"])
-        if df.empty:
-            return None
-
-        # Asegurar que metric es numérico
-        df[metric] = pd.to_numeric(df[metric], errors="coerce")
-        df = df.dropna(subset=[metric])
-        if df.empty:
-            return None
-    except BaseException:
-        return None
-
-    df["servicio_display_label"] = df.get(
-        "servicio_display_label", df.get("servicio_label", pd.Series(dtype=str))
-    ).astype(str)
-
-    # Sumar/promediar el día por si hay duplicados
-    if "servicio_orden_idx" in df.columns:
-        df["servicio_orden_idx"] = pd.to_numeric(df["servicio_orden_idx"], errors="coerce")
-        order_map = (
-            df.groupby("servicio_display_label")["servicio_orden_idx"].min().to_dict()
-        )
-    else:
-        order_map = {}
-
-    pivot = df.pivot_table(
-        index="servicio_display_label", columns="fecha",
-        values=metric, aggfunc="mean",
-    )
-
-    # Ordenar filas por orden operativo, columnas por fecha
-    if order_map:
-        pivot["__order"] = pivot.index.map(lambda s: order_map.get(s, 9999))
-        pivot = pivot.sort_values("__order").drop(columns="__order")
-    pivot = pivot.reindex(sorted(pivot.columns), axis=1)
-
-    if pivot.empty:
-        return None
-
-    fechas = list(pivot.columns)
-    # Construir labels x con día de la semana
-    weekday_es = {0:"L", 1:"M", 2:"X", 3:"J", 4:"V", 5:"S", 6:"D"}
-    x_labels = []
-    for f in fechas:
-        try:
-            wd = pd.Timestamp(f).weekday()
-            x_labels.append(f"{weekday_es.get(wd, '?')} {pd.Timestamp(f).day}")
-        except Exception:
-            x_labels.append(str(f))
-
-    # Color: secuencial azul cuando es pax, rojo↔verde cuando es ocupación
-    colorscale = "Blues" if metric == "pasajeros_transportados" else [
-        [0.0, "#ECFDF5"], [0.5, "#FBBF24"], [0.8, "#F97316"], [1.0, "#B91C1C"]
-    ]
-
-    fig = go.Figure(data=go.Heatmap(
-        z=pivot.values,
-        x=x_labels,
-        y=pivot.index.tolist(),
-        colorscale=colorscale,
-        colorbar=dict(thickness=14, len=0.75),
-        hovertemplate="<b>%{y}</b><br>%{x}<br>Valor: %{z:,.0f}<extra></extra>",
-    ))
-    fig.update_layout(
-        title=title,
-        plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-        margin=dict(l=20, r=20, t=50, b=20),
-        height=max(380, min(800, 22 * len(pivot) + 100)),
-        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
-        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
-    )
-    fig.update_xaxes(tickangle=-90, side="bottom")
-    fig.update_yaxes(autorange="reversed", title="Servicio")
-    return fig
-
 
 # ================================================================
 # 24f. TENDENCIA DIARIA DE PASAJEROS DEL MES
@@ -4210,16 +4205,24 @@ def render_resumen_ejecutivo(kpis: pd.DataFrame, kpis_hist: pd.DataFrame,
                     ].copy()
                     spark_values = []
                     streak_text = None
+                    yoy_text = None
+                    hist_scaled_for_cumul = pd.DataFrame()
                     if not hist.empty:
                         hist_scaled = scale_kpi_dataframe_for_display(
                             hist, str(row["nombre"]), ("valor", "meta"),
                         )
+                        hist_scaled_for_cumul = hist_scaled.copy()
                         hist_scaled["periodo_date"] = hist_scaled["periodo"].apply(periodo_to_date)
                         hist_scaled = hist_scaled.dropna(subset=["periodo_date", "valor"])
                         hist_scaled = hist_scaled.sort_values("periodo_date").tail(12)
                         spark_values = pd.to_numeric(hist_scaled["valor"], errors="coerce").dropna().tolist()
-                        # Racha
                         streak_text = compute_kpi_streak(hist_scaled, str(row["nombre"]))
+                        # Comparación con mes del año anterior
+                        yoy_text = compute_yoy_comparison(
+                            hist_scaled_for_cumul,
+                            str(row.get("periodo", "")),
+                            str(row["nombre"]),
+                        )
 
                     render_kpi_card_with_sparkline(
                         str(row["nombre"]),
@@ -4229,8 +4232,19 @@ def render_resumen_ejecutivo(kpis: pd.DataFrame, kpis_hist: pd.DataFrame,
                         row["estado"],
                         history_values=spark_values,
                         streak_text=streak_text,
+                        yoy_text=yoy_text,
                     )
                     render_observation_box(row.get("observacion", None))
+
+                    # Recuadro acumulativo anual: SOLO para KPIs de afluencia
+                    if (is_afluencia_kpi(str(row["nombre"]))
+                            and not hist_scaled_for_cumul.empty):
+                        render_yearly_cumulative_card(
+                            hist_scaled_for_cumul,
+                            str(row.get("periodo", "")),
+                            str(row["nombre"]),
+                            unit=str(row.get("unidad", "")),
+                        )
 
     st.markdown("<div class='section-title'>Evolución del KPI seleccionado</div>", unsafe_allow_html=True)
     hist_service = kpis_hist[kpis_hist["servicio"].astype(str) == str(resumen_srv)].copy()
@@ -4502,13 +4516,29 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
         service_order_df = pd.DataFrame()
         service_order_path, service_order_files, service_order_status = "", [], "no_data"
 
-    try:
-        turnstile_df, turnstile_path, turnstile_missing, turnstile_files, turnstile_status = (
-            load_turnstile_service_data(profile_srv, str(data_path))
+    # Detectar si el perfil ya viene enriquecido (con tarifa y tipo de pasajero
+    # por viaje). Si es así, NO cargamos torniquetes — ahorra RAM significativa
+    # en Streamlit Cloud (donde el límite de 1 GB es crítico).
+    perfil_is_enriched = bool(
+        perfil_df is not None and not perfil_df.empty and (
+            "monto_transaccion" in perfil_df.columns
+            or "tipo_pasajero" in perfil_df.columns
         )
-    except Exception:
+    )
+
+    if perfil_is_enriched:
         turnstile_df = pd.DataFrame()
-        turnstile_path, turnstile_missing, turnstile_files, turnstile_status = "", [], [], "read_error"
+        turnstile_path, turnstile_missing, turnstile_files, turnstile_status = (
+            "", [], [], "skipped_enriched_profile",
+        )
+    else:
+        try:
+            turnstile_df, turnstile_path, turnstile_missing, turnstile_files, turnstile_status = (
+                load_turnstile_service_data(profile_srv, str(data_path))
+            )
+        except Exception:
+            turnstile_df = pd.DataFrame()
+            turnstile_path, turnstile_missing, turnstile_files, turnstile_status = "", [], [], "read_error"
 
     # ---------- 4. Pestañas ----------
     if st.session_state.get("safe_mode", False):
@@ -5009,38 +5039,6 @@ def _render_perfil_diario(perfil_df, profile_schema, profile_srv, fechas_disponi
         )
         show_plot(fig, use_container_width=True)
 
-    # ---------- Heatmap de ocupación servicio × tramo ----------
-    if not service_summary.empty:
-        st.markdown(
-            "<div class='section-title'>Mapa de ocupación: servicio × tramo</div>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            "<div class='section-subtitle'>Visualización compacta para "
-            "detectar patrones de saturación a lo largo de los servicios "
-            "del día. Verde = baja ocupación, rojo = sobrecupo.</div>",
-            unsafe_allow_html=True,
-        )
-        try:
-            servicios_orden = (
-                service_summary.sort_values("servicio_orden_idx", na_position="last")
-                ["servicio_label"].astype(str).tolist()
-                if "servicio_orden_idx" in service_summary.columns
-                else service_summary["servicio_label"].astype(str).tolist()
-            )
-            heatmap_fig = build_service_tramo_heatmap(
-                perfil_dir, schema_local, station_order if station_order else
-                perfil_dir["estacion"].dropna().astype(str).unique().tolist(),
-                capacidad_referencia=capacidad_referencia,
-                servicios_orden=servicios_orden,
-            )
-            if heatmap_fig is not None:
-                show_plot(heatmap_fig, use_container_width=True)
-            else:
-                st.info("No fue posible construir el mapa de ocupación.")
-        except BaseException as exc:
-            st.caption(f"Mapa de ocupación no disponible: {type(exc).__name__}")
-
     # ---------- Detalle por servicio ----------
     st.markdown("<div class='section-title'>Detalle por servicio</div>", unsafe_allow_html=True)
     if service_summary.empty:
@@ -5244,12 +5242,12 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
         st.info("No existen datos mensuales disponibles para los filtros seleccionados.")
         return
 
-    # Detectar cambio de mes y limpiar caches de sesión obsoletos para
-    # evitar acumulación de memoria entre cambios de mes consecutivos.
+    # Detectar cambio de mes y liberar memoria agresivamente para evitar
+    # que Streamlit Cloud mate el proceso por OOM (límite 1 GB).
     last_month_key = f"_last_month_processed_{profile_srv}"
     last_month = st.session_state.get(last_month_key)
     if last_month and last_month != month_sel:
-        # Cambió el mes: liberar caches específicos del mes previo
+        # Cambió el mes: liberar caches de sesión obsoletos
         keys_to_drop = [
             k for k in list(st.session_state.keys())
             if k.startswith("_turnstile_match_cache")
@@ -5259,6 +5257,26 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
                 del st.session_state[k]
             except KeyError:
                 pass
+
+        # Si el cambio es a un mes muy distante (no consecutivo), limpiar
+        # caches de slice mensual para liberar la rebanada anterior.
+        try:
+            last_dt = pd.to_datetime(str(last_month) + "-01")
+            cur_dt  = pd.to_datetime(str(month_sel) + "-01")
+            months_diff = abs((cur_dt.year - last_dt.year) * 12 + (cur_dt.month - last_dt.month))
+            if months_diff >= 1:
+                # Invalidar slice mensual y la versión cacheada del cómputo
+                try:
+                    get_profile_for_month.clear()
+                except Exception:
+                    pass
+                try:
+                    build_monthly_profile_tables_cached.clear()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         gc.collect()
     st.session_state[last_month_key] = month_sel
 
@@ -5431,47 +5449,6 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
             if is_streamlit_internal_exception(exc):
                 raise
             st.caption(f"Tendencia diaria no disponible: {type(exc).__name__}")
-
-    # Heatmap por dirección
-    if monthly_daily is not None and not monthly_daily.empty:
-        st.markdown(
-            "<div class='section-title' style='font-size:0.95rem'>"
-            "Mapa mensual: servicio × día</div>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            "<div class='section-subtitle'>Cada celda representa los "
-            "pasajeros transportados por un servicio en un día. Permite "
-            "detectar patrones por día de la semana y servicios atípicos.</div>",
-            unsafe_allow_html=True,
-        )
-        for dir_sel in directions:
-            try:
-                day_dir = monthly_daily[
-                    monthly_daily["direccion_ref"].astype(str).str.strip() == str(dir_sel)
-                ].copy()
-                if day_dir.empty:
-                    continue
-                st.markdown(
-                    f"<div class='map-note'><b>Dirección:</b> {dir_sel}</div>",
-                    unsafe_allow_html=True,
-                )
-                heat_fig = build_monthly_service_heatmap(
-                    day_dir, metric="pasajeros_transportados",
-                    title=f"Pasajeros por servicio y día | {dir_sel}",
-                )
-                if heat_fig is not None:
-                    show_plot(heat_fig, use_container_width=True)
-                else:
-                    st.caption(f"Mapa no disponible para {dir_sel}")
-                # Liberar
-                del day_dir
-                gc.collect()
-            except BaseException as exc:
-                if is_streamlit_internal_exception(exc):
-                    raise
-                st.caption(f"Mapa no disponible para {dir_sel}: {type(exc).__name__}")
-                continue
 
     # ============================================================
     # MODO DETALLE: Tablas por tipo de día
@@ -6099,7 +6076,7 @@ def clear_all_caches() -> None:
             pass
 
 
-def render_header(last_update_info: dict | None = None):
+def render_header():
     """
     Cabecera con título, selector de tema y menú ⋮.
     El menú ⋮ contiene: Limpiar caché y refrescar datos.
@@ -6139,6 +6116,28 @@ def render_header(last_update_info: dict | None = None):
                 "<div style='height:0.4rem'></div>",
                 unsafe_allow_html=True,
             )
+            # Botón de exportar a PDF de la vista actual.
+            # Usa el diálogo de impresión del navegador (sin dependencias);
+            # el usuario elige "Guardar como PDF" como destino de impresión.
+            st.markdown(
+                """
+                <button onclick="window.parent.print();"
+                        style="width:100%; background:white; border:1px solid #D7E0EA;
+                               color:#002857; font-weight:700; padding:0.5rem 0.85rem;
+                               border-radius:8px; cursor:pointer; font-size:0.9rem;">
+                    📄 Exportar vista a PDF
+                </button>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                "Imprime la vista actual; en el diálogo del navegador "
+                "elija 'Guardar como PDF' como destino."
+            )
+            st.markdown(
+                "<div style='height:0.4rem'></div>",
+                unsafe_allow_html=True,
+            )
             # Modo seguro: pausa los cálculos pesados (cruce torniquetes,
             # promedios mensuales) hasta que el usuario decida activarlos.
             # Útil cuando el usuario quiere navegar rápido entre filtros
@@ -6157,8 +6156,7 @@ def render_header(last_update_info: dict | None = None):
             st.session_state["safe_mode"] = bool(safe_mode)
             st.caption(
                 "Use 'Limpiar caché' si el dashboard se cierra "
-                "inesperadamente o muestra datos antiguos. "
-                "Use 'Modo seguro' si quiere cambiar filtros muy rápido."
+                "inesperadamente. Use 'Modo seguro' para navegar rápido."
             )
 
     # Aplicar paleta y CSS según tema seleccionado
@@ -6188,24 +6186,6 @@ def render_header(last_update_info: dict | None = None):
                 "desempeño, perfiles de carga y análisis por estación.</div>",
                 unsafe_allow_html=True,
             )
-            # Etiqueta de última actualización
-            if last_update_info:
-                tag_parts = []
-                if last_update_info.get("data_date"):
-                    tag_parts.append(
-                        f"📅 Datos al {last_update_info['data_date']}"
-                    )
-                if last_update_info.get("loaded_at"):
-                    tag_parts.append(
-                        f"⏱ Cargado {last_update_info['loaded_at']}"
-                    )
-                if tag_parts:
-                    st.markdown(
-                        f"<div style='margin-top:0.35rem;'>"
-                        f"<span class='efe-update-tag'>"
-                        f"{' · '.join(tag_parts)}</span></div>",
-                        unsafe_allow_html=True,
-                    )
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -6303,24 +6283,8 @@ def main():
         )
         st.stop()
 
-    # --- Construir info de "última actualización" -----------------------
-    last_update_info = {}
-    try:
-        # Última fecha del kpis.csv
-        kpi_periods = kpis["periodo"].dropna().astype(str).unique().tolist()
-        if kpi_periods:
-            last_period = max(kpi_periods)
-            last_update_info["data_date"] = month_period_to_label(last_period)
-    except Exception:
-        pass
-    try:
-        import time as _time
-        last_update_info["loaded_at"] = _time.strftime("%H:%M")
-    except Exception:
-        pass
-
-    # Cabecera (con info de actualización)
-    render_header(last_update_info=last_update_info)
+    # Cabecera
+    render_header()
 
     # Preparar iniciativas
     iniciativas = prepare_iniciativas(iniciativas, personas)
