@@ -26,10 +26,13 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
+import sys
 import time
+import traceback
 import unicodedata
 import warnings
-from datetime import date
+from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -38,6 +41,101 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+# ================================================================
+# 0a. SISTEMA DE LOGGING DIAGNÓSTICO PERSISTENTE
+# ================================================================
+# Este logger escribe a un archivo en /tmp con FLUSH INMEDIATO. Si el
+# proceso muere por OOM o por kill externo, el archivo queda con la
+# última línea escrita == el punto exacto del crash. El menú ⋮ del
+# dashboard incluye un visor para leer estos logs en vivo.
+
+DIAG_LOG_PATH = Path("/tmp/efe_dashboard_diag.log")
+
+
+def _diag_log_write(level: str, msg: str) -> None:
+    """Escribe una línea al log diagnóstico con flush inmediato."""
+    try:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        # Memoria actual del proceso (si está disponible)
+        mem_str = ""
+        try:
+            import resource as _res
+            kb = _res.getrusage(_res.RUSAGE_SELF).ru_maxrss
+            mem_mb = kb / 1024.0  # En Linux ru_maxrss viene en KB
+            mem_str = f" | RSS={mem_mb:.0f}MB"
+        except Exception:
+            pass
+        line = f"[{ts}] {level:5s}{mem_str} | {msg}\n"
+        with open(DIAG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+            f.flush()
+            try:
+                os.fsync(f.fileno())  # Garantiza escritura física
+            except (OSError, AttributeError):
+                pass
+    except Exception:
+        # Nunca dejar que el logger crashee el dashboard
+        pass
+
+
+def diag_info(msg: str) -> None:
+    _diag_log_write("INFO", msg)
+
+
+def diag_warn(msg: str) -> None:
+    _diag_log_write("WARN", msg)
+
+
+def diag_error(msg: str, exc: BaseException | None = None) -> None:
+    if exc is not None:
+        msg = f"{msg} | {type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+    _diag_log_write("ERROR", msg)
+
+
+def diag_checkpoint(label: str, **context) -> None:
+    """Marca un punto del flujo del dashboard. Útil para localizar dónde mata."""
+    ctx_str = " ".join(f"{k}={v}" for k, v in context.items())
+    _diag_log_write("CKPT", f"{label} {ctx_str}".strip())
+
+
+def get_diag_log_tail(n_lines: int = 200) -> str:
+    """Retorna las últimas N líneas del log diagnóstico."""
+    try:
+        if not DIAG_LOG_PATH.exists():
+            return "(sin entradas — el log se escribe cuando hay actividad)"
+        with open(DIAG_LOG_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        return "".join(lines[-n_lines:])
+    except Exception as exc:
+        return f"(error leyendo log: {exc})"
+
+
+def clear_diag_log() -> None:
+    try:
+        if DIAG_LOG_PATH.exists():
+            DIAG_LOG_PATH.unlink()
+    except Exception:
+        pass
+
+
+# Hook global de excepciones no capturadas (último recurso)
+def _global_excepthook(exc_type, exc_value, exc_tb):
+    try:
+        diag_error(
+            f"UNCAUGHT EXCEPTION: {exc_type.__name__}: {exc_value}",
+            exc=exc_value,
+        )
+    except Exception:
+        pass
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+
+sys.excepthook = _global_excepthook
+
+# Marcar inicio de sesión
+diag_info("=" * 70)
+diag_info(f"DASHBOARD STARTUP | Python {sys.version.split()[0]} | PID {os.getpid()}")
 
 # --- Suprimir warnings ruidosos que saturan el log y degradan rendimiento --
 # Streamlit 1.36+ deprecó `use_container_width`. Cada widget que use el flag
@@ -3013,19 +3111,31 @@ def build_monthly_profile_tables(perfil_df: pd.DataFrame,
     """
     Construye tablas mensuales por tipo_dia x dirección con métricas ejecutivas.
     Retorna: (tablas_dict, directions_list, monthly_metrics_dict, monthly_daily_df)
-    El monthly_daily se devuelve para alimentar gráficos adicionales (heatmaps, tendencias).
     """
+    diag_checkpoint(
+        "MONTHLY_BEGIN",
+        srv=profile_srv, mes=month_period, linea=linea_sel,
+        rows_perfil=(len(perfil_df) if perfil_df is not None else 0),
+        rows_turnstile=(len(turnstile_df) if turnstile_df is not None else 0),
+    )
+    t_start = time.time()
+
     if perfil_df is None or perfil_df.empty or not month_period or not linea_sel:
+        diag_warn("MONTHLY_EXIT_EMPTY: entrada vacía o filtros incompletos")
         return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}, pd.DataFrame()
 
     fecha_series = pd.to_datetime(perfil_df["fecha"], errors="coerce")
     month_mask = fecha_series.dt.to_period("M").astype(str) == str(month_period)
     perfil_mes = perfil_df.loc[month_mask].copy()
+    diag_checkpoint("MONTHLY_FILTRO_MES", filas_mes=len(perfil_mes))
     if perfil_mes.empty:
+        diag_warn(f"MONTHLY_EXIT_NO_MONTH_DATA: mes={month_period}")
         return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}, pd.DataFrame()
 
     perfil_mes = perfil_mes[perfil_mes["linea"].astype(str).str.strip() == str(linea_sel)].copy()
+    diag_checkpoint("MONTHLY_FILTRO_LINEA", filas_linea=len(perfil_mes))
     if perfil_mes.empty:
+        diag_warn(f"MONTHLY_EXIT_NO_LINE_DATA: linea={linea_sel}")
         return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}, pd.DataFrame()
 
     directions = [
@@ -3034,10 +3144,16 @@ def build_monthly_profile_tables(perfil_df: pd.DataFrame,
         )) if x
     ]
     if not directions:
+        diag_warn("MONTHLY_EXIT_NO_DIRECTIONS")
         return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}, pd.DataFrame()
 
     fechas_mes = sorted([x for x in perfil_mes["fecha"].dropna().unique().tolist() if pd.notna(x)])
     daily_rows = []
+    diag_checkpoint(
+        "MONTHLY_LOOP_START",
+        n_dias=len(fechas_mes), n_dirs=len(directions),
+        operaciones_estimadas=len(fechas_mes) * len(directions),
+    )
 
     # Guardrail: si el mes tiene demasiados días con datos masivos, advertir
     # y limitar para evitar OOM. Un mes típico de Biotren tiene ≤31 días.
@@ -3147,11 +3263,18 @@ def build_monthly_profile_tables(perfil_df: pd.DataFrame,
             except (NameError, UnboundLocalError):
                 pass
             gc.collect()
+            diag_checkpoint(
+                "MONTHLY_LOOP_GC", dias_procesados=day_idx + 1,
+                rows_acumuladas=sum(len(r) for r in daily_rows),
+            )
 
     if not daily_rows:
+        diag_warn("MONTHLY_EXIT_NO_DAILY_ROWS")
         return {}, directions, {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}, pd.DataFrame()
 
+    diag_checkpoint("MONTHLY_CONCAT", filas_a_concatenar=sum(len(r) for r in daily_rows))
     monthly_daily = pd.concat(daily_rows, ignore_index=True)
+    diag_checkpoint("MONTHLY_METRICS", filas_monthly_daily=len(monthly_daily))
     monthly_metrics = compute_monthly_executive_metrics(monthly_daily)
 
     result = {}
@@ -3221,6 +3344,12 @@ def build_monthly_profile_tables(perfil_df: pd.DataFrame,
             ).reset_index(drop=True)
             result[tipo_dia][dir_sel] = result_df
 
+    diag_checkpoint(
+        "MONTHLY_DONE",
+        elapsed_s=f"{time.time() - t_start:.2f}",
+        n_tipos_dia=len(result),
+        rows_monthly_daily=len(monthly_daily),
+    )
     return result, directions, monthly_metrics, monthly_daily
 
 # ================================================================
@@ -5204,10 +5333,14 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
     """
     Subpágina del promedio mensual. Rediseño con:
       • Tarjetas resumen al inicio
-      • Heatmap servicio × día (reemplaza las 6 tablas anteriores)
       • Tendencia diaria
       • Modo Resumen / Detalle (tablas se ven solo en Detalle)
     """
+    diag_checkpoint(
+        "RENDER_MENSUAL_BEGIN",
+        srv=profile_srv,
+        rows_perfil=(len(perfil_df) if perfil_df is not None else 0),
+    )
     st.markdown(
         "<div class='section-title'>Análisis mensual de servicios</div>",
         unsafe_allow_html=True,
@@ -5328,8 +5461,15 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
     # (la causa del cierre del dashboard al cambiar de mes).
     _data_path = st.session_state.get("_profile_data_path", "")
 
+    diag_checkpoint(
+        "RENDER_MENSUAL_PRE_CALC",
+        mes=month_sel, linea=linea_mes_sel,
+        path=("ok" if _data_path else "fallback"),
+    )
+
     try:
         with st.spinner("Calculando promedios mensuales por servicio…"):
+            t_pre = time.time()
             if _data_path:
                 # Camino preferente: carga interna por claves simples
                 tablas, directions, monthly_metrics, monthly_daily = build_monthly_profile_tables_cached(
@@ -5346,8 +5486,14 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
                     itinerary_summary_df, service_order_df,
                     turnstile_df, turnstile_status,
                 )
-    except MemoryError:
-        # Si aun así se queda sin memoria, sugerir limpieza
+            diag_checkpoint(
+                "RENDER_MENSUAL_POST_CALC",
+                elapsed_s=f"{time.time() - t_pre:.2f}",
+                tablas=len(tablas),
+                rows_daily=(len(monthly_daily) if monthly_daily is not None else 0),
+            )
+    except MemoryError as exc:
+        diag_error("RENDER_MENSUAL_OOM", exc=exc)
         st.error(
             "⚠️ Memoria insuficiente para calcular el mes completo. "
             "Pruebe abrir el menú ⋮ → 'Limpiar caché y recargar', y "
@@ -5357,7 +5503,9 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
         return
     except BaseException as exc:
         if is_streamlit_internal_exception(exc):
+            diag_info("RENDER_MENSUAL_RERUN: usuario cambió filtro durante cálculo")
             raise
+        diag_error("RENDER_MENSUAL_FAIL", exc=exc)
         st.error(
             f"Error calculando el promedio mensual: {type(exc).__name__}: {exc}. "
             f"Pruebe limpiar el caché desde el menú ⋮."
@@ -5366,10 +5514,14 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
 
     # Liberar memoria intermedia
     gc.collect()
+    diag_checkpoint("RENDER_MENSUAL_AFTER_GC")
 
     if not tablas:
+        diag_warn("RENDER_MENSUAL_NO_TABLAS")
         st.info("No existen datos mensuales para la línea y mes seleccionados.")
         return
+
+    diag_checkpoint("RENDER_MENSUAL_RENDERIZADO_INICIO")
 
     # ============================================================
     # NARRATIVA AUTOMÁTICA
@@ -6185,6 +6337,52 @@ def render_header():
                 "Use 'Limpiar caché' si el dashboard se cierra "
                 "inesperadamente. Use 'Modo seguro' para navegar rápido."
             )
+            st.markdown(
+                "<div style='height:0.5rem; border-top:1px solid #E5E7EB; "
+                "margin-top:0.45rem; padding-top:0.45rem;'></div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                "<div style='font-size:0.8rem; color:#6B7280; margin-bottom:0.4rem;'>"
+                "Diagnóstico"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            # Visor de log diagnóstico — clave para entender por qué crashea
+            if st.button("🔍 Ver log de diagnóstico",
+                         key="btn_show_diag_log", width="stretch"):
+                st.session_state["_show_diag_log"] = not st.session_state.get(
+                    "_show_diag_log", False,
+                )
+            if st.session_state.get("_show_diag_log", False):
+                log_text = get_diag_log_tail(150)
+                st.text_area(
+                    "Últimas 150 líneas del log diagnóstico",
+                    value=log_text,
+                    height=240,
+                    key="diag_log_textarea",
+                )
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.download_button(
+                        "⬇ Descargar log",
+                        data=log_text,
+                        file_name=f"efe_diag_{datetime.now().strftime('%Y%m%d_%H%M')}.log",
+                        mime="text/plain",
+                        key="btn_download_diag_log",
+                        width="stretch",
+                    )
+                with col_b:
+                    if st.button("🗑 Limpiar log", key="btn_clear_diag_log",
+                                 width="stretch"):
+                        clear_diag_log()
+                        st.success("Log limpiado")
+                        st.rerun()
+                st.caption(
+                    "Si el dashboard se cae al cambiar de filtro: descargue el log "
+                    "INMEDIATAMENTE después de recargar — la última línea muestra "
+                    "el punto exacto donde el proceso terminó."
+                )
 
     # Aplicar paleta y CSS según tema seleccionado
     is_dark = "Oscuro" in st.session_state["dashboard_theme_mode"]
@@ -6353,6 +6551,7 @@ def main():
     last_section_key = "_last_section_rendered"
     last_section = st.session_state.get(last_section_key)
     if last_section and last_section != section_sel:
+        diag_info(f"PAGE_CHANGE: {last_section} → {section_sel}")
         # Cambió de página: limpiar caches volátiles y forzar gc
         for k in list(st.session_state.keys()):
             if k.startswith("_turnstile_match_cache"):
@@ -6365,6 +6564,7 @@ def main():
         except Exception:
             pass
     st.session_state[last_section_key] = section_sel
+    diag_checkpoint("DISPATCH", seccion=section_sel, root=root_sel)
 
     # Dispatch — cada renderer envuelto en try/except para que un crash en
     # una sección no cierre todo el dashboard. Se distingue cuidadosamente
