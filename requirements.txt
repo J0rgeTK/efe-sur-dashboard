@@ -1,4 +1,19 @@
-streamlit
-pandas
-numpy
-plotly
+# EFE Sur Dashboard — Versiones probadas y estables
+# ======================================================================
+# Por qué fijamos versiones: el deploy actual usa Python 3.14, pandas 3.0,
+# plotly 6.7, streamlit 1.57 — un stack muy reciente con varios cambios
+# de API simultáneos. Esto genera warnings masivos y posibles incompatibilidades.
+# Con estas versiones el dashboard fue probado y funciona estable.
+#
+# IMPORTANTE: agregar también un archivo `runtime.txt` o `.python-version`
+# en la raíz del repositorio con el contenido:
+#     python-3.12
+# para que Streamlit Cloud no use Python 3.14 (que es bleeding edge).
+# ======================================================================
+
+streamlit>=1.39,<1.50
+pandas>=2.2,<2.3
+numpy>=1.26,<2.0
+plotly>=5.24,<6.0
+openpyxl>=3.1
+pyarrow>=14.0
