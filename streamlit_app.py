@@ -59,8 +59,8 @@ import streamlit as st
 
 # Identificador de versión visible en la UI para confirmar qué archivo
 # está corriendo en producción. Se incrementa con cada release.
-APP_VERSION = "v11-2026-05-07"
-APP_VERSION_HASH = "5839a64bc2ed"
+APP_VERSION = "v12-2026-05-07-fix-namerror"
+APP_VERSION_HASH = "c9318c5e93ae"
 
 # Ruta del log diagnóstico. En Streamlit Cloud, /tmp se borra al reiniciar
 # el contenedor — pero el archivo SÍ persiste durante la sesión del usuario,
@@ -5038,32 +5038,12 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
     perfil_df = pd.DataFrame()
     perfil_df.attrs["profile_schema"] = profile_schema
     perfil_path = str(data_path)
-    perfil_missing = []
+    perfil_missing: list = []
     perfil_files = list(archivos_index.values())
     perfil_status = "ok"
     folder_name = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get(
         "folder_candidates", ["perfil_carga"],
     )[0]
-
-    if False:  # nunca entra (mantener bloque original como referencia)
-        st.info(
-            f"No se encontraron archivos CSV para **{profile_srv}**. "
-            f"Cree la carpeta **{folder_name}** y agregue los archivos diarios. "
-            f"Ruta buscada: **{perfil_path}**.",
-            icon="ℹ️",
-        )
-        st.markdown("</div></div>", unsafe_allow_html=True)
-        return
-
-    if perfil_status == "unsupported_format" or perfil_missing:
-        st.warning(
-            f"Archivos detectados, pero formato no compatible. "
-            f"Columnas faltantes: **{', '.join(perfil_missing)}**."
-        )
-        if perfil_files:
-            st.caption(f"Archivos detectados: {len(perfil_files)} | carpeta: {perfil_path}")
-        st.markdown("</div></div>", unsafe_allow_html=True)
-        return
 
     # Usar índice de archivos (sin cargar contenido) para listar fechas
     fechas_disponibles = get_available_dates(profile_srv, str(data_path))
@@ -6686,8 +6666,12 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
         else:
             st.info("Sin coordenadas válidas para el mapa de orígenes.")
 
-    if od_files:
-        st.caption(f"Archivos OD cargados: {len(od_files)} | carpeta: {od_path}")
+    # Caption con info del índice de archivos (reemplaza el viejo conteo
+    # od_files/od_path que ya no existen tras el refactor a carga selectiva).
+    if od_index:
+        st.caption(
+            f"Archivos OD disponibles: {len(od_index)} | carpeta: {folder_name}"
+        )
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 # ================================================================
