@@ -40,6 +40,13 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+
+# --- Compatibilidad Plotly 5.x ↔ 6.x ---
+# Plotly 6 renombró Scattermapbox→Scattermap y mapbox→map. Detectamos qué API
+# está disponible y exponemos un alias para escribir código compatible.
+_PLOTLY_HAS_NEW_MAP_API = hasattr(go, "Scattermap")
+ScatterMapTrace = go.Scattermap if _PLOTLY_HAS_NEW_MAP_API else go.Scattermapbox
+PLOTLY_MAP_LAYOUT_KEY = "map" if _PLOTLY_HAS_NEW_MAP_API else "mapbox"
 import streamlit as st
 
 # ================================================================
@@ -50,11 +57,28 @@ import streamlit as st
 # última línea escrita == el punto exacto del crash. El menú ⋮ del
 # dashboard incluye un visor para leer estos logs en vivo.
 
+# Identificador de versión visible en la UI para confirmar qué archivo
+# está corriendo en producción. Se incrementa con cada release.
+APP_VERSION = "v11-2026-05-07"
+APP_VERSION_HASH = "5839a64bc2ed"
+
+# Ruta del log diagnóstico. En Streamlit Cloud, /tmp se borra al reiniciar
+# el contenedor — pero el archivo SÍ persiste durante la sesión del usuario,
+# que es cuando lo necesitamos. El usuario debe descargar el log en cuanto
+# detecte un crash, antes de que se reinicie automáticamente la app.
 DIAG_LOG_PATH = Path("/tmp/efe_dashboard_diag.log")
+
+# Buffer en memoria como respaldo: si /tmp falla por permisos, conservamos
+# las últimas N entradas en RAM. Sobrevive a re-runs de Streamlit pero NO
+# a reinicios del proceso.
+_DIAG_MEMORY_BUFFER: list = []
+_DIAG_MEMORY_BUFFER_MAX = 500
 
 
 def _diag_log_write(level: str, msg: str) -> None:
-    """Escribe una línea al log diagnóstico con flush inmediato."""
+    """Escribe una línea al log diagnóstico con triple respaldo:
+    archivo en /tmp, buffer en memoria y stderr (visible en logs de Streamlit Cloud).
+    """
     try:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         # Memoria actual del proceso (si está disponible)
@@ -62,20 +86,40 @@ def _diag_log_write(level: str, msg: str) -> None:
         try:
             import resource as _res
             kb = _res.getrusage(_res.RUSAGE_SELF).ru_maxrss
-            mem_mb = kb / 1024.0  # En Linux ru_maxrss viene en KB
+            mem_mb = kb / 1024.0
             mem_str = f" | RSS={mem_mb:.0f}MB"
         except Exception:
             pass
-        line = f"[{ts}] {level:5s}{mem_str} | {msg}\n"
-        with open(DIAG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(line)
-            f.flush()
-            try:
-                os.fsync(f.fileno())  # Garantiza escritura física
-            except (OSError, AttributeError):
-                pass
+        line = f"[{ts}] {level:5s}{mem_str} | {msg}"
+
+        # Respaldo 1: archivo en /tmp (puede fallar por permisos)
+        try:
+            with open(DIAG_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except (OSError, AttributeError):
+                    pass
+        except Exception:
+            pass
+
+        # Respaldo 2: buffer en memoria (sobrevive a re-runs)
+        try:
+            _DIAG_MEMORY_BUFFER.append(line)
+            if len(_DIAG_MEMORY_BUFFER) > _DIAG_MEMORY_BUFFER_MAX:
+                del _DIAG_MEMORY_BUFFER[:len(_DIAG_MEMORY_BUFFER) - _DIAG_MEMORY_BUFFER_MAX]
+        except Exception:
+            pass
+
+        # Respaldo 3: stderr — aparece en los logs de Streamlit Cloud y
+        # sobrevive al kill del proceso porque ya fue escrito al pipe del
+        # contenedor antes del crash. ESTO ES CRUCIAL para diagnosticar OOM.
+        try:
+            print(f"[DIAG] {line}", file=sys.stderr, flush=True)
+        except Exception:
+            pass
     except Exception:
-        # Nunca dejar que el logger crashee el dashboard
         pass
 
 
@@ -100,15 +144,23 @@ def diag_checkpoint(label: str, **context) -> None:
 
 
 def get_diag_log_tail(n_lines: int = 200) -> str:
-    """Retorna las últimas N líneas del log diagnóstico."""
+    """Retorna las últimas N líneas del log diagnóstico, prefiriendo el
+    archivo (más completo) y cayendo al buffer en memoria si el archivo
+    no está disponible."""
     try:
-        if not DIAG_LOG_PATH.exists():
-            return "(sin entradas — el log se escribe cuando hay actividad)"
-        with open(DIAG_LOG_PATH, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        return "".join(lines[-n_lines:])
-    except Exception as exc:
-        return f"(error leyendo log: {exc})"
+        if DIAG_LOG_PATH.exists():
+            with open(DIAG_LOG_PATH, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            if lines:
+                return "".join(lines[-n_lines:])
+    except Exception:
+        pass
+
+    # Fallback: buffer en memoria
+    if _DIAG_MEMORY_BUFFER:
+        return "\n".join(_DIAG_MEMORY_BUFFER[-n_lines:]) + "\n"
+
+    return "(sin entradas — el log se escribe cuando hay actividad)"
 
 
 def clear_diag_log() -> None:
@@ -1455,6 +1507,8 @@ def _normalize_aggregated_profile(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
     for col in ["linea", "direccion", "estacion"]:
+        if col in df.columns and str(df[col].dtype) == "category":
+            df[col] = df[col].astype(str)
         df[col] = df[col].fillna("").astype(str).str.strip()
     df["servicio_label"] = df["servicio"].apply(format_service_id)
     df["profile_schema"] = "aggregated"
@@ -1487,6 +1541,10 @@ def _normalize_transactional_profile(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     for col in ["origen", "destino", "linea", "direccion"]:
+        # Convertir categorical a string antes de fillna (categorical no
+        # acepta "" como nuevo valor por defecto).
+        if str(df[col].dtype) == "category":
+            df[col] = df[col].astype(str)
         df[col] = df[col].fillna("").astype(str).str.strip()
     df["t_entrada_viaje"] = pd.to_datetime(df["t_entrada_viaje"], errors="coerce")
     df["t_salida_viaje"] = pd.to_datetime(df["t_salida_viaje"], errors="coerce")
@@ -1614,6 +1672,152 @@ def load_od_service_data(service_name: str, data_path_str: str):
 
 
 # ================================================================
+# 13b. CARGA SELECTIVA DE OD POR FECHA (evita OOM al concatenar todos los archivos)
+# ================================================================
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=4)
+def get_od_file_index(service_name: str, data_path_str: str) -> dict:
+    """
+    Indexa los archivos OD por fecha extraída del nombre.
+    Mismo patrón que get_profile_file_index para perfil_bt.
+    """
+    import re as _re
+    data_path = Path(data_path_str)
+    csv_files, _ = _resolve_folder(service_name, OD_SERVICE_CONFIG, data_path)
+
+    date_pattern = _re.compile(r"(\d{4})[-_]?(\d{2})[-_]?(\d{2})")
+    index: dict[str, str] = {}
+
+    for f in csv_files:
+        match = date_pattern.search(f.name)
+        if match:
+            try:
+                y, m, d = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                fecha_iso = f"{y:04d}-{m:02d}-{d:02d}"
+                index[fecha_iso] = str(f)
+            except (ValueError, TypeError):
+                continue
+        else:
+            index[f"_nodate_{f.name}"] = str(f)
+    return index
+
+
+def _read_single_od_file(file_path: str) -> pd.DataFrame:
+    """Lee un único CSV de OD y le aplica la normalización mínima."""
+    try:
+        df = pd.read_csv(file_path, low_memory=False)
+        df["archivo_origen"] = Path(file_path).name
+        return df
+    except Exception as exc:
+        diag_warn(f"READ_OD_FILE_FAIL: {file_path} | {type(exc).__name__}: {exc}")
+        return pd.DataFrame()
+
+
+def _normalize_od_dataframe(od_df: pd.DataFrame) -> tuple[pd.DataFrame, list, str]:
+    """Aplica la normalización idéntica a load_od_service_data sobre un slice."""
+    required_display = ["origen", "destino", "fecha_entrada", "fecha_salida"]
+
+    if od_df is None or od_df.empty:
+        return pd.DataFrame(), required_display, "no_data"
+
+    has_new = all(c in od_df.columns for c in required_display)
+    has_old = all(c in od_df.columns for c in ["origen", "destino", "t_entrada_viaje", "t_salida_viaje"])
+
+    if has_new:
+        od_df["t_entrada_viaje"] = pd.to_datetime(od_df["fecha_entrada"], errors="coerce")
+        od_df["t_salida_viaje"]  = pd.to_datetime(od_df["fecha_salida"],  errors="coerce")
+    elif has_old:
+        od_df["t_entrada_viaje"] = pd.to_datetime(od_df["t_entrada_viaje"], errors="coerce")
+        od_df["t_salida_viaje"]  = pd.to_datetime(od_df["t_salida_viaje"],  errors="coerce")
+    else:
+        return od_df, required_display, "unsupported_format"
+
+    for col in ["origen", "destino", "direccion", "linea", "linea_entrada", "linea_salida"]:
+        if col not in od_df.columns:
+            od_df[col] = ""
+        od_df[col] = od_df[col].fillna("").astype(str).str.strip()
+
+    if od_df["linea"].eq("").all():
+        same = od_df["linea_entrada"].astype(str) == od_df["linea_salida"].astype(str)
+        od_df["linea"] = np.where(
+            same,
+            od_df["linea_entrada"].astype(str),
+            (od_df["linea_entrada"].astype(str) + "→" + od_df["linea_salida"].astype(str)).str.strip("→"),
+        )
+
+    od_df["fecha"] = od_df["t_entrada_viaje"].dt.date
+    missing_mask = od_df["fecha"].isna()
+    if missing_mask.any():
+        od_df.loc[missing_mask, "fecha"] = od_df.loc[missing_mask, "t_salida_viaje"].dt.date
+    if "dia_proceso" in od_df.columns:
+        dia_proceso = pd.to_datetime(od_df["dia_proceso"], errors="coerce").dt.date
+        od_df["fecha"] = od_df["fecha"].where(pd.Series(od_df["fecha"]).notna(), dia_proceso)
+
+    if "servicio_final" in od_df.columns:
+        od_df["servicio_label"] = od_df["servicio_final"].apply(format_service_id)
+    elif "servicio" in od_df.columns:
+        od_df["servicio_label"] = od_df["servicio"].apply(format_service_id)
+    else:
+        od_df["servicio_label"] = "-"
+
+    for col in ["tarjeta_id", "viaje_idx", "terminal_entrada", "terminal_salida"]:
+        if col in od_df.columns:
+            od_df[col] = pd.to_numeric(od_df[col], errors="coerce")
+
+    return od_df.dropna(subset=["fecha"]).copy(), [], "ok"
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=24)
+def get_od_for_day(service_name: str, data_path_str: str,
+                    fecha_iso: str) -> tuple[pd.DataFrame, str]:
+    """
+    Carga ÚNICAMENTE el archivo OD del día solicitado.
+    Análogo a get_profile_for_day. Reemplaza la lectura masiva de toda la
+    carpeta od_bt que estaba causando OOM al entrar a Análisis por Estaciones.
+    """
+    if not fecha_iso:
+        return pd.DataFrame(), "no_data"
+
+    diag_checkpoint("LOAD_OD_DAY_BEGIN", srv=service_name, fecha=fecha_iso)
+    index = get_od_file_index(service_name, data_path_str)
+
+    file_path = index.get(str(fecha_iso))
+    if not file_path:
+        diag_warn(f"LOAD_OD_DAY_NO_FILE: fecha={fecha_iso}")
+        return pd.DataFrame(), "no_data"
+
+    df_raw = _read_single_od_file(file_path)
+    if df_raw.empty:
+        diag_warn(f"LOAD_OD_DAY_EMPTY: file={file_path}")
+        return pd.DataFrame(), "no_data"
+
+    df_norm, _, status = _normalize_od_dataframe(df_raw)
+
+    # Filtrar exactamente al día solicitado (por si el archivo contiene viajes
+    # que se solapan con el día anterior/siguiente)
+    target = pd.to_datetime(fecha_iso, errors="coerce")
+    if pd.notna(target) and "fecha" in df_norm.columns and not df_norm.empty:
+        df_norm = df_norm.loc[df_norm["fecha"] == target.date()].copy()
+
+    diag_checkpoint("LOAD_OD_DAY_DONE", filas=len(df_norm), status=status)
+    return df_norm, status
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=4)
+def get_od_available_dates(service_name: str, data_path_str: str) -> list:
+    """Lista de fechas con datos OD disponibles, leída solo del índice."""
+    index = get_od_file_index(service_name, data_path_str)
+    fechas = []
+    for k in index.keys():
+        if k.startswith("_nodate_"):
+            continue
+        try:
+            fechas.append(pd.to_datetime(k).date())
+        except Exception:
+            continue
+    return sorted(fechas)
+
+
+# ================================================================
 # 14. CARGA DE TORNIQUETES
 # ================================================================
 TURNSTILE_REQUIRED = ["FECHA_TRANSACCION", "NUMERO_TARJETA", "MONTO_TRANSACCION"]
@@ -1716,42 +1920,213 @@ def load_turnstile_service_data(service_name: str, data_path_str: str):
 # por período. Esto reduce la memoria activa por re-run y mejora
 # drásticamente la robustez ante cambios rápidos de filtros.
 
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=4)
+def get_profile_file_index(service_name: str, data_path_str: str) -> dict:
+    """
+    Indexa los archivos del perfil por fecha (extraída del nombre).
+    Retorna {fecha_iso: ruta_archivo}.
+
+    Este índice se construye UNA SOLA VEZ y se cachea por 30 minutos.
+    Es la operación más liviana posible: solo lista archivos, no los lee.
+    Resuelve el problema del crash por OOM al evitar concatenar 1.7M+ filas.
+    """
+    import re as _re
+    data_path = Path(data_path_str)
+    csv_files, _ = _resolve_folder(service_name, PROFILE_SERVICE_CONFIG, data_path)
+
+    # Patrón flexible: busca YYYY-MM-DD en el nombre del archivo
+    date_pattern = _re.compile(r"(\d{4})[-_]?(\d{2})[-_]?(\d{2})")
+    index: dict[str, str] = {}
+
+    for f in csv_files:
+        match = date_pattern.search(f.name)
+        if match:
+            try:
+                y, m, d = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                fecha_iso = f"{y:04d}-{m:02d}-{d:02d}"
+                # Si hay duplicados por fecha, el último gana (más reciente upload)
+                index[fecha_iso] = str(f)
+            except (ValueError, TypeError):
+                continue
+        else:
+            # Archivo sin fecha clara en el nombre: lo guardamos con su nombre
+            # como clave única (se cargará junto a los demás de fallback)
+            index[f"_nodate_{f.name}"] = str(f)
+
+    return index
+
+
+def _read_single_profile_file(file_path: str) -> pd.DataFrame:
+    """
+    Lee un único CSV del perfil sin concatenarlo con otros.
+
+    Optimización de RAM: lee solo las columnas usadas y reduce dtypes
+    después de la lectura (más confiable que pasar dtypes a read_csv,
+    que falla cuando hay valores fuera de rango).
+    """
+    try:
+        usecols_candidates = [
+            "viaje_idx", "tarjeta_id", "origen", "destino", "servicio_final",
+            "linea", "version_que_gana", "t_entrada_viaje", "t_salida_viaje",
+            "direccion", "dia_proceso", "etiqueta",
+            "servicio_tramo_v1", "servicio_tramo_v2",
+            "MONTO_TRANSACCION", "tipo_pasajero_norm", "tipo_pasajero",
+            "fecha", "estacion", "t_arr_est", "t_dep_est", "capacidad_tren",
+            "A_llegadas_anden", "D_bajadas", "Demanda_anden",
+            "Capacidad_disponible", "B_embarque", "R_quedados", "Q_out_cola",
+            "L_in_abordo", "L_out_abordo", "servicio",
+        ]
+        try:
+            header = pd.read_csv(file_path, nrows=0)
+            available = [c for c in usecols_candidates if c in header.columns]
+            if not available:
+                available = None
+        except Exception:
+            available = None
+
+        df = pd.read_csv(file_path, usecols=available, low_memory=False)
+
+        # Reducción post-lectura de dtypes para minimizar memoria.
+        # Se hace con try/except por columna para que un fallo no rompa todo.
+        downcast_int_cols = [
+            "viaje_idx", "MONTO_TRANSACCION", "servicio_final",
+            "servicio_tramo_v1", "servicio_tramo_v2",
+            "B_embarque", "D_bajadas", "L_in_abordo", "L_out_abordo",
+            "capacidad_tren",
+        ]
+        for col in downcast_int_cols:
+            if col in df.columns:
+                try:
+                    s = pd.to_numeric(df[col], errors="coerce")
+                    if s.notna().all() and (s == s.astype(int)).all():
+                        df[col] = pd.to_numeric(s, downcast="integer")
+                    else:
+                        df[col] = pd.to_numeric(s, downcast="float")
+                except Exception:
+                    pass
+
+        # Categorías para columnas de baja cardinalidad
+        cat_cols = ["linea", "direccion", "version_que_gana", "etiqueta",
+                    "tipo_pasajero_norm", "tipo_pasajero"]
+        for col in cat_cols:
+            if col in df.columns:
+                try:
+                    df[col] = df[col].astype("category")
+                except Exception:
+                    pass
+
+        df["archivo_origen"] = Path(file_path).name
+        return df
+    except Exception as exc:
+        diag_warn(f"READ_FILE_FAIL: {file_path} | {type(exc).__name__}: {exc}")
+        try:
+            df = pd.read_csv(file_path, low_memory=False)
+            df["archivo_origen"] = Path(file_path).name
+            return df
+        except Exception:
+            return pd.DataFrame()
+
+
+def _normalize_profile_chunk(df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+    """Normaliza un chunk del perfil detectando schema y aplicando el normalizer."""
+    if df is None or df.empty:
+        return pd.DataFrame(), "aggregated"
+    has_agg = all(c in df.columns for c in PROFILE_AGG_REQUIRED)
+    has_tx  = all(c in df.columns for c in PROFILE_TX_REQUIRED)
+    if has_agg:
+        out = _normalize_aggregated_profile(df)
+        return out, "aggregated"
+    if has_tx:
+        out = _normalize_transactional_profile(df)
+        return out, "transactional"
+    return df, "unsupported"
+
+
 @st.cache_data(ttl=900, show_spinner=False, max_entries=24)
 def get_profile_for_day(service_name: str, data_path_str: str,
                         fecha_iso: str) -> tuple[pd.DataFrame, str]:
-    """Retorna sólo las filas del perfil para un día específico."""
-    perfil_df, _p, _m, _f, status = load_profile_service_data(service_name, data_path_str)
-    if status != "ok" or perfil_df.empty or not fecha_iso:
-        schema_default = "aggregated"
-        if not perfil_df.empty:
-            schema_default = perfil_df.attrs.get("profile_schema", "aggregated")
-        return pd.DataFrame(), schema_default
+    """
+    Carga ÚNICAMENTE el archivo del día solicitado.
+    Reemplazo crítico: antes leía toda la base (1.7M filas) y filtraba.
+    Ahora lee solo el archivo correspondiente al día (~50k filas).
+    """
+    if not fecha_iso:
+        return pd.DataFrame(), "aggregated"
 
-    schema = perfil_df.attrs.get("profile_schema", "aggregated")
+    diag_checkpoint("LOAD_DAY_BEGIN", srv=service_name, fecha=fecha_iso)
+    index = get_profile_file_index(service_name, data_path_str)
+
+    # Buscar archivo exacto del día
+    file_path = index.get(str(fecha_iso))
+    if not file_path:
+        # Fallback: si no hay archivo con esa fecha, retornar vacío
+        diag_warn(f"LOAD_DAY_NO_FILE: fecha={fecha_iso}")
+        return pd.DataFrame(), "aggregated"
+
+    df_raw = _read_single_profile_file(file_path)
+    if df_raw.empty:
+        diag_warn(f"LOAD_DAY_EMPTY: file={file_path}")
+        return pd.DataFrame(), "aggregated"
+
+    df_norm, schema = _normalize_profile_chunk(df_raw)
     target = pd.to_datetime(fecha_iso, errors="coerce")
-    if pd.isna(target):
-        return pd.DataFrame(), schema
-    sliced = perfil_df.loc[perfil_df["fecha"] == target.date()].copy()
-    sliced.attrs["profile_schema"] = schema
-    return sliced, schema
+    if pd.notna(target) and "fecha" in df_norm.columns:
+        df_norm = df_norm.loc[df_norm["fecha"] == target.date()].copy()
+    df_norm.attrs["profile_schema"] = schema
+    diag_checkpoint("LOAD_DAY_DONE", filas=len(df_norm), schema=schema)
+    return df_norm, schema
 
 
-@st.cache_data(ttl=900, show_spinner=False, max_entries=12)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=8)
 def get_profile_for_month(service_name: str, data_path_str: str,
                           month_period: str) -> tuple[pd.DataFrame, str]:
-    """Retorna sólo las filas del perfil correspondientes a un mes (YYYY-MM)."""
-    perfil_df, _p, _m, _f, status = load_profile_service_data(service_name, data_path_str)
-    if status != "ok" or perfil_df.empty or not month_period:
-        schema_default = "aggregated"
-        if not perfil_df.empty:
-            schema_default = perfil_df.attrs.get("profile_schema", "aggregated")
-        return pd.DataFrame(), schema_default
+    """
+    Carga SOLO los archivos del mes solicitado (YYYY-MM).
+    Reemplazo crítico: antes concatenaba 1.7M+ filas para luego filtrar.
+    Ahora carga ~30 archivos diarios (~1.5M filas máximo) que son los del mes.
+    """
+    if not month_period:
+        return pd.DataFrame(), "aggregated"
 
-    schema = perfil_df.attrs.get("profile_schema", "aggregated")
-    fecha_periods = pd.to_datetime(perfil_df["fecha"], errors="coerce").dt.to_period("M").astype(str)
-    sliced = perfil_df.loc[fecha_periods == str(month_period)].copy()
-    sliced.attrs["profile_schema"] = schema
-    return sliced, schema
+    diag_checkpoint("LOAD_MONTH_BEGIN", srv=service_name, mes=month_period)
+    index = get_profile_file_index(service_name, data_path_str)
+
+    # Filtrar archivos del mes solicitado
+    month_prefix = str(month_period)[:7]  # 'YYYY-MM'
+    relevant_files = [
+        path for fecha, path in index.items()
+        if fecha.startswith(month_prefix)
+    ]
+
+    if not relevant_files:
+        diag_warn(f"LOAD_MONTH_NO_FILES: mes={month_period}")
+        return pd.DataFrame(), "aggregated"
+
+    diag_checkpoint("LOAD_MONTH_FILES", n_archivos=len(relevant_files))
+
+    # Leer y concatenar SOLO los del mes (chunked)
+    frames = []
+    for fp in relevant_files:
+        df_chunk = _read_single_profile_file(fp)
+        if not df_chunk.empty:
+            frames.append(df_chunk)
+
+    if not frames:
+        diag_warn(f"LOAD_MONTH_EMPTY: mes={month_period}")
+        return pd.DataFrame(), "aggregated"
+
+    df_raw = pd.concat(frames, ignore_index=True)
+    diag_checkpoint("LOAD_MONTH_RAW", filas_crudas=len(df_raw))
+    del frames
+    gc.collect()
+
+    df_norm, schema = _normalize_profile_chunk(df_raw)
+    del df_raw
+    gc.collect()
+
+    df_norm.attrs["profile_schema"] = schema
+    diag_checkpoint("LOAD_MONTH_DONE", filas=len(df_norm), schema=schema)
+    return df_norm, schema
 
 
 @st.cache_data(ttl=900, show_spinner=False, max_entries=24)
@@ -1767,25 +2142,40 @@ def get_turnstile_for_day(service_name: str, data_path_str: str,
     return turnstile_df.loc[turnstile_df["fecha"] == target.date()].copy()
 
 
-@st.cache_data(ttl=900, show_spinner=False, max_entries=12)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=4)
 def get_available_dates(service_name: str, data_path_str: str) -> list:
-    """Lista ordenada de fechas únicas disponibles para el servicio."""
-    perfil_df, _p, _m, _f, status = load_profile_service_data(service_name, data_path_str)
-    if status != "ok" or perfil_df.empty:
-        return []
-    fechas = perfil_df["fecha"].dropna().unique().tolist()
-    return sorted([f for f in fechas if pd.notna(f)])
+    """
+    Lista de fechas únicas disponibles, leída SOLO del índice de archivos.
+    Sin cargar el contenido — operación O(1) en memoria.
+    """
+    index = get_profile_file_index(service_name, data_path_str)
+    fechas = []
+    for k in index.keys():
+        if k.startswith("_nodate_"):
+            continue
+        try:
+            fechas.append(pd.to_datetime(k).date())
+        except Exception:
+            continue
+    return sorted(fechas)
 
 
-@st.cache_data(ttl=900, show_spinner=False, max_entries=12)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=4)
 def get_available_months(service_name: str, data_path_str: str) -> list:
-    """Lista ordenada de meses únicos (YYYY-MM) disponibles."""
-    perfil_df, _p, _m, _f, status = load_profile_service_data(service_name, data_path_str)
-    if status != "ok" or perfil_df.empty:
-        return []
-    series = pd.to_datetime(perfil_df["fecha"], errors="coerce").dt.to_period("M").astype(str)
-    return [m for m in sorted(pd.Series(series).dropna().unique().tolist())
-            if m and m != "NaT"]
+    """
+    Lista de meses únicos disponibles, leída del índice de archivos.
+    Operación O(1) — no toca contenido de archivos.
+    """
+    index = get_profile_file_index(service_name, data_path_str)
+    months = set()
+    for k in index.keys():
+        if k.startswith("_nodate_"):
+            continue
+        try:
+            months.add(str(k)[:7])  # YYYY-MM
+        except Exception:
+            continue
+    return sorted(months)
 
 
 # ================================================================
@@ -4024,7 +4414,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
 
     bounds = compute_map_bounds(plot_df)
 
-    fig.add_trace(go.Scattermap(
+    fig.add_trace(ScatterMapTrace(
         lat=plot_df["latitud"].astype(float).tolist(),
         lon=plot_df["longitud"].astype(float).tolist(),
         mode="markers+text",
@@ -4042,7 +4432,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
         showlegend=False,
     ))
     fig.update_layout(
-        map=dict(
+        **{PLOTLY_MAP_LAYOUT_KEY: dict(
             style="white-bg",
             layers=[dict(
                 sourcetype="raster",
@@ -4050,7 +4440,7 @@ def build_station_map(valid_map_df: pd.DataFrame) -> go.Figure:
                 below="traces",
             )],
             bounds=bounds,
-        ),
+        )},
         margin=dict(l=0, r=0, t=0, b=0), height=520, showlegend=False,
     )
     return fig
@@ -4213,7 +4603,7 @@ def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
 
     fig = go.Figure()
     if not plot_df.empty:
-        fig.add_trace(go.Scattermap(
+        fig.add_trace(ScatterMapTrace(
             lat=plot_df["latitud"].astype(float).tolist(),
             lon=plot_df["longitud"].astype(float).tolist(),
             mode="markers+text",
@@ -4227,7 +4617,7 @@ def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
             showlegend=False,
         ))
 
-    fig.add_trace(go.Scattermap(
+    fig.add_trace(ScatterMapTrace(
         lat=[float(sel_row["latitud"])],
         lon=[float(sel_row["longitud"])],
         mode="markers+text",
@@ -4241,7 +4631,7 @@ def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
 
     fig.update_layout(
         title=title_text,
-        map=dict(
+        **{PLOTLY_MAP_LAYOUT_KEY: dict(
             style="white-bg",
             layers=[dict(
                 sourcetype="raster",
@@ -4252,7 +4642,7 @@ def build_od_bubble_map(flow_df: pd.DataFrame, category_col: str,
                 west=lon_min - lon_pad, east=lon_max + lon_pad,
                 south=lat_min - lat_pad, north=lat_max + lat_pad,
             ),
-        ),
+        )},
         margin=dict(l=0, r=0, t=45, b=0), height=460,
         paper_bgcolor=EFE_WHITE,
         font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
@@ -4601,35 +4991,61 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
         )
     )
 
-    # ---------- 2. Cargar datos ----------
+    # ---------- 2. Cargar SOLO el índice de archivos (no el contenido) ----------
+    # CRÍTICO: antes esta línea cargaba TODO el dataset (1.7M+ filas, 2.3GB RAM)
+    # apenas el usuario entraba a Perfil de Carga, causando OOM. Ahora solo
+    # listamos los archivos disponibles. El contenido se carga selectivamente
+    # cuando el usuario elige una fecha o mes.
     try:
-        perfil_df, perfil_path, perfil_missing, perfil_files, perfil_status = (
-            load_profile_service_data(profile_srv, str(data_path))
-        )
+        diag_checkpoint("PERFIL_LOAD_INDEX_BEGIN", srv=profile_srv)
+        archivos_index = get_profile_file_index(profile_srv, str(data_path))
+        diag_checkpoint("PERFIL_LOAD_INDEX_DONE", n_archivos=len(archivos_index))
     except Exception as exc:
-        st.error(f"Error cargando perfil de carga: {type(exc).__name__}: {exc}")
+        diag_error("PERFIL_LOAD_INDEX_FAIL", exc=exc)
+        st.error(f"Error indexando archivos del perfil: {type(exc).__name__}: {exc}")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    # Detectar schema
-    if isinstance(perfil_df, pd.DataFrame):
-        profile_schema = perfil_df.attrs.get("profile_schema", "")
-        if not profile_schema and "profile_schema" in perfil_df.columns and not perfil_df["profile_schema"].dropna().empty:
-            profile_schema = str(perfil_df["profile_schema"].dropna().astype(str).iloc[0]).strip().lower()
-        profile_schema = profile_schema or "aggregated"
-    else:
+    if not archivos_index:
+        folder_name = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get(
+            "folder_candidates", ["perfil_carga"],
+        )[0]
+        st.info(
+            f"No se encontraron archivos CSV para **{profile_srv}**. "
+            f"Cree la carpeta **{folder_name}** y agregue los archivos diarios.",
+            icon="ℹ️",
+        )
+        st.markdown("</div></div>", unsafe_allow_html=True)
+        return
+
+    # Detectar schema leyendo SOLO el primer archivo (operación liviana)
+    profile_schema = "aggregated"
+    try:
+        first_file = next(iter(archivos_index.values()))
+        first_chunk = _read_single_profile_file(first_file)
+        if not first_chunk.empty:
+            _, profile_schema = _normalize_profile_chunk(first_chunk.head(50))
+        del first_chunk
+    except Exception:
         profile_schema = "aggregated"
 
-    # Guardar el data_path en session_state para que las subfunciones decoradas
-    # con @maybe_fragment puedan acceder a los slices cacheados sin recibirlo
-    # como argumento (los fragments aíslan el re-run pero requieren claves
-    # estables; pasar data_path por session_state mantiene el cache hit).
+    # Guardar contexto en session_state para subfunciones
     st.session_state["_profile_data_path"] = str(data_path)
     st.session_state["_profile_service_root"] = str(profile_srv)
 
-    folder_name = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get("folder_candidates", ["perfil_carga"])[0]
+    # Variables para retrocompatibilidad con el resto del código.
+    # perfil_df NO se carga aún — se cargará selectivamente por día/mes.
+    perfil_df = pd.DataFrame()
+    perfil_df.attrs["profile_schema"] = profile_schema
+    perfil_path = str(data_path)
+    perfil_missing = []
+    perfil_files = list(archivos_index.values())
+    perfil_status = "ok"
+    folder_name = PROFILE_SERVICE_CONFIG.get(profile_srv, {}).get(
+        "folder_candidates", ["perfil_carga"],
+    )[0]
 
-    if perfil_status == "no_data" or perfil_df.empty:
+    if False:  # nunca entra (mantener bloque original como referencia)
         st.info(
             f"No se encontraron archivos CSV para **{profile_srv}**. "
             f"Cree la carpeta **{folder_name}** y agregue los archivos diarios. "
@@ -4649,7 +5065,8 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    fechas_disponibles = sorted([f for f in perfil_df["fecha"].dropna().unique().tolist() if pd.notna(f)])
+    # Usar índice de archivos (sin cargar contenido) para listar fechas
+    fechas_disponibles = get_available_dates(profile_srv, str(data_path))
     if not fechas_disponibles:
         st.warning("No existen fechas válidas en los archivos de perfil de carga.")
         st.markdown("</div></div>", unsafe_allow_html=True)
@@ -4675,12 +5092,22 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
     # Detectar si el perfil ya viene enriquecido (con tarifa y tipo de pasajero
     # por viaje). Si es así, NO cargamos torniquetes — ahorra RAM significativa
     # en Streamlit Cloud (donde el límite de 1 GB es crítico).
-    perfil_is_enriched = bool(
-        perfil_df is not None and not perfil_df.empty and (
-            "monto_transaccion" in perfil_df.columns
-            or "tipo_pasajero" in perfil_df.columns
-        )
-    )
+    # IMPORTANTE: detectamos leyendo SOLO las columnas del primer archivo,
+    # no el contenido completo (lo cual causaba el OOM original).
+    perfil_is_enriched = False
+    try:
+        first_file = next(iter(archivos_index.values()), None)
+        if first_file:
+            # Leer solo el header del CSV (1 fila) para inspeccionar columnas
+            sample_header = pd.read_csv(first_file, nrows=0)
+            cols_norm = [c.lower() for c in sample_header.columns]
+            perfil_is_enriched = (
+                "monto_transaccion" in cols_norm
+                or "tipo_pasajero" in cols_norm
+                or "tipo_pasajero_norm" in cols_norm
+            )
+    except Exception:
+        perfil_is_enriched = False
 
     if perfil_is_enriched:
         turnstile_df = pd.DataFrame()
@@ -4777,19 +5204,27 @@ def _render_perfil_diario(perfil_df, profile_schema, profile_srv, fechas_disponi
             f"{pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}."
         )
 
-    perfil_fecha = perfil_df[perfil_df["fecha"] == fecha_sel].copy()
-    # Usar slice cacheado por día cuando el data_path está disponible.
-    # Esto evita mantener el DataFrame completo en memoria durante el
-    # filtrado y mejora drásticamente el cache hit cuando el usuario
-    # cambia entre fechas/servicios rápidamente.
+    # Cargar SOLO el día solicitado vía índice de archivos.
+    # perfil_df ya viene vacío del padre (carga liviana); aquí leemos
+    # exclusivamente el archivo del día seleccionado (~50k filas máximo).
     _data_path = st.session_state.get("_profile_data_path", "")
+    perfil_fecha = pd.DataFrame()
     if _data_path:
         try:
-            sliced_day, _ = get_profile_for_day(profile_srv, _data_path, str(fecha_sel))
-            if not sliced_day.empty:
-                perfil_fecha = sliced_day
-        except BaseException:
-            pass  # Fallback al filtrado en memoria
+            sliced_day, schema_loaded = get_profile_for_day(
+                profile_srv, _data_path, str(fecha_sel),
+            )
+            perfil_fecha = sliced_day
+            if profile_schema in (None, "", "aggregated") and schema_loaded:
+                profile_schema = schema_loaded
+        except BaseException as exc:
+            diag_error("RENDER_DIA_LOAD_FAIL", exc=exc)
+            perfil_fecha = pd.DataFrame()
+
+    if perfil_fecha is None or perfil_fecha.empty:
+        st.warning("No existen datos para la fecha seleccionada.")
+        return
+
     lineas_disp = sorted([x for x in perfil_fecha["linea"].dropna().astype(str).unique() if x])
 
     row1, row2, row3 = st.columns([0.9, 1.15, 1.15])
@@ -5352,8 +5787,15 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
         unsafe_allow_html=True,
     )
 
-    fecha_to_period = pd.to_datetime(perfil_df["fecha"], errors="coerce").dt.to_period("M").astype(str)
-    month_options = [m for m in sorted(pd.Series(fecha_to_period).dropna().unique().tolist()) if m and m != "NaT"]
+    # Lista de meses disponibles desde el índice (sin cargar contenido)
+    _data_path = st.session_state.get("_profile_data_path", "")
+    if _data_path:
+        month_options = get_available_months(profile_srv, _data_path)
+    else:
+        # Fallback (no debería ocurrir en uso normal)
+        fecha_to_period = pd.to_datetime(perfil_df["fecha"], errors="coerce").dt.to_period("M").astype(str)
+        month_options = [m for m in sorted(pd.Series(fecha_to_period).dropna().unique().tolist())
+                         if m and m != "NaT"]
     month_default = month_options[-1] if month_options else None
 
     # Filtros principales
@@ -5369,18 +5811,20 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
         else:
             month_sel = None
 
-    perfil_month = (
-        perfil_df[fecha_to_period == str(month_sel)].copy()
-        if month_sel else perfil_df.iloc[0:0].copy()
-    )
-    _data_path = st.session_state.get("_profile_data_path", "")
+    # Cargar SOLO los archivos del mes seleccionado (no toda la base)
+    perfil_month = pd.DataFrame()
     if month_sel and _data_path:
         try:
-            sliced_month, _ = get_profile_for_month(profile_srv, _data_path, str(month_sel))
-            if not sliced_month.empty:
-                perfil_month = sliced_month
-        except BaseException:
-            pass
+            sliced_month, schema_loaded = get_profile_for_month(
+                profile_srv, _data_path, str(month_sel),
+            )
+            perfil_month = sliced_month
+            if profile_schema in (None, "", "aggregated") and schema_loaded:
+                profile_schema = schema_loaded
+        except BaseException as exc:
+            diag_error("RENDER_MENSUAL_LOAD_FAIL", exc=exc)
+            perfil_month = pd.DataFrame()
+
     lineas_mes = sorted([x for x in perfil_month["linea"].dropna().astype(str).unique() if x])
     with col_l:
         linea_mes_sel = option_selector(
@@ -5886,6 +6330,7 @@ def render_detalle_servicio(servicios_lista: list,
 # ================================================================
 @maybe_fragment
 def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
+    diag_checkpoint("RENDER_OD_BEGIN")
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>OD Estaciones — Biotren</div>", unsafe_allow_html=True)
     st.markdown(
@@ -5901,32 +6346,28 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
         unsafe_allow_html=True,
     )
 
+    # Cargar SOLO el índice de archivos OD (no el contenido)
     try:
-        od_df, od_path, od_missing, od_files, od_status = load_od_service_data("Biotren", str(data_path))
+        od_index = get_od_file_index("Biotren", str(data_path))
+        diag_checkpoint("RENDER_OD_INDEX", n_archivos=len(od_index))
     except Exception as exc:
-        st.error(f"Error cargando OD: {type(exc).__name__}: {exc}")
+        diag_error("RENDER_OD_INDEX_FAIL", exc=exc)
+        st.error(f"Error indexando OD: {type(exc).__name__}: {exc}")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
     folder_name = OD_SERVICE_CONFIG["Biotren"]["folder_candidates"][0]
 
-    if od_status == "no_data" or od_df.empty:
+    if not od_index:
         st.info(
-            f"No se encontraron archivos CSV en **{folder_name}**. "
-            f"Ruta buscada: **{od_path}**.", icon="ℹ️",
+            f"No se encontraron archivos CSV en **{folder_name}**.",
+            icon="ℹ️",
         )
-        st.markdown("</div></div>", unsafe_allow_html=True)
-        return
-    if od_status == "unsupported_format" or od_missing:
-        st.warning(
-            f"Formato no compatible. Columnas faltantes: **{', '.join(od_missing)}**."
-        )
-        if od_files:
-            st.caption(f"Archivos detectados: {len(od_files)} | carpeta: {od_path}")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    fechas_disp = sorted([x for x in od_df["fecha"].dropna().unique() if pd.notna(x)])
+    # Lista de fechas disponibles desde el índice (sin cargar contenido)
+    fechas_disp = get_od_available_dates("Biotren", str(data_path))
     if not fechas_disp:
         st.warning("No existen fechas válidas en la base OD cargada.")
         st.markdown("</div></div>", unsafe_allow_html=True)
@@ -5955,8 +6396,25 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
             f"{pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}."
         )
 
-    od_fecha = od_df[od_df["fecha"] == fecha_sel].copy()
-    if od_fecha.empty:
+    # Cargar SOLO el archivo del día seleccionado (no toda la base)
+    diag_checkpoint("RENDER_OD_LOAD_DAY", fecha=str(fecha_sel))
+    try:
+        od_fecha, od_status = get_od_for_day("Biotren", str(data_path), str(fecha_sel))
+    except Exception as exc:
+        diag_error("RENDER_OD_LOAD_DAY_FAIL", exc=exc)
+        st.error(f"Error cargando OD para {fecha_sel}: {type(exc).__name__}: {exc}")
+        st.markdown("</div></div>", unsafe_allow_html=True)
+        return
+
+    if od_status == "unsupported_format":
+        st.warning(
+            "Formato no compatible. Verifique que el archivo OD tenga las "
+            "columnas requeridas (origen, destino, fechas)."
+        )
+        st.markdown("</div></div>", unsafe_allow_html=True)
+        return
+
+    if od_fecha is None or od_fecha.empty:
         st.warning("No existen datos para la fecha seleccionada.")
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
@@ -6348,6 +6806,19 @@ def render_header():
                 "</div>",
                 unsafe_allow_html=True,
             )
+            # Banner de versión: confirma que el archivo desplegado coincide
+            # con la última entrega. Si el deploy no se actualiza, este
+            # número será el que estaba antes.
+            st.markdown(
+                f"<div style='font-size:0.72rem; color:#6B7280; "
+                f"background:#F9FAFB; padding:0.35rem 0.55rem; "
+                f"border-radius:6px; margin-bottom:0.45rem; "
+                f"font-family:monospace;'>"
+                f"📌 Versión: <strong>{APP_VERSION}</strong><br>"
+                f"Hash: <code>{APP_VERSION_HASH}</code>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
             # Visor de log diagnóstico — clave para entender por qué crashea
             if st.button("🔍 Ver log de diagnóstico",
                          key="btn_show_diag_log", width="stretch"):
@@ -6379,9 +6850,11 @@ def render_header():
                         st.success("Log limpiado")
                         st.rerun()
                 st.caption(
-                    "Si el dashboard se cae al cambiar de filtro: descargue el log "
-                    "INMEDIATAMENTE después de recargar — la última línea muestra "
-                    "el punto exacto donde el proceso terminó."
+                    "💡 **Tip importante**: cuando el dashboard se cae, "
+                    "los checkpoints también se escriben a stderr (visibles "
+                    "en los logs de Streamlit Cloud → Manage app → Logs). "
+                    "Busque las líneas con prefijo `[DIAG]` — esas sobreviven "
+                    "al reinicio del contenedor."
                 )
 
     # Aplicar paleta y CSS según tema seleccionado
@@ -6583,9 +7056,13 @@ def main():
                 estados_ini, prioridades, responsables,
             )
         elif section_sel == "Perfil de Carga":
+            diag_checkpoint("DISPATCH_PERFIL_BEGIN")
             render_perfil_carga(data_path, default_service=selected_service_context)
+            diag_checkpoint("DISPATCH_PERFIL_END")
         elif section_sel == "OD Estaciones":
+            diag_checkpoint("DISPATCH_OD_BEGIN")
             render_od_estaciones(data_path, estaciones)
+            diag_checkpoint("DISPATCH_OD_END")
         elif section_sel == "Estaciones":
             render_detalle_servicio(servicios_lista, estaciones, afluencia_estacion)
     except BaseException as exc:
@@ -6594,6 +7071,7 @@ def main():
         # usuario cambia un widget. Las dejamos propagar normalmente.
         if is_streamlit_internal_exception(exc):
             raise
+        diag_error(f"DISPATCH_FAIL section={section_sel}", exc=exc)
         import traceback
         st.error(
             f"Ocurrió un error inesperado al mostrar la sección '{section_sel}'. "
