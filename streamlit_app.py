@@ -59,8 +59,8 @@ import streamlit as st
 
 # Identificador de versión visible en la UI para confirmar qué archivo
 # está corriendo en producción. Se incrementa con cada release.
-APP_VERSION = "v12-2026-05-07-fix-namerror"
-APP_VERSION_HASH = "c9318c5e93ae"
+APP_VERSION = "v13-2026-05-11-audit-perf"
+APP_VERSION_HASH = "70a96b787c8d"
 
 # Ruta del log diagnóstico. En Streamlit Cloud, /tmp se borra al reiniciar
 # el contenedor — pero el archivo SÍ persiste durante la sesión del usuario,
@@ -599,11 +599,211 @@ div[data-testid="stPlotlyChart"] {{
     padding: 0.22rem 0.55rem; border-radius: 999px;
     font-size: 0.74rem; font-weight: 700;
 }}
+
+/* ==============================================================
+   MEJORAS DE PRESENTACIÓN v13
+   ============================================================== */
+
+/* Focus visible para accesibilidad WCAG AA */
+button:focus-visible, a:focus-visible,
+[role="button"]:focus-visible {{
+    outline: 2.5px solid {EFE_BLUE} !important;
+    outline-offset: 2px !important;
+    border-radius: 4px;
+}}
+
+/* Skip-to-content para screen readers */
+.efe-skip-link {{
+    position: absolute; left: -9999px; top: 0; z-index: 9999;
+}}
+.efe-skip-link:focus {{
+    left: 0.5rem; padding: 0.5rem 1rem;
+    background: {EFE_BLUE}; color: white;
+    border-radius: 6px;
+}}
+
+/* Mejoras a tooltips */
+[data-baseweb="tooltip"] {{
+    font-size: 0.85rem !important;
+    line-height: 1.4 !important;
+}}
+
+/* Tarjetas KPI: mejora de contraste y legibilidad de delta */
+.efe-card-delta.--ok       {{ color: {SUCCESS} !important; }}
+.efe-card-delta.--alerta   {{ color: {WARNING} !important; }}
+.efe-card-delta.--critico  {{ color: {DANGER} !important; }}
+
+/* Indicador visual de tendencia en valores */
+.efe-trend-arrow {{
+    display: inline-block; margin-left: 0.25rem;
+    font-size: 0.85em; font-weight: 800;
+}}
+.efe-trend-arrow.--up   {{ color: {SUCCESS}; }}
+.efe-trend-arrow.--down {{ color: {DANGER}; }}
+.efe-trend-arrow.--flat {{ color: {TEXT_MUTED}; }}
+
+/* Mejoras al estado vacío */
+.efe-empty-state {{
+    text-align: center; padding: 2rem 1rem;
+    color: {TEXT_MUTED};
+    background: linear-gradient(180deg, #FAFBFC 0%, #F4F7FA 100%);
+    border: 1px dashed #C7D9EC;
+    border-radius: 16px;
+    margin: 0.5rem 0 1rem;
+}}
+.efe-empty-state .efe-empty-icon {{
+    font-size: 2.2rem; margin-bottom: 0.5rem; opacity: 0.5;
+}}
+.efe-empty-state .efe-empty-title {{
+    font-size: 1rem; font-weight: 700; color: {TEXT_MAIN};
+    margin-bottom: 0.3rem;
+}}
+.efe-empty-state .efe-empty-hint {{
+    font-size: 0.83rem; color: {TEXT_MUTED};
+}}
+
+/* Loading skeleton más profesional */
+@keyframes efe-shimmer {{
+    0% {{ background-position: -1000px 0; }}
+    100% {{ background-position: 1000px 0; }}
+}}
+.efe-skeleton {{
+    background: linear-gradient(90deg,
+        rgba(0,40,87,0.04) 0px,
+        rgba(0,40,87,0.08) 200px,
+        rgba(0,40,87,0.04) 400px);
+    background-size: 1000px 100%;
+    animation: efe-shimmer 1.6s infinite linear;
+    border-radius: 12px;
+    height: 100px; margin: 0.5rem 0;
+}}
+
+/* Visualización de servicios densos: filas más legibles en tablas */
+[data-testid="stDataFrame"] {{
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid #DFE7EF;
+}}
+[data-testid="stDataFrame"] thead tr {{
+    background: linear-gradient(180deg, #F1F5FA 0%, #E8F0F8 100%) !important;
+}}
+[data-testid="stDataFrame"] thead th {{
+    color: {EFE_BLUE} !important;
+    font-weight: 700 !important;
+    font-size: 0.84rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.6rem 0.8rem !important;
+}}
+[data-testid="stDataFrame"] tbody tr:nth-child(even) {{
+    background: rgba(0,40,87,0.015) !important;
+}}
+[data-testid="stDataFrame"] tbody tr:hover {{
+    background: rgba(0,40,87,0.04) !important;
+}}
+
+/* ==============================================================
+   RESPONSIVE: tablets y móvil
+   ============================================================== */
+@media (max-width: 1024px) {{
+    .block-container {{
+        padding-left: 0.7rem !important;
+        padding-right: 0.7rem !important;
+    }}
+    .main-title {{ font-size: 1.7rem !important; }}
+    .section-title {{ font-size: 0.96rem !important; }}
+    .efe-card-value, .pax-card-value {{ font-size: 1.55rem !important; }}
+    .efe-cumulative-card .efe-cumulative-value {{ font-size: 1.7rem !important; }}
+    .efe-summary-card .efe-summary-value {{ font-size: 1.18rem !important; }}
+}}
+
+@media (max-width: 768px) {{
+    .block-container {{
+        padding-left: 0.4rem !important;
+        padding-right: 0.4rem !important;
+    }}
+    .main-title {{ font-size: 1.35rem !important; line-height: 1.15; }}
+    .subtitle {{ font-size: 0.82rem !important; }}
+    .section-title {{ font-size: 0.92rem !important; }}
+    .section-subtitle {{ font-size: 0.78rem !important; }}
+    .efe-card {{
+        padding: 0.7rem 0.75rem 0.6rem !important;
+        min-height: auto !important;
+    }}
+    .efe-card-value {{ font-size: 1.3rem !important; }}
+    .efe-card-title {{ font-size: 0.78rem !important; }}
+    .efe-card-meta {{ font-size: 0.78rem !important; }}
+    .efe-summary-row {{
+        grid-template-columns: 1fr 1fr !important;
+        gap: 0.45rem !important;
+    }}
+    .efe-summary-card {{
+        padding: 0.55rem 0.7rem !important;
+    }}
+    .efe-summary-card .efe-summary-value {{ font-size: 1.05rem !important; }}
+    .pax-type-card {{
+        padding: 0.55rem 0.7rem !important;
+        min-height: 95px !important;
+    }}
+    .pax-type-card .pax-card-value {{ font-size: 1.2rem !important; }}
+    .nav-panel {{
+        padding: 0.4rem 0.55rem 0.1rem !important;
+    }}
+    /* Tabla con scroll horizontal en móvil */
+    [data-testid="stDataFrame"] {{
+        overflow-x: auto;
+    }}
+    /* Tarjetas KPI: 1 por fila en móvil */
+    .efe-card {{
+        margin-bottom: 0.35rem !important;
+    }}
+}}
+
+/* ==============================================================
+   PRINT: optimización para exportar a PDF
+   ============================================================== */
+@media print {{
+    .stApp {{
+        background: white !important;
+    }}
+    .nav-panel, header[data-testid="stHeader"],
+    div[data-testid="stToolbar"] {{ display: none !important; }}
+    .section-shell {{
+        box-shadow: none !important;
+        border: 1px solid #E5E7EB !important;
+        page-break-inside: avoid;
+    }}
+    .efe-card, .efe-summary-card {{
+        box-shadow: none !important;
+        page-break-inside: avoid;
+    }}
+    div[data-testid="stPlotlyChart"] {{
+        box-shadow: none !important;
+        page-break-inside: avoid;
+    }}
+    .efe-cumulative-card {{
+        background: white !important;
+        color: black !important;
+        border: 2px solid {EFE_BLUE} !important;
+    }}
+    .efe-cumulative-card .efe-cumulative-label,
+    .efe-cumulative-card .efe-cumulative-value,
+    .efe-cumulative-card .efe-cumulative-sub {{
+        color: black !important;
+    }}
+}}
 </style>
 """
 
 
-def build_dark_overrides_css(colors: dict) -> str:
+@lru_cache(maxsize=4)
+def _build_dark_overrides_css_cached(colors_tuple: tuple) -> str:
+    """Cacheada para evitar re-procesar el template dark en cada rerun."""
+    colors = dict(colors_tuple)
+    return _build_dark_overrides_css_impl(colors)
+
+
+def _build_dark_overrides_css_impl(colors: dict) -> str:
     """Sobreescritura para tema oscuro."""
     return f"""
     <style>
@@ -640,9 +840,18 @@ def build_dark_overrides_css(colors: dict) -> str:
     """
 
 
+@lru_cache(maxsize=4)
+def _build_global_css(colors_tuple: tuple) -> str:
+    """Construye el CSS global. Cacheado por color-tuple para evitar
+    re-procesar 200+ líneas de CSS en cada rerun."""
+    colors = dict(colors_tuple)
+    return _CSS_TEMPLATE.format(**colors)
+
+
 def render_global_css() -> None:
-    """Inyecta CSS global. Llamada UNA vez al arranque."""
-    st.markdown(_CSS_TEMPLATE.format(**COLORS), unsafe_allow_html=True)
+    """Inyecta CSS global. Llamada UNA vez al arranque (cacheada)."""
+    colors_tuple = tuple(sorted(COLORS.items()))
+    st.markdown(_build_global_css(colors_tuple), unsafe_allow_html=True)
 
 # ================================================================
 # 6. HELPERS DE TEXTO Y FORMATO
@@ -924,6 +1133,53 @@ def render_observation_box(observacion):
             f"<div class='efe-observation'><strong>Observación:</strong> {txt}</div>",
             unsafe_allow_html=True,
         )
+
+
+def render_empty_state(title: str, hint: str = "", icon: str = "📭") -> None:
+    """
+    Empty state visualmente cuidado para reemplazar st.warning/st.info
+    genéricos cuando no hay datos. Más informativo y menos alarmante.
+    """
+    html = (
+        f"<div class='efe-empty-state'>"
+        f"<div class='efe-empty-icon'>{icon}</div>"
+        f"<div class='efe-empty-title'>{title}</div>"
+    )
+    if hint:
+        html += f"<div class='efe-empty-hint'>{hint}</div>"
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def render_trend_arrow_inline(current_value, previous_value,
+                               higher_is_better: bool = True) -> str:
+    """
+    Retorna un HTML inline con flecha (↑/↓/→) y porcentaje vs valor previo.
+    Útil para colocar al lado de una métrica en una tarjeta.
+    Retorna string vacío si no hay base de comparación.
+    """
+    try:
+        cur = float(current_value)
+        prev = float(previous_value)
+    except (TypeError, ValueError):
+        return ""
+    if pd.isna(cur) or pd.isna(prev) or prev == 0:
+        return ""
+
+    diff_pct = (cur - prev) / abs(prev) * 100.0
+    if abs(diff_pct) < 0.5:
+        arrow, cls = "→", "--flat"
+    elif diff_pct > 0:
+        arrow = "↑"
+        cls = "--up" if higher_is_better else "--down"
+    else:
+        arrow = "↓"
+        cls = "--down" if higher_is_better else "--up"
+    sign = "+" if diff_pct >= 0 else ""
+    return (
+        f"<span class='efe-trend-arrow {cls}' "
+        f"title='Variación vs período anterior'>{arrow} {sign}{diff_pct:.1f}%</span>"
+    )
 
 
 # ================================================================
@@ -3550,45 +3806,59 @@ def build_monthly_profile_tables(perfil_df: pd.DataFrame,
     if len(fechas_mes) > 35:
         fechas_mes = fechas_mes[-35:]  # Toma los más recientes
 
+    # IZAR INVARIANTES del bucle:
+    # Estas condiciones no cambian día a día — calcularlas una sola vez fuera
+    # del bucle ahorra ~60 llamadas redundantes para un mes típico.
+    is_biotren = normalize_text(profile_srv) == "biotren"
+    is_transactional = profile_schema == "transactional"
+    use_enriched_path = is_biotren and is_transactional
+    use_turnstile_path = (
+        is_biotren and is_transactional
+        and turnstile_status == "ok"
+        and turnstile_df is not None and not turnstile_df.empty
+    )
+    # Pre-normalizar direcciones (str.strip una sola vez por dirección)
+    directions_clean = {d: str(d).strip() for d in directions}
+
     for day_idx, fecha_day in enumerate(fechas_mes):
-        perfil_day_all = perfil_mes[perfil_mes["fecha"] == fecha_day].copy()
+        # Filtrar SIN copy (vista). Solo copiamos al pasar a funciones que lo
+        # requieren modificar.
+        perfil_day_all = perfil_mes[perfil_mes["fecha"] == fecha_day]
         if perfil_day_all.empty:
             continue
 
         # --- CAMINO PREFERENTE: perfil enriquecido (sin merge) ----------
         fare_day_all = pd.DataFrame()
-        perfil_is_enriched = (
-            "monto_transaccion" in perfil_day_all.columns
-            or "tipo_pasajero" in perfil_day_all.columns
+        perfil_is_enriched_day = (
+            use_enriched_path and (
+                "monto_transaccion" in perfil_day_all.columns
+                or "tipo_pasajero" in perfil_day_all.columns
+            )
         )
 
-        if (normalize_text(profile_srv) == "biotren"
-                and profile_schema == "transactional"
-                and perfil_is_enriched):
+        if perfil_is_enriched_day:
             fare_day_all = build_service_fare_summary_from_profile(perfil_day_all)
-
         # --- Camino legacy: cruce con torniquetes ---------------------
-        elif (normalize_text(profile_srv) == "biotren"
-              and profile_schema == "transactional"
-              and turnstile_status == "ok"
-              and turnstile_df is not None and not turnstile_df.empty):
-            turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_day].copy()
+        elif use_turnstile_path:
+            turnstile_day = turnstile_df[turnstile_df["fecha"] == fecha_day]
             if not turnstile_day.empty:
                 _, fare_day_all, _ = match_turnstile_transactions_to_profile(
                     turnstile_day, perfil_day_all, tolerance_minutes=20,
                 )
 
+        # Pre-strip de direcciones del día (una sola vez por día)
+        direccion_strip = perfil_day_all["direccion"].astype(str).str.strip()
+
         for dir_sel in directions:
-            perfil_day_dir = perfil_day_all[
-                perfil_day_all["direccion"].astype(str).str.strip() == str(dir_sel)
-            ].copy()
+            dir_clean = directions_clean[dir_sel]
+            perfil_day_dir = perfil_day_all[direccion_strip == dir_clean]
             if perfil_day_dir.empty:
                 continue
 
             # FAST-PATH para perfil enriquecido: groupby directo en lugar de
             # reconstruir el perfil servicio×servicio. Reduce ~30× el costo
             # del cálculo mensual.
-            if perfil_is_enriched and profile_schema == "transactional":
+            if perfil_is_enriched_day:
                 daily = _fast_service_summary_enriched(perfil_day_dir)
             else:
                 daily = build_service_level_summary(perfil_day_dir, profile_schema)
@@ -3789,19 +4059,24 @@ def build_line_chart(df: pd.DataFrame, title: str, color=None, line_dash=None,
     fig.update_yaxes(title="", gridcolor="#E8EEF4", zeroline=False)
 
     if boxed_values and not plot_df.empty:
-        annots = []
-        for _, row in plot_df.iterrows():
-            xshift = 0
-            if color and color in plot_df.columns:
-                xshift = 10 if len(str(row[color])) % 2 == 0 else -10
-            annots.append(dict(
-                x=str(row["periodo_label"]), y=row["valor"],
-                text=row["valor_label"], showarrow=False, yshift=18, xshift=xshift,
+        x_arr = plot_df["periodo_label"].astype(str).tolist()
+        y_arr = plot_df["valor"].tolist()
+        labels = plot_df["valor_label"].tolist()
+        if color and color in plot_df.columns:
+            color_vals = plot_df[color].astype(str).tolist()
+            xshifts = [10 if len(c) % 2 == 0 else -10 for c in color_vals]
+        else:
+            xshifts = [0] * len(x_arr)
+        annots = [
+            dict(
+                x=x, y=y, text=lbl, showarrow=False, yshift=18, xshift=xs,
                 font=dict(size=PLOT_ANNOTATION_SIZE, color=EFE_BLUE),
                 bgcolor="rgba(255,255,255,0.92)", bordercolor=BORDER,
                 borderwidth=1, borderpad=3, align="center",
                 xref="x", yref="y",
-            ))
+            )
+            for x, y, lbl, xs in zip(x_arr, y_arr, labels, xshifts)
+        ]
         if annots:
             fig.update_layout(annotations=annots)
     return fig
@@ -3841,16 +4116,20 @@ def build_trend_line_chart(df: pd.DataFrame, kpi_name: str, unit: str | None,
     ))
     direction = "▲ Creciente" if coeffs[0] > 0 else "▼ Decreciente"
 
-    annots = []
-    for idx, (_, row) in enumerate(plot_df.iterrows()):
-        annots.append(dict(
-            x=str(row["periodo_label"]), y=row["valor"], text=row["valor_label"],
-            showarrow=False, yshift=18 if (idx % 2 == 0) else 30,
+    x_arr = plot_df["periodo_label"].astype(str).tolist()
+    y_arr = plot_df["valor"].tolist()
+    labels = plot_df["valor_label"].tolist()
+    annots = [
+        dict(
+            x=x, y=y, text=lbl,
+            showarrow=False, yshift=18 if (i % 2 == 0) else 30,
             font=dict(size=max(PLOT_ANNOTATION_SIZE, 11), color=EFE_BLUE),
             bgcolor="rgba(255,255,255,0.96)", bordercolor=BORDER,
             borderwidth=1, borderpad=4, align="center",
             xref="x", yref="y",
-        ))
+        )
+        for i, (x, y, lbl) in enumerate(zip(x_arr, y_arr, labels))
+    ]
 
     fig.update_layout(
         title=f"{kpi_name} — {service_name} · Tendencia: {direction}",
@@ -3927,26 +4206,24 @@ def build_perfil_carga_chart(service_df: pd.DataFrame, titulo: str) -> go.Figure
             hovertemplate="Capacidad: %{y:,.0f}<extra></extra>",
         ))
 
-    # Annotations: TODOS los valores x se serializan a str
+    # Annotations: vectorización en lugar de iterrows
     abordo_rows = plot_df.dropna(subset=["L_out_abordo"])
-    annots = []
-    for _, row in abordo_rows.iterrows():
-        est = row["estacion"]
-        try:
-            est_str = str(est) if est is not None else ""
-        except Exception:
-            est_str = ""
-        if not est_str:
-            continue
-        annots.append(dict(
-            x=est_str, y=row["L_out_abordo"],
-            text=fmt_pax(row["L_out_abordo"]),
-            showarrow=False, yshift=18,
-            font=dict(size=PLOT_ANNOTATION_SIZE, color=SUCCESS),
-            bgcolor="rgba(255,255,255,0.96)",
-            bordercolor=SUCCESS, borderwidth=1, borderpad=3,
-            align="center", xref="x", yref="y",
-        ))
+    if not abordo_rows.empty:
+        x_arr = abordo_rows["estacion"].astype(str).tolist()
+        y_arr = abordo_rows["L_out_abordo"].tolist()
+        annots = [
+            dict(
+                x=x, y=y, text=fmt_pax(y),
+                showarrow=False, yshift=18,
+                font=dict(size=PLOT_ANNOTATION_SIZE, color=SUCCESS),
+                bgcolor="rgba(255,255,255,0.96)",
+                bordercolor=SUCCESS, borderwidth=1, borderpad=3,
+                align="center", xref="x", yref="y",
+            )
+            for x, y in zip(x_arr, y_arr) if x
+        ]
+    else:
+        annots = []
 
     fig.update_layout(
         title=titulo,
@@ -4716,7 +4993,11 @@ def render_resumen_ejecutivo(kpis: pd.DataFrame, kpis_hist: pd.DataFrame,
     if target_service:
         servicios_con_datos = [s for s in servicios_con_datos if s == str(target_service)]
     if kpis_periodo.empty or not servicios_con_datos:
-        st.warning("No existen KPIs para los filtros seleccionados.")
+        render_empty_state(
+            "No hay KPIs para los filtros seleccionados",
+            "Pruebe ampliar el período o seleccionar otro servicio.",
+            icon="📊",
+        )
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
@@ -5018,16 +5299,28 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    # Detectar schema leyendo SOLO el primer archivo (operación liviana)
+    # Detectar schema + perfil enriquecido leyendo SOLO el header del primer
+    # archivo (1 sola operación de I/O en lugar de 2).
     profile_schema = "aggregated"
+    perfil_is_enriched = False
     try:
         first_file = next(iter(archivos_index.values()))
-        first_chunk = _read_single_profile_file(first_file)
-        if not first_chunk.empty:
-            _, profile_schema = _normalize_profile_chunk(first_chunk.head(50))
-        del first_chunk
+        sample_header = pd.read_csv(first_file, nrows=0)
+        header_cols = set(sample_header.columns)
+        cols_norm = {c.lower() for c in header_cols}
+
+        if all(c in header_cols for c in PROFILE_AGG_REQUIRED):
+            profile_schema = "aggregated"
+        elif all(c in header_cols for c in PROFILE_TX_REQUIRED):
+            profile_schema = "transactional"
+
+        perfil_is_enriched = (
+            "monto_transaccion" in cols_norm
+            or "tipo_pasajero" in cols_norm
+            or "tipo_pasajero_norm" in cols_norm
+        )
     except Exception:
-        profile_schema = "aggregated"
+        pass
 
     # Guardar contexto en session_state para subfunciones
     st.session_state["_profile_data_path"] = str(data_path)
@@ -5048,7 +5341,12 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
     # Usar índice de archivos (sin cargar contenido) para listar fechas
     fechas_disponibles = get_available_dates(profile_srv, str(data_path))
     if not fechas_disponibles:
-        st.warning("No existen fechas válidas en los archivos de perfil de carga.")
+        render_empty_state(
+            "No hay fechas válidas en los archivos de perfil",
+            "Los nombres de archivo deben contener una fecha en formato YYYY-MM-DD "
+            "(por ejemplo: OD_Final_2026-04-22_con_monto_tipo.csv).",
+            icon="📅",
+        )
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
@@ -5069,26 +5367,7 @@ def render_perfil_carga(data_path: Path, default_service: str | None = None):
         service_order_df = pd.DataFrame()
         service_order_path, service_order_files, service_order_status = "", [], "no_data"
 
-    # Detectar si el perfil ya viene enriquecido (con tarifa y tipo de pasajero
-    # por viaje). Si es así, NO cargamos torniquetes — ahorra RAM significativa
-    # en Streamlit Cloud (donde el límite de 1 GB es crítico).
-    # IMPORTANTE: detectamos leyendo SOLO las columnas del primer archivo,
-    # no el contenido completo (lo cual causaba el OOM original).
-    perfil_is_enriched = False
-    try:
-        first_file = next(iter(archivos_index.values()), None)
-        if first_file:
-            # Leer solo el header del CSV (1 fila) para inspeccionar columnas
-            sample_header = pd.read_csv(first_file, nrows=0)
-            cols_norm = [c.lower() for c in sample_header.columns]
-            perfil_is_enriched = (
-                "monto_transaccion" in cols_norm
-                or "tipo_pasajero" in cols_norm
-                or "tipo_pasajero_norm" in cols_norm
-            )
-    except Exception:
-        perfil_is_enriched = False
-
+    # (perfil_is_enriched ya se detectó arriba en la lectura unificada del header)
     if perfil_is_enriched:
         turnstile_df = pd.DataFrame()
         turnstile_path, turnstile_missing, turnstile_files, turnstile_status = (
@@ -5202,7 +5481,11 @@ def _render_perfil_diario(perfil_df, profile_schema, profile_srv, fechas_disponi
             perfil_fecha = pd.DataFrame()
 
     if perfil_fecha is None or perfil_fecha.empty:
-        st.warning("No existen datos para la fecha seleccionada.")
+        render_empty_state(
+            "No hay datos de perfil para esa fecha",
+            "Pruebe seleccionar una fecha distinta del calendario.",
+            icon="📅",
+        )
         return
 
     lineas_disp = sorted([x for x in perfil_fecha["linea"].dropna().astype(str).unique() if x])
@@ -5492,28 +5775,48 @@ def _render_perfil_diario(perfil_df, profile_schema, profile_srv, fechas_disponi
     # ---------- Render KPIs principales ----------
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric(f"Servicios realizados ({linea_sel} | {dir_sel})", servicios_realizados)
+        st.metric(
+            f"Servicios realizados ({linea_sel} | {dir_sel})",
+            servicios_realizados,
+            help="Número total de servicios operados ese día en la línea y dirección seleccionadas.",
+        )
         st.metric(
             f"Tasa de ocupación línea ({linea_sel} | {dir_sel})",
             fmt_pct(ocupacion_general) if pd.notna(ocupacion_general) else "-",
+            help=f"Pasajeros totales ÷ (servicios × {int(capacidad_referencia)} pax de capacidad por tren).",
         )
     with col2:
-        st.metric("Pasajeros transportados", fmt_pax(pasajeros_transportados))
+        st.metric(
+            "Pasajeros transportados",
+            fmt_pax(pasajeros_transportados),
+            help="Suma de pasajeros que bajaron en cada estación del servicio seleccionado.",
+        )
         st.metric(
             f"Tasa de ocupación servicio {servicio_sel}",
             fmt_pct(ocupacion_servicio) if pd.notna(ocupacion_servicio) else "-",
+            help=f"Pasajeros transportados ÷ {int(capacidad_referencia)} (capacidad referencia).",
         )
     with col3:
-        st.metric("Máximo a bordo", fmt_pax(max_abordo))
-        st.metric("Tramo con máximo a bordo", tramo_max)
+        st.metric(
+            "Máximo a bordo",
+            fmt_pax(max_abordo),
+            help="Mayor cantidad de pasajeros simultáneamente a bordo durante el recorrido.",
+        )
+        st.metric(
+            "Tramo con máximo a bordo",
+            tramo_max,
+            help="Tramo entre dos estaciones donde se alcanzó el máximo de pasajeros a bordo.",
+        )
     with col4:
         st.metric(
             "Tarifa media aprox. servicio",
             fmt_number(tarifa_media_sel, "CLP") if pd.notna(tarifa_media_sel) else "-",
+            help="Promedio ponderado del monto cobrado por pasajero (de las transacciones cruzadas).",
         )
         st.metric(
             "Recaudación aprox. servicio",
             fmt_number(recaudacion_sel, "CLP") if pd.notna(recaudacion_sel) else "-",
+            help="Estimación de recaudación = tarifa media × pasajeros transportados.",
         )
 
     st.caption(
@@ -5740,6 +6043,16 @@ def _render_service_detail_table(service_summary: pd.DataFrame):
 
     st.dataframe(out, width="stretch", hide_index=True)
 
+    # Botón de descarga del detalle como CSV
+    csv_bytes = out.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    st.download_button(
+        "⬇ Descargar detalle (CSV)",
+        data=csv_bytes,
+        file_name=f"detalle_servicios_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv",
+        key="download_detalle_servicios",
+    )
+
 
 @maybe_fragment
 def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
@@ -5823,7 +6136,11 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
         )
 
     if not month_sel or not linea_mes_sel:
-        st.info("No existen datos mensuales disponibles para los filtros seleccionados.")
+        render_empty_state(
+            "Seleccione un mes y una línea para ver los promedios",
+            "Use los selectores superiores para definir el mes de análisis y la línea operativa.",
+            icon="📆",
+        )
         return
 
     # Detectar cambio de mes y liberar memoria agresivamente para evitar
@@ -5892,7 +6209,10 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
     )
 
     try:
-        with st.spinner("Calculando promedios mensuales por servicio…"):
+        # Mensaje descriptivo según contexto: si los datos ya están cacheados,
+        # el cálculo es instantáneo; si no, puede tardar varios segundos.
+        spinner_msg = f"Calculando promedios mensuales de {month_period_to_label(month_sel)}…"
+        with st.spinner(spinner_msg):
             t_pre = time.time()
             if _data_path:
                 # Camino preferente: carga interna por claves simples
@@ -5942,7 +6262,12 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
 
     if not tablas:
         diag_warn("RENDER_MENSUAL_NO_TABLAS")
-        st.info("No existen datos mensuales para la línea y mes seleccionados.")
+        render_empty_state(
+            f"Sin datos para {linea_mes_sel} en {month_period_to_label(month_sel)}",
+            "El archivo de perfil de carga no tiene viajes para esa combinación de línea y mes. "
+            "Pruebe con otro mes o verifique que los CSVs incluyan datos para esa línea.",
+            icon="📭",
+        )
         return
 
     diag_checkpoint("RENDER_MENSUAL_RENDERIZADO_INICIO")
@@ -6339,9 +6664,11 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
     folder_name = OD_SERVICE_CONFIG["Biotren"]["folder_candidates"][0]
 
     if not od_index:
-        st.info(
-            f"No se encontraron archivos CSV en **{folder_name}**.",
-            icon="ℹ️",
+        render_empty_state(
+            f"No se encontraron archivos OD en {folder_name}",
+            "Para activar esta vista, agregue archivos CSV con OD diaria a la "
+            f"carpeta <strong>{folder_name}</strong> del repositorio.",
+            icon="🗺️",
         )
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
@@ -6395,7 +6722,11 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
         return
 
     if od_fecha is None or od_fecha.empty:
-        st.warning("No existen datos para la fecha seleccionada.")
+        render_empty_state(
+            "No hay datos OD para esa fecha",
+            "Pruebe seleccionar una fecha distinta del calendario.",
+            icon="🗺️",
+        )
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
@@ -6845,7 +7176,10 @@ def render_header():
     is_dark = "Oscuro" in st.session_state["dashboard_theme_mode"]
     apply_runtime_palette(DARK_COLORS if is_dark else LIGHT_COLORS)
     if is_dark:
-        st.markdown(build_dark_overrides_css(COLORS), unsafe_allow_html=True)
+        st.markdown(
+            _build_dark_overrides_css_cached(tuple(sorted(COLORS.items()))),
+            unsafe_allow_html=True,
+        )
 
     with header_left:
         st.markdown("<div class='hero-minimal'>", unsafe_allow_html=True)
