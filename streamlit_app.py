@@ -48,6 +48,7 @@ _PLOTLY_HAS_NEW_MAP_API = hasattr(go, "Scattermap")
 ScatterMapTrace = go.Scattermap if _PLOTLY_HAS_NEW_MAP_API else go.Scattermapbox
 PLOTLY_MAP_LAYOUT_KEY = "map" if _PLOTLY_HAS_NEW_MAP_API else "mapbox"
 import streamlit as st
+import streamlit.components.v1 as components
 
 # ================================================================
 # 0a. SISTEMA DE LOGGING DIAGNÓSTICO PERSISTENTE
@@ -59,8 +60,8 @@ import streamlit as st
 
 # Identificador de versión visible en la UI para confirmar qué archivo
 # está corriendo en producción. Se incrementa con cada release.
-APP_VERSION = "v13-2026-05-11-audit-perf"
-APP_VERSION_HASH = "70a96b787c8d"
+APP_VERSION = "v15-2026-05-12-gantt-presets"
+APP_VERSION_HASH = "b2297f27c637"
 
 # Ruta del log diagnóstico. En Streamlit Cloud, /tmp se borra al reiniciar
 # el contenedor — pero el archivo SÍ persiste durante la sesión del usuario,
@@ -601,6 +602,129 @@ div[data-testid="stPlotlyChart"] {{
 }}
 
 /* ==============================================================
+   TOP-LIST (mejores/peores días) — v14
+   ============================================================== */
+.efe-toplist {{
+    background: #FFFFFF;
+    border: 1px solid #DFE7EF;
+    border-radius: 14px;
+    padding: 0.7rem 0.85rem;
+    box-shadow: 0 6px 14px rgba(0,40,87,0.04);
+    margin: 0.3rem 0 0.6rem;
+}}
+.efe-toplist--top {{ border-left: 4px solid {SUCCESS}; }}
+.efe-toplist--bot {{ border-left: 4px solid {DANGER}; }}
+.efe-toplist-title {{
+    font-size: 0.82rem; font-weight: 800;
+    color: {TEXT_MAIN}; margin-bottom: 0.45rem;
+    text-transform: uppercase; letter-spacing: 0.04em;
+}}
+.efe-toplist-row {{
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 0.32rem 0; border-bottom: 1px dashed #ECF1F5;
+    font-size: 0.88rem;
+}}
+.efe-toplist-row:last-child {{ border-bottom: none; }}
+.efe-toplist-label {{
+    color: {TEXT_MAIN}; font-weight: 700;
+}}
+.efe-toplist-sub {{
+    color: {TEXT_MUTED}; font-weight: 500; font-size: 0.78rem;
+}}
+.efe-toplist-value {{
+    color: {EFE_BLUE}; font-weight: 800;
+}}
+
+/* ==============================================================
+   SEMÁFORO RÁPIDO DE ESTADOS (v14)
+   ============================================================== */
+.efe-semaforo {{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.5rem 0.8rem;
+    margin: 0.25rem 0 0.55rem;
+    background: linear-gradient(180deg, #FFFFFF 0%, #FBFCFD 100%);
+    border: 1px solid #DFE7EF;
+    border-radius: 14px;
+    box-shadow: 0 6px 14px rgba(0,40,87,0.04);
+}}
+.efe-semaforo-item {{
+    display: inline-flex;
+    align-items: center;
+    gap: 0.32rem;
+    font-size: 1rem;
+    font-weight: 800;
+    padding: 0.22rem 0.55rem;
+    border-radius: 10px;
+    color: {TEXT_MAIN};
+}}
+.efe-semaforo-dot {{
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    display: inline-block;
+}}
+.efe-semaforo-item.ok       {{ background: rgba(15,118,110,0.08); }}
+.efe-semaforo-item.ok .efe-semaforo-dot       {{ background: {SUCCESS}; }}
+.efe-semaforo-item.alerta   {{ background: rgba(217,119,6,0.08); }}
+.efe-semaforo-item.alerta .efe-semaforo-dot   {{ background: {WARNING}; }}
+.efe-semaforo-item.critico  {{ background: rgba(185,28,28,0.08); }}
+.efe-semaforo-item.critico .efe-semaforo-dot  {{ background: {DANGER}; }}
+.efe-semaforo-item.total    {{ background: rgba(0,40,87,0.06); color: {EFE_BLUE}; }}
+.efe-semaforo-label {{
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: {TEXT_MUTED};
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}}
+.efe-semaforo-divider {{
+    width: 1px; height: 22px;
+    background: #DFE7EF;
+    margin: 0 0.15rem;
+}}
+
+/* ==============================================================
+   BREADCRUMB DE NAVEGACIÓN (v14)
+   ============================================================== */
+.efe-breadcrumb {{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.32rem 0.7rem;
+    margin: -0.1rem 0 0.4rem;
+    background: rgba(0,40,87,0.035);
+    border: 1px solid #DFE7EF;
+    border-radius: 12px;
+    font-size: 0.82rem;
+    line-height: 1.3;
+}}
+.efe-breadcrumb-item {{
+    color: {TEXT_MUTED};
+    font-weight: 600;
+}}
+.efe-breadcrumb-sep {{
+    color: {TEXT_MUTED};
+    opacity: 0.55;
+    font-weight: 800;
+    font-size: 0.92rem;
+}}
+.efe-breadcrumb-current {{
+    color: {EFE_BLUE};
+    font-weight: 800;
+}}
+.efe-breadcrumb-ctx {{
+    color: {EFE_BLUE};
+    background: rgba(0,40,87,0.07);
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 700;
+}}
+
+/* ==============================================================
    MEJORAS DE PRESENTACIÓN v13
    ============================================================== */
 
@@ -763,33 +887,161 @@ button:focus-visible, a:focus-visible,
    PRINT: optimización para exportar a PDF
    ============================================================== */
 @media print {{
-    .stApp {{
-        background: white !important;
+    /* Tamaño de página A4 con márgenes razonables y info de doc */
+    @page {{
+        size: A4;
+        margin: 1.2cm 1.0cm 1.4cm 1.0cm;
     }}
-    .nav-panel, header[data-testid="stHeader"],
-    div[data-testid="stToolbar"] {{ display: none !important; }}
+
+    /* Forzar que los colores se respeten al imprimir (Chrome/Edge) */
+    * {{
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        color-adjust: exact !important;
+    }}
+
+    body, .stApp, .main {{
+        background: white !important;
+        color: #1F2937 !important;
+    }}
+
+    /* Esconder TODOS los controles interactivos y elementos de chrome */
+    .nav-panel,
+    header[data-testid="stHeader"],
+    div[data-testid="stToolbar"],
+    div[data-testid="stStatusWidget"],
+    div[data-testid="stDecoration"],
+    .stButton, .stDownloadButton,
+    [data-baseweb="select"],
+    [data-baseweb="popover"],
+    [data-baseweb="tooltip"],
+    iframe[title*="streamlit_components"],
+    [data-testid="stPopover"],
+    [data-testid="stExpander"] > div:first-child,
+    .stRadio, .stCheckbox, .stMultiSelect, .stSelectbox,
+    .efe-skip-link {{
+        display: none !important;
+    }}
+
+    /* Reducir paddings y márgenes del contenedor principal */
+    .block-container {{
+        padding: 0.4cm 0 !important;
+        max-width: 100% !important;
+    }}
+
+    /* Section-shell: sin sombras, borde sutil, evita corte de página */
     .section-shell {{
         box-shadow: none !important;
-        border: 1px solid #E5E7EB !important;
+        border: 1px solid #CBD5E1 !important;
         page-break-inside: avoid;
+        margin-bottom: 0.6cm !important;
+        padding: 0.4cm 0.5cm !important;
     }}
-    .efe-card, .efe-summary-card {{
+
+    /* Tarjetas KPI: contraste alto en papel, sin sombras */
+    .efe-card, .efe-summary-card, .pax-type-card {{
         box-shadow: none !important;
         page-break-inside: avoid;
+        border: 1px solid #94A3B8 !important;
+        background: white !important;
     }}
+    .efe-card-title, .pax-card-title, .efe-summary-label {{
+        color: #475569 !important;
+    }}
+    .efe-card-value, .pax-card-value, .efe-summary-value {{
+        color: #002857 !important;
+    }}
+
+    /* Gráficos: sin sombras, evitar corte */
     div[data-testid="stPlotlyChart"] {{
         box-shadow: none !important;
         page-break-inside: avoid;
+        border: 1px solid #CBD5E1 !important;
+        margin-bottom: 0.4cm;
     }}
+
+    /* Tarjeta acumulativa en alto contraste */
     .efe-cumulative-card {{
         background: white !important;
         color: black !important;
         border: 2px solid {EFE_BLUE} !important;
+        page-break-inside: avoid;
     }}
     .efe-cumulative-card .efe-cumulative-label,
     .efe-cumulative-card .efe-cumulative-value,
-    .efe-cumulative-card .efe-cumulative-sub {{
+    .efe-cumulative-card .efe-cumulative-sub,
+    .efe-cumulative-card .efe-cumulative-comparison {{
         color: black !important;
+        background: #F1F5F9 !important;
+    }}
+
+    /* Tablas: legibles en papel */
+    [data-testid="stDataFrame"] {{
+        box-shadow: none !important;
+        border: 1px solid #94A3B8 !important;
+        page-break-inside: avoid;
+    }}
+    [data-testid="stDataFrame"] thead tr {{
+        background: #E2E8F0 !important;
+    }}
+    [data-testid="stDataFrame"] thead th {{
+        color: #002857 !important;
+    }}
+
+    /* Títulos: contraste y tamaño legibles en papel */
+    .main-title {{
+        color: #002857 !important;
+        font-size: 18pt !important;
+        margin-bottom: 0.1cm !important;
+    }}
+    .section-title {{
+        color: #002857 !important;
+        font-size: 12pt !important;
+        page-break-after: avoid;
+    }}
+    .section-subtitle, .subtitle {{
+        color: #475569 !important;
+        font-size: 9pt !important;
+    }}
+
+    /* Métricas Streamlit nativas */
+    div[data-testid="stMetric"] {{
+        box-shadow: none !important;
+        border: 1px solid #94A3B8 !important;
+        page-break-inside: avoid;
+        background: white !important;
+    }}
+    [data-testid="stMetricValue"] {{
+        color: #002857 !important;
+    }}
+
+    /* Observaciones */
+    .efe-observation, .efe-observation-empty, .map-note, .filters-summary {{
+        box-shadow: none !important;
+        page-break-inside: avoid;
+        background: #F8FAFC !important;
+    }}
+
+    /* Empty states no aparecen en PDF */
+    .efe-empty-state {{
+        display: none !important;
+    }}
+
+    /* Tipo de pasajero: borde lateral mantenido */
+    .pax-type-card {{
+        border-left-width: 4px !important;
+    }}
+
+    /* Caption pies de página menos prominente */
+    .stCaption, [data-testid="stCaptionContainer"] {{
+        color: #64748B !important;
+        font-size: 8pt !important;
+    }}
+
+    /* Evitar overflow horizontal */
+    body {{
+        width: 100% !important;
+        overflow-x: hidden !important;
     }}
 }}
 </style>
@@ -1529,32 +1781,70 @@ def render_narrative_box(narrative_html: str, title: str = "📋 Lectura del per
 # ================================================================
 # 9e. EXPORTACIÓN A PDF/IMAGEN DE LA SECCIÓN
 # ================================================================
-def render_export_button(section_id: str, label: str = "📥 Exportar sección") -> None:
+def render_print_button(label: str = "🖨️ Imprimir / Guardar como PDF",
+                         compact: bool = False) -> None:
     """
-    Botón que invoca window.print con un selector CSS específico.
-    Genera un PDF a través del print del navegador (sin dependencias).
+    Botón que invoca el diálogo de impresión del navegador. El usuario
+    elige "Guardar como PDF" como destino para obtener un PDF.
+
+    Reemplazo del antiguo `render_export_button` que estaba roto por:
+    - `window.open('', '_blank')` bloqueado por pop-up blockers
+    - `window.parent.document.querySelector` falla por sandbox de iframes
+    - Selectores `[data-section]` que Streamlit no preserva en el DOM
+
+    Esta versión usa `streamlit.components.v1.html` (que SÍ tiene permiso
+    para llamar a `window.top.print()`) y delega el resultado al CSS
+    `@media print` para esconder los elementos no imprimibles.
     """
-    btn_html = f"""
-    <div style='text-align:right; margin: 0.2rem 0 0.5rem;'>
-        <button onclick="
-            const sec = window.parent.document.querySelector('[data-section=\\'{section_id}\\']');
-            if (sec) {{
-                const w = window.open('', '_blank');
-                w.document.write('<html><head><title>EFE Sur — Exportar</title>');
-                w.document.write('<link rel=stylesheet href=\\'data:text/css;,body{{font-family:Arial}}\\'>');
-                w.document.write('</head><body>' + sec.innerHTML + '</body></html>');
-                w.document.close();
-                setTimeout(function(){{ w.print(); }}, 500);
-            }} else {{
-                alert('Sección no encontrada');
-            }}
-        " style='background:white; border:1px solid #D7E0EA; color:#002857; font-weight:700;
-                 padding:0.4rem 0.85rem; border-radius:999px; cursor:pointer; font-size:0.85rem;'>
+    height = 42 if compact else 52
+    padding = "0.35rem 0.7rem" if compact else "0.5rem 0.95rem"
+    font_size = "0.78rem" if compact else "0.88rem"
+    components.html(
+        f"""
+        <div style='text-align:center; padding:0;'>
+          <button
+            id='efe-print-btn'
+            onclick='
+              try {{
+                if (window.top && window.top !== window) {{
+                  window.top.focus();
+                  window.top.print();
+                }} else {{
+                  window.print();
+                }}
+              }} catch (e) {{
+                window.print();
+              }}
+            '
+            style='
+              background: #FFFFFF;
+              border: 1px solid #D7E0EA;
+              color: #002857;
+              font-weight: 700;
+              font-size: {font_size};
+              padding: {padding};
+              border-radius: 999px;
+              cursor: pointer;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+              transition: all 0.16s ease;
+              width: 100%;
+            '
+            onmouseover='this.style.borderColor="#002857"; this.style.boxShadow="0 4px 12px rgba(0,40,87,0.12)";'
+            onmouseout='this.style.borderColor="#D7E0EA"; this.style.boxShadow="none";'
+          >
             {label}
-        </button>
-    </div>
-    """
-    st.markdown(btn_html, unsafe_allow_html=True)
+          </button>
+        </div>
+        """,
+        height=height,
+    )
+
+
+# Alias retrocompatible (por si algún punto llama al nombre antiguo)
+def render_export_button(section_id: str = "", label: str = "🖨️ Imprimir / Guardar como PDF") -> None:
+    """Alias mantenido por compatibilidad. La sección ya no se filtra
+    porque la impresión usa @media print global. Llama a render_print_button."""
+    render_print_button(label=label)
 
 
 def validate_columns(df: pd.DataFrame, required_cols: list, label: str) -> list:
@@ -4536,6 +4826,153 @@ def build_monthly_daily_trend_chart(monthly_daily: pd.DataFrame,
     return fig
 
 
+# ================================================================
+# 24g. GANTT DE INICIATIVAS (v15)
+# ================================================================
+def build_iniciativas_gantt_chart(iniciativas_df: pd.DataFrame,
+                                   title: str = "Cronograma de iniciativas",
+                                   max_rows: int = 40) -> go.Figure | None:
+    """
+    Gantt horizontal con una barra por iniciativa.
+      • Eje X: tiempo (fecha_inicio → fecha_fin)
+      • Color: por estado (En curso / Atrasada / Finalizada / Planificada / Pausada)
+      • Hover: nombre, responsable, estado, avance, fechas
+      • Línea vertical "hoy" para referencia
+
+    Retorna None si no hay datos suficientes (sin fechas válidas).
+    """
+    if iniciativas_df is None or iniciativas_df.empty:
+        return None
+
+    df = iniciativas_df.copy()
+    df["fecha_inicio_dt"] = pd.to_datetime(df["fecha_inicio"], errors="coerce")
+    df["fecha_fin_dt"]    = pd.to_datetime(df["fecha_fin"],    errors="coerce")
+    df = df.dropna(subset=["fecha_inicio_dt", "fecha_fin_dt"])
+    if df.empty:
+        return None
+
+    # Ordenar por fecha de inicio (las más antiguas arriba)
+    df = df.sort_values(["fecha_inicio_dt", "fecha_fin_dt"], ascending=[True, True])
+
+    # Limitar para evitar gráficos ilegibles
+    truncated = False
+    if len(df) > max_rows:
+        df = df.head(max_rows).copy()
+        truncated = True
+
+    # Mapa de colores por estado
+    state_colors = {
+        "Planificada": TEXT_MUTED,
+        "En curso":    EFE_BLUE,
+        "Atrasada":    DANGER,
+        "Finalizada":  SUCCESS,
+        "Pausada":     WARNING,
+    }
+
+    # Construir el Gantt con go.Bar horizontal: base = fecha_inicio,
+    # width = duración en milisegundos.
+    fig = go.Figure()
+
+    # Una traza por estado para que la leyenda agrupe bien
+    estados_orden = ["Atrasada", "En curso", "Pausada", "Planificada", "Finalizada"]
+    estados_presentes = [e for e in estados_orden if e in df["estado"].astype(str).unique()]
+
+    for estado in estados_presentes:
+        sub = df[df["estado"].astype(str) == estado].copy()
+        if sub.empty:
+            continue
+        # Duración en días (Plotly maneja directamente datetimes en barras horizontales)
+        durations_ms = (sub["fecha_fin_dt"] - sub["fecha_inicio_dt"]).dt.total_seconds() * 1000
+
+        # Customdata para hover
+        responsable_col = sub.get("responsable", pd.Series(["-"] * len(sub)))
+        servicio_col    = sub.get("servicio",    pd.Series(["-"] * len(sub)))
+        prioridad_col   = sub.get("prioridad",   pd.Series(["-"] * len(sub)))
+        avance_col      = pd.to_numeric(sub.get("avance_pct", 0), errors="coerce").fillna(0)
+
+        custom = list(zip(
+            sub["nombre_iniciativa"].astype(str).tolist(),
+            responsable_col.astype(str).tolist(),
+            servicio_col.astype(str).tolist(),
+            prioridad_col.astype(str).tolist(),
+            avance_col.astype(float).tolist(),
+            sub["fecha_inicio_dt"].dt.strftime("%d-%m-%Y").tolist(),
+            sub["fecha_fin_dt"].dt.strftime("%d-%m-%Y").tolist(),
+        ))
+
+        fig.add_trace(go.Bar(
+            base=sub["fecha_inicio_dt"].tolist(),
+            x=durations_ms.tolist(),
+            y=sub["nombre_iniciativa"].astype(str).tolist(),
+            orientation="h",
+            name=estado,
+            marker=dict(
+                color=state_colors.get(estado, EFE_BLUE),
+                line=dict(width=0.5, color="rgba(255,255,255,0.6)"),
+            ),
+            customdata=custom,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Responsable: %{customdata[1]}<br>"
+                "Servicio: %{customdata[2]} · Prioridad: %{customdata[3]}<br>"
+                "Estado: " + estado + " · Avance: %{customdata[4]:.0f}%<br>"
+                "Inicio: %{customdata[5]} · Fin: %{customdata[6]}"
+                "<extra></extra>"
+            ),
+        ))
+
+    # Línea vertical "hoy"
+    today = pd.Timestamp(date.today())
+    fig.add_vline(
+        x=today.timestamp() * 1000,  # Plotly espera ms si el eje es datetime
+        line_dash="dash",
+        line_color=DANGER,
+        line_width=1.5,
+        annotation_text="Hoy",
+        annotation_position="top",
+        annotation_font=dict(color=DANGER, size=11),
+    )
+
+    title_full = title
+    if truncated:
+        title_full += f" (mostrando primeras {max_rows} de {len(iniciativas_df)} iniciativas)"
+
+    # Altura proporcional al número de filas, con tope superior
+    n_rows = len(df)
+    chart_height = min(max(280, n_rows * 28 + 120), 900)
+
+    fig.update_layout(
+        title=title_full,
+        barmode="overlay",
+        plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
+        margin=dict(l=20, r=20, t=60, b=30),
+        height=chart_height,
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom", y=1.02,
+            xanchor="right",  x=1,
+            font=dict(size=11),
+        ),
+        hoverlabel=dict(bgcolor="white", font_size=12),
+    )
+    fig.update_xaxes(
+        title="",
+        type="date",
+        showgrid=True, gridcolor="#E8EEF4",
+        zeroline=False,
+        tickformat="%b\n%Y",  # Mes y año
+    )
+    fig.update_yaxes(
+        title="",
+        autorange="reversed",  # Más antiguas arriba (orden cronológico natural)
+        tickfont=dict(size=11),
+        showgrid=False,
+    )
+    return fig
+
+
 def build_service_transport_chart(summary_df: pd.DataFrame, title: str) -> go.Figure:
     """Barras de pasajeros transportados por servicio."""
     fig = go.Figure()
@@ -5018,6 +5455,57 @@ def render_resumen_ejecutivo(kpis: pd.DataFrame, kpis_hist: pd.DataFrame,
     narrative = generate_narrative_kpis(kpis_periodo, servicio=resumen_srv)
     render_narrative_box(narrative, title="📋 Lectura del período")
 
+    # Semáforo rápido + filtros de categoría/estado (mejora v14)
+    if not servicio_df.empty:
+        estados_norm = servicio_df["estado"].astype(str).str.strip().str.lower()
+        n_ok       = int((estados_norm == "ok").sum())
+        n_alerta   = int((estados_norm == "alerta").sum())
+        n_critico  = int((estados_norm == "critico").sum())
+        n_total    = len(servicio_df)
+
+        semaforo_html = (
+            f"<div class='efe-semaforo'>"
+            f"<div class='efe-semaforo-item ok' title='Cumplen meta'>"
+            f"<span class='efe-semaforo-dot'></span>{n_ok}<span class='efe-semaforo-label'>cumplen</span></div>"
+            f"<div class='efe-semaforo-item alerta' title='En alerta'>"
+            f"<span class='efe-semaforo-dot'></span>{n_alerta}<span class='efe-semaforo-label'>alerta</span></div>"
+            f"<div class='efe-semaforo-item critico' title='Críticos'>"
+            f"<span class='efe-semaforo-dot'></span>{n_critico}<span class='efe-semaforo-label'>críticos</span></div>"
+            f"<div class='efe-semaforo-divider'></div>"
+            f"<div class='efe-semaforo-item total' title='Total de KPIs'>"
+            f"<span>{n_total}</span><span class='efe-semaforo-label'>total</span></div>"
+            f"</div>"
+        )
+        st.markdown(semaforo_html, unsafe_allow_html=True)
+
+        # Chips por categoría (si hay más de una)
+        if "categoria" in servicio_df.columns:
+            categorias = sorted(servicio_df["categoria"].dropna().astype(str).unique().tolist())
+            if len(categorias) > 1:
+                cat_options = ["Todas"] + categorias
+                cat_key = f"resumen_categoria_filter_{resumen_srv}"
+                cat_sel = option_selector(
+                    "Categoría", cat_options, key=cat_key,
+                    default="Todas", horizontal=True,
+                )
+                if cat_sel and cat_sel != "Todas":
+                    servicio_df = servicio_df[
+                        servicio_df["categoria"].astype(str) == cat_sel
+                    ].copy()
+
+        # Toggle "solo no cumplen meta"
+        if n_alerta + n_critico > 0:
+            only_issues = st.toggle(
+                f"⚠️ Mostrar solo KPIs en alerta o críticos ({n_alerta + n_critico})",
+                value=False,
+                key=f"resumen_only_issues_{resumen_srv}",
+                help="Filtra los KPIs cuyo estado es 'alerta' o 'critico'.",
+            )
+            if only_issues:
+                servicio_df = servicio_df[
+                    servicio_df["estado"].astype(str).str.strip().str.lower().isin(["alerta", "critico"])
+                ].copy()
+
     if not servicio_df.empty:
         cols_per_row = 3 if len(servicio_df) >= 3 else max(1, len(servicio_df))
         for i in range(0, len(servicio_df), cols_per_row):
@@ -5149,11 +5637,27 @@ def render_personas(iniciativas: pd.DataFrame, servicios_lista: list,
     en_curso    = int((iniciativas_local["estado"] == "En curso").sum())
     atrasadas   = int((iniciativas_local["estado"] == "Atrasada").sum())
     finalizadas = int((iniciativas_local["estado"] == "Finalizada").sum())
-    m1, m2, m3, m4 = st.columns(4)
+    criticas    = int(iniciativas_local["critica"].sum()) if "critica" in iniciativas_local.columns else 0
+
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total iniciativas", total)
     m2.metric("En curso", en_curso)
-    m3.metric("Atrasadas", atrasadas)
+    m3.metric("Atrasadas", atrasadas,
+              help="Estado = 'Atrasada' o con fecha de fin vencida sin haberse finalizado.")
     m4.metric("Finalizadas", finalizadas)
+    m5.metric("🔴 Críticas", criticas,
+              help="Iniciativas atrasadas o vencidas. Marque el toggle para verlas solo.")
+
+    # Toggle rápido para filtrar solo críticas
+    if criticas > 0:
+        only_critical = st.toggle(
+            f"🔴 Mostrar solo iniciativas críticas ({criticas})",
+            value=st.session_state.get("personas_only_critical", False),
+            key="personas_only_critical",
+            help="Filtra las iniciativas atrasadas o con fecha de fin vencida sin finalizar.",
+        )
+        if only_critical and "critica" in iniciativas_local.columns:
+            iniciativas_local = iniciativas_local[iniciativas_local["critica"]].copy()
 
     personas_opts = sorted(iniciativas_local["responsable"].dropna().astype(str).unique().tolist())
     persona_sel = option_selector(
@@ -5161,7 +5665,11 @@ def render_personas(iniciativas: pd.DataFrame, servicios_lista: list,
         default=personas_opts[0] if personas_opts else None,
     )
     if not personas_opts or not persona_sel:
-        st.warning("No hay responsables disponibles con los filtros actuales.")
+        render_empty_state(
+            "No hay responsables con iniciativas para los filtros actuales",
+            "Pruebe desactivar el filtro 'solo críticas' o ampliar otros filtros.",
+            icon="👥",
+        )
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
@@ -5174,48 +5682,85 @@ def render_personas(iniciativas: pd.DataFrame, servicios_lista: list,
     p3.metric("Atrasadas",    int((per_df["estado"] == "Atrasada").sum()))
     p4.metric("Avance promedio", fmt_pct(avance_prom))
 
-    left_p, right_p = st.columns([1.2, 0.8])
-    with left_p:
+    # Toggle: vista Gantt cronológico vs vista clásica (avance + distribución)
+    view_mode_personas = option_selector(
+        "Vista de iniciativas",
+        ["Avance + Estado", "🗓 Cronograma (Gantt)"],
+        key=f"personas_view_mode_{persona_sel}",
+        default="Avance + Estado",
+        horizontal=True,
+    )
+
+    if view_mode_personas == "🗓 Cronograma (Gantt)":
         if per_df.empty:
-            st.info("No hay iniciativas para el responsable seleccionado.")
+            render_empty_state(
+                "Sin iniciativas para mostrar en el cronograma",
+                "El responsable seleccionado no tiene iniciativas asignadas.",
+                icon="🗓",
+            )
         else:
-            fig = px.bar(
-                per_df.sort_values("avance_pct"),
-                x="avance_pct", y="nombre_iniciativa",
-                orientation="h",
-                title=f"Avance por iniciativa — {persona_sel}",
-                text="avance_pct",
+            gantt_fig = build_iniciativas_gantt_chart(
+                per_df,
+                title=f"Cronograma de iniciativas — {persona_sel}",
             )
-            fig.update_traces(marker_color=EFE_BLUE)
-            fig.update_layout(
-                plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-                margin=dict(l=20, r=20, t=50, b=20), height=420,
-                font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
-                title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
-            )
-            fig.update_xaxes(title="Avance %"); fig.update_yaxes(title="")
-            show_plot(fig, width="stretch")
-    with right_p:
-        estado_persona = per_df["estado"].value_counts().reset_index()
-        estado_persona.columns = ["estado", "cantidad"]
-        if not estado_persona.empty:
-            fig2 = px.bar(
-                estado_persona, x="estado", y="cantidad",
-                title="Distribución por estado", color="estado",
-                color_discrete_map={
-                    "Planificada": TEXT_MUTED, "En curso": EFE_BLUE,
-                    "Atrasada": EFE_RED, "Finalizada": SUCCESS,
-                    "Pausada": WARNING,
-                },
-            )
-            fig2.update_layout(
-                plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
-                margin=dict(l=20, r=20, t=50, b=20), height=420,
-                font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
-                title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
-                showlegend=False,
-            )
-            show_plot(fig2, width="stretch")
+            if gantt_fig is None:
+                render_empty_state(
+                    "No hay fechas válidas para construir el cronograma",
+                    "Las iniciativas necesitan fecha de inicio y fecha de fin para "
+                    "aparecer en el Gantt.",
+                    icon="🗓",
+                )
+            else:
+                show_plot(gantt_fig, width="stretch")
+                # Leyenda explicativa breve
+                st.caption(
+                    "Línea roja punteada = fecha de hoy. "
+                    "Iniciativas que cruzan esa línea sin completarse están en ejecución; "
+                    "las que terminan antes y siguen pendientes están atrasadas."
+                )
+    else:
+        left_p, right_p = st.columns([1.2, 0.8])
+        with left_p:
+            if per_df.empty:
+                st.info("No hay iniciativas para el responsable seleccionado.")
+            else:
+                fig = px.bar(
+                    per_df.sort_values("avance_pct"),
+                    x="avance_pct", y="nombre_iniciativa",
+                    orientation="h",
+                    title=f"Avance por iniciativa — {persona_sel}",
+                    text="avance_pct",
+                )
+                fig.update_traces(marker_color=EFE_BLUE)
+                fig.update_layout(
+                    plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
+                    margin=dict(l=20, r=20, t=50, b=20), height=420,
+                    font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+                    title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
+                )
+                fig.update_xaxes(title="Avance %"); fig.update_yaxes(title="")
+                show_plot(fig, width="stretch")
+        with right_p:
+            estado_persona = per_df["estado"].value_counts().reset_index()
+            estado_persona.columns = ["estado", "cantidad"]
+            if not estado_persona.empty:
+                fig2 = px.bar(
+                    estado_persona, x="estado", y="cantidad",
+                    title="Distribución por estado", color="estado",
+                    color_discrete_map={
+                        "Planificada": TEXT_MUTED, "En curso": EFE_BLUE,
+                        "Atrasada": EFE_RED, "Finalizada": SUCCESS,
+                        "Pausada": WARNING,
+                    },
+                )
+                fig2.update_layout(
+                    plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
+                    margin=dict(l=20, r=20, t=50, b=20), height=420,
+                    font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+                    title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
+                    showlegend=False,
+                )
+                show_plot(fig2, width="stretch")
 
     st.markdown("<div class='section-title'>Detalle por responsable</div>", unsafe_allow_html=True)
     detalle_cols = ["nombre_iniciativa", "servicio", "estado", "avance_pct",
@@ -6378,6 +6923,62 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
                 raise
             st.caption(f"Tendencia diaria no disponible: {type(exc).__name__}")
 
+        # --- TOP 3 mejores / peores días del mes (mejora v14) -------------
+        try:
+            daily_tot = (
+                monthly_daily.groupby("fecha", as_index=False)["pasajeros_transportados"]
+                .sum().sort_values("pasajeros_transportados", ascending=False)
+            )
+            if len(daily_tot) >= 3:
+                top3 = daily_tot.head(3).copy()
+                bot3 = daily_tot.tail(3).sort_values("pasajeros_transportados").copy()
+
+                col_top, col_bot = st.columns(2)
+                with col_top:
+                    st.markdown(
+                        "<div class='efe-toplist efe-toplist--top'>"
+                        "<div class='efe-toplist-title'>🟢 Días con mayor afluencia</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _, r in top3.iterrows():
+                        fecha_lbl = pd.Timestamp(r["fecha"]).strftime("%a %d-%m")
+                        dia_clas = classify_profile_day_type(r["fecha"]) or ""
+                        st.markdown(
+                            f"<div class='efe-toplist-row'>"
+                            f"<span class='efe-toplist-label'>{fecha_lbl}"
+                            f" <span class='efe-toplist-sub'>({dia_clas})</span></span>"
+                            f"<span class='efe-toplist-value'>"
+                            f"{fmt_pax(r['pasajeros_transportados'])} pax</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+                with col_bot:
+                    st.markdown(
+                        "<div class='efe-toplist efe-toplist--bot'>"
+                        "<div class='efe-toplist-title'>🔴 Días con menor afluencia</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _, r in bot3.iterrows():
+                        fecha_lbl = pd.Timestamp(r["fecha"]).strftime("%a %d-%m")
+                        dia_clas = classify_profile_day_type(r["fecha"]) or ""
+                        st.markdown(
+                            f"<div class='efe-toplist-row'>"
+                            f"<span class='efe-toplist-label'>{fecha_lbl}"
+                            f" <span class='efe-toplist-sub'>({dia_clas})</span></span>"
+                            f"<span class='efe-toplist-value'>"
+                            f"{fmt_pax(r['pasajeros_transportados'])} pax</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                    st.markdown("</div>", unsafe_allow_html=True)
+        except BaseException as exc:
+            if is_streamlit_internal_exception(exc):
+                raise
+            # No bloquear el resto si falla el cálculo de top/bot
+            pass
+
     # ============================================================
     # MODO DETALLE: Tablas por tipo de día
     # ============================================================
@@ -6627,6 +7228,40 @@ def render_detalle_servicio(servicios_lista: list,
             fig.update_yaxes(title="Pasajeros")
             show_plot(fig, width="stretch")
 
+    # --- TOP 5 estaciones con mayor fuga (mejora v14) -----------------
+    # Identifica las estaciones que más se alejan de su meta de afluencia.
+    try:
+        critical_df = detail_df.dropna(subset=["fuga_pct_display"]).copy()
+        critical_df = critical_df[critical_df["fuga_pct_display"] > 0]
+        if not critical_df.empty:
+            top_fuga = critical_df.sort_values("fuga_pct_display", ascending=False).head(5)
+            st.markdown(
+                "<div class='section-title' style='font-size:0.94rem; margin-top:0.6rem;'>"
+                "🔴 Top 5 estaciones con mayor fuga vs meta</div>",
+                unsafe_allow_html=True,
+            )
+            rows_html = []
+            for _, r in top_fuga.iterrows():
+                rows_html.append(
+                    f"<div class='efe-toplist-row'>"
+                    f"<span class='efe-toplist-label'>{r['estacion']} "
+                    f"<span class='efe-toplist-sub'>"
+                    f"(afluencia {fmt_pax(r['entradas'])} / meta {fmt_pax(r['meta_entradas'])})"
+                    f"</span></span>"
+                    f"<span class='efe-toplist-value'>{fmt_fuga_pct(r['fuga_pct_display'])}</span>"
+                    f"</div>"
+                )
+            st.markdown(
+                "<div class='efe-toplist efe-toplist--bot'>"
+                + "".join(rows_html)
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+    except BaseException as exc:
+        if is_streamlit_internal_exception(exc):
+            raise
+        pass
+
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
@@ -6745,20 +7380,69 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
         return
 
     bucket_display = {b: b.replace("-", " a ") for b in bucket_order}
-    default_blocks = st.session_state.get("od_bloques_selector_multi")
-    if not isinstance(default_blocks, list) or not default_blocks:
-        default_blocks = [bucket_order[0]]
-    default_blocks = [b for b in default_blocks if b in bucket_order] or [bucket_order[0]]
+
+    # --- PRESETS RÁPIDOS de bloques horarios (mejora v15) ----------
+    # Permite al usuario seleccionar de un click "Todo el día", "Punta AM",
+    # "Punta PM" o "Mediodía / valle" sin tener que marcar bucket por bucket.
+    def _filter_buckets_by_hour_range(start_h: int, end_h: int) -> list:
+        """Devuelve los buckets cuya hora de inicio cae dentro de [start_h, end_h)."""
+        out = []
+        for b in bucket_order:
+            try:
+                hh = int(str(b).split("-")[0].split(":")[0])
+            except (ValueError, IndexError):
+                continue
+            if start_h <= hh < end_h:
+                out.append(b)
+        return out
+
+    PRESETS = {
+        "Todo el día":    bucket_order,
+        "Punta AM (06–10)": _filter_buckets_by_hour_range(6, 10),
+        "Mediodía (10–17)": _filter_buckets_by_hour_range(10, 17),
+        "Punta PM (17–21)": _filter_buckets_by_hour_range(17, 21),
+        "Noche (21–24)":  _filter_buckets_by_hour_range(21, 24),
+    }
+    # Filtrar presets que no tengan ningún bloque (e.g. servicio que no
+    # opera de noche). Conservamos "Todo el día" siempre.
+    PRESETS = {name: blocks for name, blocks in PRESETS.items() if blocks}
 
     st.markdown("<div class='section-title'>Periodo horario de análisis</div>", unsafe_allow_html=True)
+
+    # Default v15: TODOS los bloques del día. Antes era solo el primero,
+    # lo que forzaba al usuario a marcar 12+ checkboxes manualmente.
+    default_blocks = st.session_state.get("od_bloques_selector_multi")
+    if not isinstance(default_blocks, list) or not default_blocks:
+        default_blocks = list(bucket_order)  # Todos los bloques por defecto
+    default_blocks = [b for b in default_blocks if b in bucket_order] or list(bucket_order)
+
+    # Fila de presets rápidos (botones)
+    preset_cols = st.columns(len(PRESETS))
+    for (preset_name, preset_blocks), col in zip(PRESETS.items(), preset_cols):
+        with col:
+            # Etiqueta con conteo "(N)" para que el usuario sepa cuánto suma
+            label = f"{preset_name}  ({len(preset_blocks)})"
+            if st.button(label, key=f"preset_btn_{preset_name}",
+                          width="stretch",
+                          help=f"Selecciona los {len(preset_blocks)} bloque(s) del rango."):
+                # Aplicar preset: actualizar session_state y rerun para
+                # que el multiselect refleje el cambio inmediatamente.
+                st.session_state["od_bloques_selector_multi"] = list(preset_blocks)
+                st.rerun()
+
     bloques_sel = st.multiselect(
         "Bloques horarios de análisis",
         options=bucket_order, default=default_blocks,
         format_func=lambda x: bucket_display.get(x, x),
         key="od_bloques_selector_multi",
+        help="Use los botones de arriba para selección rápida, o marque/desmarque manualmente.",
     )
     if not bloques_sel:
-        st.warning("Seleccione al menos un bloque horario para continuar.")
+        render_empty_state(
+            "Seleccione al menos un bloque horario",
+            "Use los botones de arriba (por ejemplo 'Todo el día') o marque manualmente.",
+            icon="🕐",
+        )
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
@@ -6800,6 +7484,51 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
     rm2.metric("Salidas período", fmt_pax(total_exits))
     rm3.metric("Mayor entrada", top_entry)
     rm4.metric("Mayor salida", top_exit)
+
+    # --- TOP 5 pares O-D del día (mejora v14) ----------------------
+    # Muestra los 5 pares origen→destino más cargados del bloque, ayuda al
+    # usuario a entender los corredores principales sin abrir una estación.
+    try:
+        od_in_bloque = od_fecha[od_fecha["entry_bucket"].isin(bloques_sel)]
+        if not od_in_bloque.empty:
+            od_pairs = (
+                od_in_bloque.groupby(["origen", "destino"], as_index=False)
+                .size().rename(columns={"size": "viajes"})
+                .sort_values("viajes", ascending=False)
+                .head(5)
+            )
+            if not od_pairs.empty:
+                total_bloque = float(od_pairs["viajes"].sum())
+                st.markdown(
+                    "<div class='section-title' style='font-size:0.92rem; margin-top:0.55rem;'>"
+                    "Top 5 pares Origen → Destino del bloque seleccionado</div>",
+                    unsafe_allow_html=True,
+                )
+                rows_html = []
+                # Total del bloque para % de participación
+                total_global = max(int(od_in_bloque.shape[0]), 1)
+                for _, r in od_pairs.iterrows():
+                    pct = float(r["viajes"]) / total_global * 100.0
+                    rows_html.append(
+                        f"<div class='efe-toplist-row'>"
+                        f"<span class='efe-toplist-label'>{r['origen']} "
+                        f"<span class='efe-toplist-sub'>→</span> {r['destino']}</span>"
+                        f"<span class='efe-toplist-value'>"
+                        f"{fmt_pax(r['viajes'])} <span class='efe-toplist-sub'>"
+                        f"({pct:.1f}%)</span></span>"
+                        f"</div>"
+                    )
+                st.markdown(
+                    "<div class='efe-toplist efe-toplist--top'>"
+                    + "".join(rows_html)
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+    except BaseException as exc:
+        if is_streamlit_internal_exception(exc):
+            raise
+        # No bloquear el resto si falla este cálculo opcional
+        pass
 
     # Selector de estación
     station_ref = prepare_od_station_reference("Biotren", od_fecha, estaciones)
@@ -7069,18 +7798,15 @@ def render_header():
                 unsafe_allow_html=True,
             )
             # Botón de exportar a PDF de la vista actual.
-            # Usa el diálogo de impresión del navegador (sin dependencias);
-            # el usuario elige "Guardar como PDF" como destino de impresión.
-            st.markdown(
-                """
-                <button onclick="window.parent.print();"
-                        style="width:100%; background:white; border:1px solid #D7E0EA;
-                               color:#002857; font-weight:700; padding:0.5rem 0.85rem;
-                               border-radius:8px; cursor:pointer; font-size:0.9rem;">
-                    📄 Exportar vista a PDF
-                </button>
-                """,
-                unsafe_allow_html=True,
+            # Usa el diálogo de impresión del navegador (sin dependencias).
+            # El usuario elige "Guardar como PDF" como destino de impresión.
+            # IMPORTANTE: se usa render_print_button (con components.html)
+            # porque st.markdown(unsafe_allow_html) NO permite que el JS
+            # interactúe con window.parent/window.top — el botón antiguo
+            # se veía pero al hacer click no pasaba nada.
+            render_print_button(
+                label="📄 Exportar vista a PDF",
+                compact=True,
             )
             st.caption(
                 "Imprime la vista actual; en el diálogo del navegador "
@@ -7253,6 +7979,46 @@ BIOTREN_DETAIL_PAGES = ["KPIs", "Perfil de Carga", "Análisis por Estación"]
 STANDARD_SERVICE_PAGES = ["KPIs"]
 
 
+# Mapeo de iconos por sección (mejor identificación visual)
+SECTION_ICONS = {
+    "Biotren":                 "🚆",
+    "Tren Araucanía":          "🚂",
+    "Laja Talcahuano":         "🚉",
+    "Llanquihue Puerto Montt": "🛤️",
+    "Personas":                "👥",
+    "KPIs":                    "📊",
+    "KPIs por Servicio":       "📊",
+    "Perfil de Carga":         "📈",
+    "Análisis por Estación":   "🗺️",
+    "OD Estaciones":           "🗺️",
+    "Estaciones":              "📍",
+}
+
+
+def render_breadcrumb(root_sel: str, section_label: str,
+                       extra_context: str | None = None) -> None:
+    """
+    Breadcrumb visible bajo la cabecera: 'Servicio › Sección [› contexto]'.
+    Ayuda al usuario a saber dónde está cuando navega entre páginas largas.
+    """
+    root_icon = SECTION_ICONS.get(root_sel, "•")
+    section_icon = SECTION_ICONS.get(section_label, "")
+    parts = [
+        f"<span class='efe-breadcrumb-item'>{root_icon} {root_sel}</span>",
+        f"<span class='efe-breadcrumb-sep'>›</span>",
+        f"<span class='efe-breadcrumb-current'>{section_icon} {section_label}</span>",
+    ]
+    if extra_context:
+        parts.extend([
+            f"<span class='efe-breadcrumb-sep'>·</span>",
+            f"<span class='efe-breadcrumb-ctx'>{extra_context}</span>",
+        ])
+    st.markdown(
+        f"<div class='efe-breadcrumb'>{''.join(parts)}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_navigation() -> tuple[str, str]:
     """Devuelve (root_sel, section_sel)."""
     with st.container():
@@ -7332,6 +8098,22 @@ def main():
     # Navegación
     root_sel, section_sel = render_navigation()
     selected_service_context = root_sel if root_sel != "Personas" else None
+
+    # Breadcrumb visible (mejora UX: el usuario siempre sabe dónde está)
+    breadcrumb_section_label = {
+        "KPIs por Servicio": "KPIs",
+        "Perfil de Carga":   "Perfil de Carga",
+        "OD Estaciones":     "Análisis por Estación",
+        "Personas":          "Iniciativas y responsables",
+        "Estaciones":        "Estaciones",
+    }.get(section_sel, section_sel)
+    # Contexto extra: período activo para KPIs, mes activo para Perfil
+    extra_context = None
+    if section_sel == "KPIs por Servicio":
+        cur_period = st.session_state.get(f"periodo_kpi_selector_{selected_service_context or 'general'}")
+        if cur_period:
+            extra_context = f"Período {periodo_to_label(cur_period)}"
+    render_breadcrumb(root_sel, breadcrumb_section_label, extra_context)
 
     # CRÍTICO: detectar cambio de página y liberar memoria intermedia.
     # Cuando el usuario navega de "OD Estaciones" (con mapas Plotly) a
