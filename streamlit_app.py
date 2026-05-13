@@ -60,8 +60,8 @@ import streamlit.components.v1 as components
 
 # Identificador de versión visible en la UI para confirmar qué archivo
 # está corriendo en producción. Se incrementa con cada release.
-APP_VERSION = "v15-2026-05-12-gantt-presets"
-APP_VERSION_HASH = "b2297f27c637"
+APP_VERSION = "v16-2026-05-13-laja-talcahuano"
+APP_VERSION_HASH = "2467917778e1"
 
 # Ruta del log diagnóstico. En Streamlit Cloud, /tmp se borra al reiniciar
 # el contenedor — pero el archivo SÍ persiste durante la sesión del usuario,
@@ -1889,6 +1889,43 @@ TURNSTILE_SERVICE_CONFIG = {
     },
 }
 
+# ================================================================
+# 10b. CONFIGURACIÓN ESPECÍFICA DE LAJA TALCAHUANO (v16)
+# ================================================================
+# Schema DIFERENTE al perfil OD de Biotren — sin timestamps, con tarifa
+# y tipo de pasajero ya integrados por viaje:
+#   fecha_viaje, estacion_origen, estacion_destino, sentido_viaje,
+#   servicio_asignado, tarifa_pagada, tipo_pasajero
+PROFILE_LT_SERVICE_CONFIG = {
+    "Laja Talcahuano": {
+        "folder_candidates": ["perfil_lt", "perfil_laja_talcahuano", ".perfil_lt"],
+        "description": "Base de boletos vendidos diarios (sin timestamps).",
+    },
+}
+
+LT_REQUIRED_COLS = [
+    "fecha_viaje", "estacion_origen", "estacion_destino",
+    "sentido_viaje", "servicio_asignado", "tarifa_pagada", "tipo_pasajero",
+]
+
+# Tipos de pasajero en este servicio. NORMAL reemplaza a MONEDERO (Biotren).
+LT_PASSENGER_TYPE_ORDER = ["Normal", "Estudiante", "Adulto Mayor", "Discapacitado", "Otros"]
+LT_PASSENGER_TYPE_COLORS = {
+    "Normal":        "#002857",
+    "Estudiante":    "#FF0016",
+    "Adulto Mayor":  "#D97706",
+    "Discapacitado": "#0F766E",
+    "Otros":         "#6B7280",
+}
+
+# Sentidos del servicio:
+#   LJ-TH = Laja → Talcahuano (sentido "ida")
+#   TH-LJ = Talcahuano → Laja (sentido "vuelta")
+LT_SENTIDO_LABELS = {
+    "LJ-TH": "Laja → Talcahuano",
+    "TH-LJ": "Talcahuano → Laja",
+}
+
 
 def _resolve_folder(service_name: str, config_dict: dict, data_path: Path) -> tuple[list, str]:
     """Devuelve (lista_archivos_csv, ruta_carpeta) buscando candidatos."""
@@ -2725,6 +2762,225 @@ def get_available_months(service_name: str, data_path_str: str) -> list:
 
 
 # ================================================================
+# 14c. CARGA DE PERFIL LAJA TALCAHUANO (v16)
+# ================================================================
+# A diferencia de Biotren (un archivo por día), Laja Talcahuano viene en
+# pocos archivos que cubren varios meses cada uno. El dataset es chico
+# (~5 MB por archivo) — cargamos TODO en memoria una vez y cacheamos.
+# Filtros (mes/sentido/servicio) se aplican en runtime sobre la copia
+# cacheada, lo cual es trivialmente rápido.
+
+def _read_single_lt_file(file_path: str) -> pd.DataFrame:
+    """Lee un único CSV del perfil Laja Talcahuano con dtype optimization."""
+    try:
+        # usecols para descartar columnas espurias si hubiera
+        try:
+            header = pd.read_csv(file_path, nrows=0, encoding="utf-8-sig")
+            available = [c for c in LT_REQUIRED_COLS if c in header.columns]
+            if not available:
+                available = None
+        except Exception:
+            available = None
+
+        df = pd.read_csv(file_path, usecols=available, low_memory=False,
+                         encoding="utf-8-sig")
+
+        # Downcast numéricos
+        if "servicio_asignado" in df.columns:
+            try:
+                df["servicio_asignado"] = pd.to_numeric(
+                    df["servicio_asignado"], downcast="integer", errors="coerce",
+                )
+            except Exception:
+                pass
+        if "tarifa_pagada" in df.columns:
+            try:
+                df["tarifa_pagada"] = pd.to_numeric(
+                    df["tarifa_pagada"], downcast="float", errors="coerce",
+                )
+            except Exception:
+                pass
+
+        # Categóricas para baja cardinalidad
+        for col in ["sentido_viaje", "tipo_pasajero",
+                    "estacion_origen", "estacion_destino"]:
+            if col in df.columns:
+                try:
+                    df[col] = df[col].astype("category")
+                except Exception:
+                    pass
+
+        df["archivo_origen"] = Path(file_path).name
+        return df
+    except Exception as exc:
+        diag_warn(f"READ_LT_FILE_FAIL: {file_path} | {type(exc).__name__}: {exc}")
+        return pd.DataFrame()
+
+
+def _normalize_lt_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza tipos y agrega columnas derivadas (mes_iso, sentido_label)."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    out = df.copy()
+
+    # Parsear fecha y derivar mes_iso
+    out["fecha_viaje"] = pd.to_datetime(out["fecha_viaje"], errors="coerce")
+    out = out.dropna(subset=["fecha_viaje"]).copy()
+    out["fecha"] = out["fecha_viaje"].dt.date
+    out["mes_iso"] = out["fecha_viaje"].dt.to_period("M").astype(str)
+
+    # Normalizar estaciones (mantener original + key para joins)
+    for col in ["estacion_origen", "estacion_destino"]:
+        if col in out.columns:
+            # categorical → str para poder normalizar
+            if str(out[col].dtype) == "category":
+                out[col] = out[col].astype(str)
+            out[col] = out[col].fillna("").astype(str).str.strip()
+
+    out["origen_key"]  = normalize_series(out["estacion_origen"])
+    out["destino_key"] = normalize_series(out["estacion_destino"])
+
+    # Sentido y label legible
+    if "sentido_viaje" in out.columns:
+        if str(out["sentido_viaje"].dtype) == "category":
+            out["sentido_viaje"] = out["sentido_viaje"].astype(str)
+        out["sentido_viaje"] = out["sentido_viaje"].str.strip()
+        out["sentido_label"] = out["sentido_viaje"].map(LT_SENTIDO_LABELS).fillna(
+            out["sentido_viaje"]
+        )
+
+    # Tipo pasajero — normalizar capitalización y mapear desconocidos a "Otros"
+    if "tipo_pasajero" in out.columns:
+        if str(out["tipo_pasajero"].dtype) == "category":
+            out["tipo_pasajero"] = out["tipo_pasajero"].astype(str)
+        out["tipo_pasajero"] = out["tipo_pasajero"].fillna("Otros").astype(str).str.strip()
+        out.loc[~out["tipo_pasajero"].isin(LT_PASSENGER_TYPE_ORDER), "tipo_pasajero"] = "Otros"
+
+    # Servicio asignado
+    if "servicio_asignado" in out.columns:
+        out["servicio_asignado"] = pd.to_numeric(out["servicio_asignado"], errors="coerce")
+        out["servicio_label"] = out["servicio_asignado"].apply(format_service_id)
+
+    # Tarifa
+    if "tarifa_pagada" in out.columns:
+        out["tarifa_pagada"] = pd.to_numeric(out["tarifa_pagada"], errors="coerce").fillna(0.0)
+
+    return out
+
+
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
+def load_lt_full_dataset(service_name: str, data_path_str: str) -> tuple[pd.DataFrame, str, list, str]:
+    """
+    Carga TODO el dataset de Laja Talcahuano de una vez (un solo archivo
+    cubre varios meses, así que no tiene sentido el patrón 'un archivo
+    por día' que sí usamos en Biotren).
+
+    Retorna: (dataframe, folder_path, archivos_cargados, status)
+    """
+    diag_checkpoint("LOAD_LT_BEGIN", srv=service_name)
+    data_path = Path(data_path_str)
+    csv_files, folder_path = _resolve_folder(
+        service_name, PROFILE_LT_SERVICE_CONFIG, data_path,
+    )
+
+    if not csv_files:
+        diag_warn(f"LOAD_LT_NO_FILES: srv={service_name}")
+        return pd.DataFrame(), folder_path, [], "no_data"
+
+    frames = []
+    loaded_names = []
+    for fp in csv_files:
+        chunk = _read_single_lt_file(str(fp))
+        if not chunk.empty:
+            # Validar columnas mínimas
+            missing = [c for c in LT_REQUIRED_COLS if c not in chunk.columns]
+            if missing:
+                diag_warn(f"LOAD_LT_SKIP_FILE: {fp.name} missing={missing}")
+                continue
+            frames.append(chunk)
+            loaded_names.append(fp.name)
+
+    if not frames:
+        diag_warn(f"LOAD_LT_EMPTY: srv={service_name}")
+        return pd.DataFrame(), folder_path, loaded_names, "no_data"
+
+    df_raw = pd.concat(frames, ignore_index=True)
+    del frames
+    gc.collect()
+
+    df_norm = _normalize_lt_dataframe(df_raw)
+    del df_raw
+    gc.collect()
+
+    diag_checkpoint("LOAD_LT_DONE", filas=len(df_norm), archivos=len(loaded_names))
+    return df_norm, folder_path, loaded_names, "ok"
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=4)
+def get_lt_available_months(service_name: str, data_path_str: str) -> list:
+    """Lista de meses disponibles (YYYY-MM) en el dataset Laja Talcahuano."""
+    df, _, _, status = load_lt_full_dataset(service_name, data_path_str)
+    if status != "ok" or df.empty:
+        return []
+    meses = sorted(df["mes_iso"].dropna().astype(str).unique().tolist())
+    return meses
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=8)
+def get_lt_station_sequence(service_name: str, estaciones_df_serialized: str | None,
+                             sentido: str = "TH-LJ") -> list:
+    """
+    Retorna la secuencia ordenada de estaciones para el servicio Laja
+    Talcahuano en el sentido pedido.
+
+    Si `estaciones.csv` tiene filas con `servicio=Laja Talcahuano` y
+    `orden_trazado`, usa esa secuencia (asumiendo orden Talcahuano → Laja
+    como base, según se informó en el repo). Si no las tiene, retorna
+    lista vacía y el caller usa el orden alfabético del dataset como
+    fallback.
+
+    El argumento `estaciones_df_serialized` debe ser un string JSON de las
+    columnas relevantes para que el caché funcione (DataFrames no son
+    hashables). Lo pasamos así desde el caller.
+    """
+    if not estaciones_df_serialized:
+        return []
+    try:
+        import json
+        records = json.loads(estaciones_df_serialized)
+        df = pd.DataFrame(records)
+    except Exception:
+        return []
+
+    if df.empty or "estacion" not in df.columns:
+        return []
+
+    # Filtrar por servicio
+    if "servicio" in df.columns:
+        df = df[df["servicio"].astype(str) == str(service_name)].copy()
+    # Filtrar activas si existe el flag
+    if "activa" in df.columns:
+        df = df[pd.to_numeric(df["activa"], errors="coerce").fillna(0).astype(int) == 1]
+
+    if df.empty:
+        return []
+
+    # Orden Talcahuano → Laja (base)
+    if "orden_trazado" in df.columns:
+        df["orden_trazado"] = pd.to_numeric(df["orden_trazado"], errors="coerce")
+        df = df.dropna(subset=["orden_trazado"]).sort_values("orden_trazado")
+
+    estaciones_th_lj = df["estacion"].astype(str).str.strip().tolist()
+
+    if sentido == "TH-LJ":
+        return estaciones_th_lj
+    elif sentido == "LJ-TH":
+        return list(reversed(estaciones_th_lj))
+    return estaciones_th_lj
+
+
+# ================================================================
 # 15. CARGA DE ITINERARIO Y ORDEN DE SERVICIOS
 # ================================================================
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -3237,6 +3493,192 @@ def build_transactional_service_profile(service_tx: pd.DataFrame) -> pd.DataFram
         "servicio_label", "linea", "direccion",
     ]
     return profile[keep_cols].copy()
+
+
+# ================================================================
+# 17b. PERFIL DE CARGA LAJA TALCAHUANO POR SERVICIO (v16)
+# ================================================================
+LT_PROFILE_COLS = [
+    "estacion", "B_embarque", "D_bajadas", "L_in_abordo", "L_out_abordo",
+    "servicio_label", "sentido", "sentido_label",
+]
+
+
+def build_lt_service_profile(service_df: pd.DataFrame,
+                              station_order_hint: list | None = None) -> pd.DataFrame:
+    """
+    Reconstruye un perfil de carga por estación a partir de los boletos
+    de UN servicio Laja Talcahuano.
+
+    Diferencia con build_transactional_service_profile:
+      - Schema distinto (estacion_origen / estacion_destino vs origen / destino)
+      - SIN timestamps → no podemos derivar orden temporal, dependemos del
+        orden externo (station_order_hint que viene de estaciones.csv)
+
+    Implementación:
+      1. Orden de estaciones: si viene hint válido lo usamos; si no,
+         derivamos uno alfabético (no ideal pero permite seguir).
+      2. Para cada boleto: índice de origen y destino en la secuencia.
+      3. Agregaciones: embarques = nº boletos con origen=estación,
+         bajadas = nº boletos con destino=estación.
+      4. A bordo: cumsum simple sobre arrays numpy.
+    """
+    if service_df is None or service_df.empty:
+        return pd.DataFrame(columns=LT_PROFILE_COLS)
+
+    df = service_df.copy()
+
+    # Asegurar tipos
+    for col in ["estacion_origen", "estacion_destino"]:
+        if col in df.columns:
+            if str(df[col].dtype) == "category":
+                df[col] = df[col].astype(str)
+            df[col] = df[col].fillna("").astype(str).str.strip()
+
+    # Metadatos del servicio
+    def _first_str(col: str) -> str:
+        if col in df.columns and not df[col].dropna().empty:
+            return str(df[col].dropna().astype(str).iloc[0]).strip()
+        return ""
+
+    sentido        = _first_str("sentido_viaje")
+    sentido_label  = _first_str("sentido_label") or LT_SENTIDO_LABELS.get(sentido, sentido)
+    servicio_label = _first_str("servicio_label") or "-"
+
+    # --- Determinar orden de estaciones --------------------------------
+    stations_present = list(dict.fromkeys(
+        df.loc[df["estacion_origen"]  != "", "estacion_origen"].astype(str).tolist() +
+        df.loc[df["estacion_destino"] != "", "estacion_destino"].astype(str).tolist()
+    ))
+
+    if station_order_hint:
+        # Mapear hint (que viene de estaciones.csv) a estaciones presentes
+        # usando normalización para tolerar diferencias de tildes/case.
+        norm_to_actual: dict[str, str] = {}
+        for s in stations_present:
+            clean = str(s).strip()
+            if clean:
+                norm_to_actual.setdefault(normalize_text(clean), clean)
+        ordered_from_hint = [
+            norm_to_actual[normalize_text(s)]
+            for s in station_order_hint
+            if normalize_text(s) in norm_to_actual
+        ]
+        # Extras (estaciones del CSV que no están en hint) al final
+        extras = [s for s in stations_present if s not in ordered_from_hint]
+        order_list = ordered_from_hint + extras
+    else:
+        order_list = sorted(stations_present)
+
+    if not order_list:
+        return pd.DataFrame(columns=LT_PROFILE_COLS)
+
+    # --- Asignar índices ----------------------------------------------
+    order_df = pd.DataFrame({
+        "estacion":    order_list,
+        "station_idx": range(len(order_list)),
+    })
+    order_df["station_key"] = normalize_series(order_df["estacion"])
+    key_to_idx = dict(zip(order_df["station_key"], order_df["station_idx"]))
+
+    df["origen_idx"]  = df["origen_key"].map(key_to_idx) if "origen_key" in df.columns \
+                       else normalize_series(df["estacion_origen"]).map(key_to_idx)
+    df["destino_idx"] = df["destino_key"].map(key_to_idx) if "destino_key" in df.columns \
+                       else normalize_series(df["estacion_destino"]).map(key_to_idx)
+
+    valid = df.dropna(subset=["origen_idx", "destino_idx"]).copy()
+    if not valid.empty:
+        valid["origen_idx"]  = valid["origen_idx"].astype(int)
+        valid["destino_idx"] = valid["destino_idx"].astype(int)
+
+    # --- Agregaciones por estación ------------------------------------
+    if valid.empty:
+        profile = order_df[["estacion", "station_idx"]].copy()
+        profile["B_embarque"]   = 0
+        profile["D_bajadas"]    = 0
+        profile["L_in_abordo"]  = 0
+        profile["L_out_abordo"] = 0
+    else:
+        board = (
+            valid.groupby("origen_idx", as_index=False).size()
+            .rename(columns={"origen_idx": "station_idx", "size": "B_embarque"})
+        )
+        alight = (
+            valid.groupby("destino_idx", as_index=False).size()
+            .rename(columns={"destino_idx": "station_idx", "size": "D_bajadas"})
+        )
+        profile = (
+            order_df.merge(board,  how="left", on="station_idx")
+                    .merge(alight, how="left", on="station_idx")
+        )
+        profile["B_embarque"] = pd.to_numeric(profile["B_embarque"], errors="coerce").fillna(0).astype(int)
+        profile["D_bajadas"]  = pd.to_numeric(profile["D_bajadas"],  errors="coerce").fillna(0).astype(int)
+
+        # A bordo (cumsum)
+        profile = profile.sort_values("station_idx").reset_index(drop=True)
+        board_arr  = profile["B_embarque"].to_numpy(dtype=np.int64)
+        alight_arr = profile["D_bajadas"].to_numpy(dtype=np.int64)
+        cum_board  = np.cumsum(board_arr)
+        cum_alight = np.cumsum(alight_arr)
+        l_out = (cum_board - cum_alight).astype(int)
+        l_in = np.zeros_like(l_out)
+        if len(l_out) > 1:
+            l_in[1:] = l_out[:-1]
+        profile["L_in_abordo"]  = l_in.tolist()
+        profile["L_out_abordo"] = l_out.tolist()
+
+    profile["servicio_label"] = servicio_label
+    profile["sentido"]        = sentido
+    profile["sentido_label"]  = sentido_label
+    return profile[LT_PROFILE_COLS].copy()
+
+
+def build_lt_service_summary(month_df: pd.DataFrame,
+                              station_order_hint: list | None = None) -> pd.DataFrame:
+    """
+    Resumen por servicio del mes filtrado (un sentido), con:
+      servicio_label, n_boletos, max_abordo, recaudacion, tarifa_media
+    """
+    cols = ["servicio_label", "n_boletos", "max_abordo",
+            "recaudacion", "tarifa_media", "estacion_origen_principal"]
+    if month_df is None or month_df.empty:
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+    for srv_label, svc_df in month_df.groupby("servicio_label", sort=False):
+        profile = build_lt_service_profile(svc_df, station_order_hint)
+        if profile.empty:
+            continue
+
+        n_boletos = int(len(svc_df))
+        max_a = int(profile["L_out_abordo"].max()) if not profile["L_out_abordo"].empty else 0
+        recaud = float(pd.to_numeric(svc_df["tarifa_pagada"], errors="coerce").fillna(0).sum())
+        tarifa_media = recaud / n_boletos if n_boletos > 0 else np.nan
+
+        # Estación origen principal: la más usada como origen en este servicio
+        try:
+            origen_top = (
+                svc_df["estacion_origen"].astype(str).str.strip()
+                .replace("", np.nan).dropna().value_counts().head(1)
+            )
+            est_orig_principal = origen_top.index[0] if not origen_top.empty else "-"
+        except Exception:
+            est_orig_principal = "-"
+
+        rows.append({
+            "servicio_label": str(srv_label),
+            "n_boletos": n_boletos,
+            "max_abordo": max_a,
+            "recaudacion": recaud,
+            "tarifa_media": tarifa_media,
+            "estacion_origen_principal": est_orig_principal,
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=cols)
+
+    summary = pd.DataFrame(rows)
+    return summary.sort_values("n_boletos", ascending=False).reset_index(drop=True)
 
 
 # ================================================================
@@ -7734,6 +8176,777 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
         )
     st.markdown("</div></div>", unsafe_allow_html=True)
 
+
+# ================================================================
+# 32b. RENDERER — Perfil de Carga Laja Talcahuano (v16)
+# ================================================================
+def _build_lt_passenger_distribution(month_df: pd.DataFrame) -> pd.DataFrame:
+    """Distribución por tipo de pasajero (boletos y % y tarifa media)."""
+    cols = ["tipo_pasajero", "boletos", "porcentaje", "tarifa_media"]
+    if month_df is None or month_df.empty:
+        return pd.DataFrame(columns=cols)
+
+    df = month_df.copy()
+    df["tarifa_pagada"] = pd.to_numeric(df["tarifa_pagada"], errors="coerce")
+
+    stats = (
+        df.groupby("tipo_pasajero", as_index=False)
+          .agg(boletos=("tarifa_pagada", "size"),
+               tarifa_media=("tarifa_pagada", "mean"))
+    )
+    total = float(stats["boletos"].sum())
+    stats["porcentaje"] = (stats["boletos"].astype(float) / total * 100.0) if total > 0 else 0.0
+
+    base = pd.DataFrame({"tipo_pasajero": LT_PASSENGER_TYPE_ORDER})
+    out = base.merge(stats, on="tipo_pasajero", how="left")
+    out["boletos"]      = out["boletos"].fillna(0).astype(int)
+    out["porcentaje"]   = out["porcentaje"].fillna(0.0)
+    out["tarifa_media"] = out["tarifa_media"]
+    return out[cols]
+
+
+def _build_lt_monthly_evolution(full_df: pd.DataFrame) -> pd.DataFrame:
+    """Evolución por mes: boletos totales, recaudación, tarifa promedio."""
+    cols = ["mes_iso", "mes_label", "boletos", "recaudacion", "tarifa_media"]
+    if full_df is None or full_df.empty:
+        return pd.DataFrame(columns=cols)
+
+    grp = (
+        full_df.groupby("mes_iso", as_index=False)
+        .agg(boletos=("tarifa_pagada", "size"),
+             recaudacion=("tarifa_pagada", "sum"),
+             tarifa_media=("tarifa_pagada", "mean"))
+        .sort_values("mes_iso")
+    )
+    grp["mes_label"] = grp["mes_iso"].apply(month_period_to_label)
+    return grp[cols]
+
+
+def _build_lt_kpi_comparison(month_df: pd.DataFrame, kpis_df: pd.DataFrame,
+                              servicio: str, mes_iso: str) -> dict | None:
+    """
+    Compara boletos vendidos (del CSV) vs KPI de afluencia declarado
+    (de kpis.csv) para Laja Talcahuano en el mes.
+
+    Retorna dict con: kpi_valor, kpi_meta, boletos_csv, diff_abs, diff_pct
+    o None si no hay KPI de afluencia disponible.
+    """
+    if kpis_df is None or kpis_df.empty or month_df is None or month_df.empty:
+        return None
+
+    boletos_csv = int(len(month_df))
+
+    # Buscar KPI con nombre que contenga "afluencia" o "pasajeros transportados"
+    kdf = kpis_df.copy()
+    kdf["nombre_norm"] = normalize_series(kdf["nombre"])
+    kdf = kdf[kdf["servicio"].astype(str) == str(servicio)]
+    kdf = kdf[kdf["periodo"].astype(str).str[:7] == str(mes_iso)[:7]]
+
+    if kdf.empty:
+        return {"boletos_csv": boletos_csv, "kpi_valor": None, "kpi_meta": None,
+                "kpi_nombre": None, "diff_abs": None, "diff_pct": None}
+
+    # Priorizar coincidencia con "afluencia" o "pasajeros"
+    candidates = kdf[
+        kdf["nombre_norm"].str.contains("afluencia", regex=False, na=False) |
+        kdf["nombre_norm"].str.contains("pasajeros", regex=False, na=False) |
+        kdf["nombre_norm"].str.contains("boletos", regex=False, na=False)
+    ]
+    if candidates.empty:
+        return {"boletos_csv": boletos_csv, "kpi_valor": None, "kpi_meta": None,
+                "kpi_nombre": None, "diff_abs": None, "diff_pct": None}
+
+    row = candidates.iloc[0]
+    kpi_valor = pd.to_numeric(row.get("valor"), errors="coerce")
+    kpi_meta  = pd.to_numeric(row.get("meta"),  errors="coerce")
+    kpi_nombre = str(row.get("nombre", ""))
+
+    if pd.isna(kpi_valor):
+        return {"boletos_csv": boletos_csv, "kpi_valor": None, "kpi_meta": kpi_meta,
+                "kpi_nombre": kpi_nombre, "diff_abs": None, "diff_pct": None}
+
+    diff_abs = boletos_csv - float(kpi_valor)
+    diff_pct = (diff_abs / float(kpi_valor) * 100.0) if float(kpi_valor) != 0 else None
+
+    return {
+        "boletos_csv": boletos_csv,
+        "kpi_valor":   float(kpi_valor),
+        "kpi_meta":    float(kpi_meta) if pd.notna(kpi_meta) else None,
+        "kpi_nombre":  kpi_nombre,
+        "diff_abs":    float(diff_abs),
+        "diff_pct":    float(diff_pct) if diff_pct is not None else None,
+    }
+
+
+def _build_lt_top_stations_chart(month_df: pd.DataFrame,
+                                  col: str, title: str,
+                                  color: str, top_n: int = 15) -> go.Figure | None:
+    """Bar chart horizontal con top N estaciones de origen o destino."""
+    if month_df is None or month_df.empty or col not in month_df.columns:
+        return None
+
+    series = (
+        month_df[col].astype(str).str.strip()
+        .replace("", np.nan).dropna()
+        .value_counts().head(top_n)
+        .reset_index()
+    )
+    series.columns = ["estacion", "boletos"]
+    if series.empty:
+        return None
+
+    series = series.sort_values("boletos", ascending=True)  # Para que la mayor quede arriba
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=series["boletos"].tolist(),
+        y=series["estacion"].tolist(),
+        orientation="h",
+        marker_color=color,
+        text=[fmt_pax(v) for v in series["boletos"].tolist()],
+        textposition="outside",
+        hovertemplate="<b>%{y}</b><br>Boletos: %{x:,.0f}<extra></extra>",
+    ))
+    fig.update_layout(
+        title=title,
+        plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
+        margin=dict(l=20, r=20, t=50, b=20),
+        height=max(300, len(series) * 28 + 100),
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
+        showlegend=False,
+    )
+    fig.update_xaxes(title="Boletos", gridcolor="#E8EEF4")
+    fig.update_yaxes(title="")
+    return fig
+
+
+def _build_lt_perfil_chart(profile: pd.DataFrame, title: str) -> go.Figure:
+    """Perfil de carga LT: barras suben/bajan + línea a bordo."""
+    fig = go.Figure()
+    if profile is None or profile.empty:
+        fig.update_layout(title=title, plot_bgcolor=EFE_WHITE,
+                          paper_bgcolor=EFE_WHITE, height=520)
+        return fig
+
+    plot_df = profile.copy()
+    plot_df["estacion"] = plot_df["estacion"].astype(str)
+    station_order = plot_df["estacion"].tolist()
+
+    fig.add_trace(go.Bar(
+        x=plot_df["estacion"].tolist(),
+        y=plot_df["B_embarque"].tolist(),
+        name="Suben", marker_color=EFE_BLUE,
+        hovertemplate="<b>%{x}</b><br>Suben: %{y:,.0f}<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        x=plot_df["estacion"].tolist(),
+        y=plot_df["D_bajadas"].tolist(),
+        name="Bajan", marker_color=EFE_RED,
+        hovertemplate="<b>%{x}</b><br>Bajan: %{y:,.0f}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=plot_df["estacion"].tolist(),
+        y=plot_df["L_out_abordo"].tolist(),
+        mode="lines+markers", name="A bordo",
+        line=dict(color=SUCCESS, width=3), marker=dict(size=8),
+        hovertemplate="<b>%{x}</b><br>A bordo: %{y:,.0f}<extra></extra>",
+    ))
+
+    # Annotations vectorizadas en valores a bordo
+    abordo_rows = plot_df.dropna(subset=["L_out_abordo"])
+    if not abordo_rows.empty:
+        x_arr = abordo_rows["estacion"].astype(str).tolist()
+        y_arr = abordo_rows["L_out_abordo"].tolist()
+        annots = [
+            dict(
+                x=x, y=y, text=fmt_pax(y),
+                showarrow=False, yshift=18,
+                font=dict(size=PLOT_ANNOTATION_SIZE, color=SUCCESS),
+                bgcolor="rgba(255,255,255,0.96)",
+                bordercolor=SUCCESS, borderwidth=1, borderpad=3,
+                align="center", xref="x", yref="y",
+            )
+            for x, y in zip(x_arr, y_arr) if x
+        ]
+    else:
+        annots = []
+
+    fig.update_layout(
+        title=title,
+        plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
+        margin=dict(l=20, r=20, t=55, b=20),
+        height=560, barmode="group",
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+        title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        annotations=annots,
+    )
+    fig.update_xaxes(
+        title="", tickangle=-90,
+        categoryorder="array", categoryarray=station_order,
+    )
+    fig.update_yaxes(title="Pasajeros")
+    return fig
+
+
+@maybe_fragment
+def render_perfil_carga_lt(data_path: Path, kpis_df: pd.DataFrame,
+                            estaciones_df: pd.DataFrame):
+    """
+    Página de Perfil de Carga para Laja Talcahuano. Dos tabs:
+      • Análisis de carga (perfil por servicio del mes filtrado)
+      • Afluencia mensual (comparación con KPI de boletos vendidos)
+    """
+    diag_checkpoint("RENDER_LT_PERFIL_BEGIN")
+    st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='section-title'>Perfil de Carga — Laja Talcahuano</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div class='section-subtitle'>Análisis mensual del perfil de "
+        "carga por servicio y comparación de afluencia (boletos vendidos) "
+        "del servicio Laja → Talcahuano y Talcahuano → Laja.</div>",
+        unsafe_allow_html=True,
+    )
+
+    service_name = "Laja Talcahuano"
+
+    # Cargar dataset completo (cacheado)
+    try:
+        with st.spinner("Cargando base de boletos de Laja Talcahuano…"):
+            full_df, folder_path, archivos_cargados, status = load_lt_full_dataset(
+                service_name, str(data_path),
+            )
+    except Exception as exc:
+        diag_error("RENDER_LT_LOAD_FAIL", exc=exc)
+        st.error(f"Error cargando dataset Laja Talcahuano: {type(exc).__name__}: {exc}")
+        st.markdown("</div></div>", unsafe_allow_html=True)
+        return
+
+    if status != "ok" or full_df.empty:
+        folder_name = PROFILE_LT_SERVICE_CONFIG[service_name]["folder_candidates"][0]
+        render_empty_state(
+            f"Sin datos en {folder_name}",
+            "Agregue archivos CSV de boletos con las columnas: "
+            "fecha_viaje, estacion_origen, estacion_destino, sentido_viaje, "
+            "servicio_asignado, tarifa_pagada, tipo_pasajero.",
+            icon="📂",
+        )
+        st.markdown("</div></div>", unsafe_allow_html=True)
+        return
+
+    # Serializar estaciones para get_lt_station_sequence (debe ser hashable)
+    import json
+    estaciones_serial = None
+    if estaciones_df is not None and not estaciones_df.empty:
+        try:
+            est_cols = [c for c in ["servicio", "estacion", "orden_trazado", "activa"]
+                        if c in estaciones_df.columns]
+            estaciones_serial = json.dumps(
+                estaciones_df[est_cols].to_dict("records"),
+                default=str,
+            )
+        except Exception:
+            estaciones_serial = None
+
+    tab_perfil, tab_afluencia = st.tabs([
+        "📈 Análisis de carga",
+        "🎫 Afluencia / Boletos vendidos",
+    ])
+
+    with tab_perfil:
+        try:
+            _render_lt_tab_perfil(full_df, service_name, estaciones_serial,
+                                   folder_path, archivos_cargados)
+        except BaseException as exc:
+            if is_streamlit_internal_exception(exc):
+                raise
+            diag_error("RENDER_LT_PERFIL_TAB_FAIL", exc=exc)
+            st.error(f"Error en pestaña Análisis de carga: {type(exc).__name__}: {exc}")
+
+    with tab_afluencia:
+        try:
+            _render_lt_tab_afluencia(full_df, service_name, kpis_df)
+        except BaseException as exc:
+            if is_streamlit_internal_exception(exc):
+                raise
+            diag_error("RENDER_LT_AFLUENCIA_TAB_FAIL", exc=exc)
+            st.error(f"Error en pestaña Afluencia: {type(exc).__name__}: {exc}")
+
+    st.markdown("</div></div>", unsafe_allow_html=True)
+
+
+def _render_lt_tab_perfil(full_df: pd.DataFrame, service_name: str,
+                           estaciones_serial: str | None,
+                           folder_path: str,
+                           archivos_cargados: list):
+    """Tab 1: perfil de carga por servicio del mes seleccionado."""
+
+    # Filtros
+    meses_disp = sorted(full_df["mes_iso"].dropna().astype(str).unique().tolist())
+    if not meses_disp:
+        render_empty_state("No hay meses con datos en el dataset.", icon="📅")
+        return
+
+    col_m, col_s = st.columns([1.1, 1.0])
+    with col_m:
+        mes_sel = st.selectbox(
+            "Mes", options=meses_disp,
+            index=len(meses_disp) - 1,
+            format_func=month_period_to_label,
+            key="lt_perfil_mes_selector",
+        )
+    with col_s:
+        sentidos_disp = sorted(
+            full_df["sentido_viaje"].dropna().astype(str).unique().tolist()
+        )
+        sentido_sel = option_selector(
+            "Sentido", sentidos_disp,
+            key="lt_perfil_sentido_selector",
+            default=sentidos_disp[0] if sentidos_disp else None,
+            horizontal=True,
+        )
+        if sentido_sel:
+            st.caption(f"📍 {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)}")
+
+    # Filtrar
+    month_df = full_df[
+        (full_df["mes_iso"].astype(str) == str(mes_sel)) &
+        (full_df["sentido_viaje"].astype(str) == str(sentido_sel))
+    ].copy()
+
+    if month_df.empty:
+        render_empty_state(
+            f"Sin boletos para {month_period_to_label(mes_sel)} en {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)}",
+            "Pruebe seleccionar otro mes o sentido.",
+            icon="🎫",
+        )
+        return
+
+    # Tarjetas resumen del mes/sentido
+    n_boletos = int(len(month_df))
+    recaudacion = float(pd.to_numeric(month_df["tarifa_pagada"], errors="coerce").fillna(0).sum())
+    tarifa_media = recaudacion / n_boletos if n_boletos > 0 else 0
+    n_servicios = int(month_df["servicio_asignado"].nunique())
+    n_dias = int(month_df["fecha"].nunique())
+
+    cards_html = (
+        f"<div class='efe-summary-row'>"
+        f"<div class='efe-summary-card' style='border-left:4px solid {EFE_BLUE};'>"
+        f"<div class='efe-summary-label'>Boletos del mes</div>"
+        f"<div class='efe-summary-value'>{fmt_pax(n_boletos)}</div>"
+        f"<div class='efe-summary-sub'>{n_dias} día(s) con datos</div>"
+        f"</div>"
+        f"<div class='efe-summary-card'>"
+        f"<div class='efe-summary-label'>Servicios distintos</div>"
+        f"<div class='efe-summary-value'>{n_servicios}</div>"
+        f"<div class='efe-summary-sub'>Promedio {n_boletos / max(n_servicios, 1):,.0f} bol/serv</div>"
+        f"</div>"
+        f"<div class='efe-summary-card' style='border-left:4px solid {SUCCESS};'>"
+        f"<div class='efe-summary-label'>Recaudación</div>"
+        f"<div class='efe-summary-value'>{fmt_number(recaudacion, 'CLP')}</div>"
+        f"<div class='efe-summary-sub'>Suma de tarifa pagada</div>"
+        f"</div>"
+        f"<div class='efe-summary-card'>"
+        f"<div class='efe-summary-label'>Tarifa media</div>"
+        f"<div class='efe-summary-value'>{fmt_number(tarifa_media, 'CLP')}</div>"
+        f"<div class='efe-summary-sub'>Recaudación ÷ boletos</div>"
+        f"</div>"
+        f"</div>"
+    )
+    st.markdown(cards_html, unsafe_allow_html=True)
+
+    # Orden de estaciones según estaciones.csv para este sentido
+    station_order_hint = get_lt_station_sequence(
+        service_name, estaciones_serial, sentido=str(sentido_sel),
+    )
+
+    # Top servicios del mes (resumen)
+    summary = build_lt_service_summary(month_df, station_order_hint)
+
+    # Selector de servicio específico
+    if summary.empty:
+        render_empty_state("No hay servicios para mostrar.", icon="🚂")
+        return
+
+    servicios_disp = summary["servicio_label"].tolist()
+    servicio_sel = st.selectbox(
+        f"Servicio específico ({len(servicios_disp)} servicios este mes/sentido)",
+        options=servicios_disp,
+        index=0,
+        key=f"lt_perfil_servicio_selector_{mes_sel}_{sentido_sel}",
+        help="Servicios ordenados por número de boletos descendente.",
+    )
+
+    # Construir perfil del servicio seleccionado
+    svc_df = month_df[month_df["servicio_label"].astype(str) == str(servicio_sel)].copy()
+    profile = build_lt_service_profile(svc_df, station_order_hint)
+
+    if profile.empty:
+        st.warning("No fue posible reconstruir el perfil para el servicio seleccionado.")
+        return
+
+    # Métricas del servicio
+    n_boletos_srv = int(len(svc_df))
+    max_abordo_srv = int(profile["L_out_abordo"].max()) if not profile["L_out_abordo"].empty else 0
+    recaud_srv = float(pd.to_numeric(svc_df["tarifa_pagada"], errors="coerce").fillna(0).sum())
+    tarifa_media_srv = recaud_srv / n_boletos_srv if n_boletos_srv > 0 else 0
+
+    # Tramo crítico
+    tramo_max = "-"
+    if not profile.empty:
+        idx_max = profile["L_out_abordo"].idxmax()
+        pos = profile.index.get_loc(idx_max)
+        estaciones_list = profile["estacion"].astype(str).tolist()
+        if pos < len(estaciones_list) - 1:
+            tramo_max = f"{estaciones_list[pos]} → {estaciones_list[pos + 1]}"
+        elif pos > 0:
+            tramo_max = f"{estaciones_list[pos - 1]} → {estaciones_list[pos]}"
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric(
+        "Boletos del servicio", fmt_pax(n_boletos_srv),
+        help="Total de boletos vendidos en este servicio durante el mes.",
+    )
+    m2.metric(
+        "Máximo a bordo", fmt_pax(max_abordo_srv),
+        help="Pico de pasajeros simultáneamente a bordo en el recorrido.",
+    )
+    m3.metric(
+        "Tramo crítico", tramo_max,
+        help="Tramo donde se alcanza el máximo a bordo.",
+    )
+    m4.metric(
+        "Tarifa media", fmt_number(tarifa_media_srv, "CLP"),
+        help="Recaudación ÷ boletos del servicio.",
+    )
+
+    # Gráfico de perfil
+    titulo = (
+        f"{service_name} | {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)} | "
+        f"Servicio {servicio_sel} | {month_period_to_label(mes_sel)}"
+    )
+    show_plot(_build_lt_perfil_chart(profile, titulo), width="stretch")
+
+    # Tabla detalle por servicio
+    st.markdown(
+        "<div class='section-title'>Detalle por servicio</div>",
+        unsafe_allow_html=True,
+    )
+    detalle = summary.copy()
+    out = pd.DataFrame()
+    out["Servicio"]           = detalle["servicio_label"].astype(str)
+    out["Estación origen"]    = detalle["estacion_origen_principal"].astype(str)
+    out["Boletos"]            = detalle["n_boletos"].apply(fmt_pax)
+    out["Máximo a bordo"]     = detalle["max_abordo"].apply(fmt_pax)
+    out["Recaudación"]        = detalle["recaudacion"].apply(
+        lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-",
+    )
+    out["Tarifa media"]       = detalle["tarifa_media"].apply(
+        lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-",
+    )
+    st.dataframe(out, width="stretch", hide_index=True)
+
+    # Botón de descarga
+    csv_bytes = out.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    st.download_button(
+        "⬇ Descargar detalle (CSV)",
+        data=csv_bytes,
+        file_name=f"detalle_servicios_lt_{mes_sel}_{sentido_sel}.csv",
+        mime="text/csv",
+        key="download_detalle_lt",
+    )
+
+    # Caption de referencias
+    ref_parts = []
+    if archivos_cargados:
+        ref_parts.append(f"Archivos cargados: {len(archivos_cargados)} en {folder_path}")
+    if not station_order_hint:
+        ref_parts.append(
+            "⚠ Sin orden oficial en estaciones.csv para este servicio · "
+            "se usa orden alfabético"
+        )
+    else:
+        ref_parts.append(
+            f"Orden de estaciones desde estaciones.csv "
+            f"({len(station_order_hint)} estaciones)"
+        )
+    if ref_parts:
+        st.caption(" · ".join(ref_parts))
+
+
+def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
+                              kpis_df: pd.DataFrame):
+    """Tab 2: afluencia mensual / boletos vendidos + comparación con KPI."""
+
+    st.markdown(
+        "<div class='section-subtitle'>Comparación de boletos vendidos mes "
+        "a mes y contraste con el KPI de afluencia reportado oficialmente "
+        "para Laja Talcahuano.</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Evolución mensual
+    evolucion = _build_lt_monthly_evolution(full_df)
+    if evolucion.empty:
+        render_empty_state("No hay datos mensuales en el dataset.", icon="📊")
+        return
+
+    # Selector de mes activo (último por defecto)
+    meses_disp = evolucion["mes_iso"].tolist()
+    mes_sel = st.selectbox(
+        "Mes a analizar", options=meses_disp,
+        index=len(meses_disp) - 1,
+        format_func=month_period_to_label,
+        key="lt_afluencia_mes_selector",
+    )
+
+    month_df = full_df[full_df["mes_iso"].astype(str) == str(mes_sel)].copy()
+    if month_df.empty:
+        render_empty_state(f"Sin datos para {month_period_to_label(mes_sel)}.", icon="📅")
+        return
+
+    # ---- Tarjetas resumen del mes con comparativos ----
+    boletos = int(len(month_df))
+    recaud  = float(pd.to_numeric(month_df["tarifa_pagada"], errors="coerce").fillna(0).sum())
+    tarifa_m = recaud / boletos if boletos > 0 else 0
+
+    # Mes anterior (si hay)
+    boletos_prev = None
+    diff_vs_prev = None
+    try:
+        idx_curr = meses_disp.index(mes_sel)
+        if idx_curr > 0:
+            mes_prev = meses_disp[idx_curr - 1]
+            boletos_prev = int(evolucion.loc[evolucion["mes_iso"] == mes_prev, "boletos"].iloc[0])
+            if boletos_prev > 0:
+                diff_vs_prev = (boletos - boletos_prev) / boletos_prev * 100.0
+    except (ValueError, IndexError):
+        pass
+
+    # KPI declarado
+    kpi_cmp = _build_lt_kpi_comparison(month_df, kpis_df, service_name, mes_sel)
+
+    # 4 cards
+    card_diff_html = ""
+    if diff_vs_prev is not None:
+        arrow = "↑" if diff_vs_prev >= 0 else "↓"
+        sign = "+" if diff_vs_prev >= 0 else ""
+        color = SUCCESS if diff_vs_prev >= 0 else DANGER
+        card_diff_html = (
+            f"<div class='efe-summary-card' style='border-left:4px solid {color};'>"
+            f"<div class='efe-summary-label'>Variación vs mes anterior</div>"
+            f"<div class='efe-summary-value' style='color:{color};'>"
+            f"{arrow} {sign}{diff_vs_prev:.1f}%</div>"
+            f"<div class='efe-summary-sub'>"
+            f"vs {month_period_to_label(meses_disp[idx_curr - 1])}: {fmt_pax(boletos_prev)}</div>"
+            f"</div>"
+        )
+    else:
+        card_diff_html = (
+            f"<div class='efe-summary-card'>"
+            f"<div class='efe-summary-label'>Variación vs mes anterior</div>"
+            f"<div class='efe-summary-value'>—</div>"
+            f"<div class='efe-summary-sub'>Sin mes previo en el dataset</div>"
+            f"</div>"
+        )
+
+    # Card KPI comparison
+    if kpi_cmp and kpi_cmp.get("kpi_valor") is not None:
+        diff_pct_kpi = kpi_cmp.get("diff_pct")
+        if diff_pct_kpi is not None:
+            arrow_kpi = "↑" if diff_pct_kpi >= 0 else "↓"
+            sign_kpi = "+" if diff_pct_kpi >= 0 else ""
+            color_kpi = SUCCESS if abs(diff_pct_kpi) < 5 else (WARNING if abs(diff_pct_kpi) < 15 else DANGER)
+            diff_label = f"{arrow_kpi} {sign_kpi}{diff_pct_kpi:.1f}% vs KPI"
+        else:
+            color_kpi = TEXT_MUTED
+            diff_label = "—"
+        card_kpi_html = (
+            f"<div class='efe-summary-card' style='border-left:4px solid {color_kpi};'>"
+            f"<div class='efe-summary-label'>KPI declarado ({kpi_cmp.get('kpi_nombre', '')})</div>"
+            f"<div class='efe-summary-value'>{fmt_pax(kpi_cmp['kpi_valor'])}</div>"
+            f"<div class='efe-summary-sub' style='color:{color_kpi}; font-weight:700;'>{diff_label}</div>"
+            f"</div>"
+        )
+    else:
+        card_kpi_html = (
+            f"<div class='efe-summary-card'>"
+            f"<div class='efe-summary-label'>KPI declarado</div>"
+            f"<div class='efe-summary-value'>—</div>"
+            f"<div class='efe-summary-sub'>Sin KPI de afluencia para este mes</div>"
+            f"</div>"
+        )
+
+    cards_html = (
+        f"<div class='efe-summary-row'>"
+        f"<div class='efe-summary-card' style='border-left:4px solid {EFE_BLUE};'>"
+        f"<div class='efe-summary-label'>Boletos del mes (CSV)</div>"
+        f"<div class='efe-summary-value'>{fmt_pax(boletos)}</div>"
+        f"<div class='efe-summary-sub'>Suma de filas del CSV</div>"
+        f"</div>"
+        f"{card_diff_html}"
+        f"{card_kpi_html}"
+        f"<div class='efe-summary-card' style='border-left:4px solid {SUCCESS};'>"
+        f"<div class='efe-summary-label'>Recaudación del mes</div>"
+        f"<div class='efe-summary-value'>{fmt_number(recaud, 'CLP')}</div>"
+        f"<div class='efe-summary-sub'>Tarifa media: {fmt_number(tarifa_m, 'CLP')}</div>"
+        f"</div>"
+        f"</div>"
+    )
+    st.markdown(cards_html, unsafe_allow_html=True)
+
+    # ---- Gráfico evolución mensual con marcador de KPI declarado ----
+    st.markdown(
+        "<div class='section-title' style='font-size:0.95rem; margin-top:0.6rem;'>"
+        "Evolución mensual de boletos vendidos</div>",
+        unsafe_allow_html=True,
+    )
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=evolucion["mes_label"].tolist(),
+        y=evolucion["boletos"].tolist(),
+        marker_color=EFE_BLUE,
+        text=[fmt_pax(v) for v in evolucion["boletos"].tolist()],
+        textposition="outside",
+        name="Boletos (CSV)",
+        hovertemplate="<b>%{x}</b><br>Boletos: %{y:,.0f}<extra></extra>",
+    ))
+
+    # Superponer KPI declarado por mes (si existe)
+    if kpis_df is not None and not kpis_df.empty:
+        try:
+            kdf = kpis_df.copy()
+            kdf["nombre_norm"] = normalize_series(kdf["nombre"])
+            kdf = kdf[kdf["servicio"].astype(str) == str(service_name)]
+            kdf = kdf[
+                kdf["nombre_norm"].str.contains("afluencia", regex=False, na=False) |
+                kdf["nombre_norm"].str.contains("pasajeros", regex=False, na=False) |
+                kdf["nombre_norm"].str.contains("boletos", regex=False, na=False)
+            ]
+            if not kdf.empty:
+                kdf["valor"] = pd.to_numeric(kdf["valor"], errors="coerce")
+                kdf["mes_match"] = kdf["periodo"].astype(str).str[:7]
+                merged = evolucion.merge(
+                    kdf[["mes_match", "valor"]].drop_duplicates(),
+                    left_on="mes_iso", right_on="mes_match", how="left",
+                )
+                if merged["valor"].notna().any():
+                    fig.add_trace(go.Scatter(
+                        x=merged["mes_label"].tolist(),
+                        y=merged["valor"].tolist(),
+                        mode="lines+markers",
+                        name="KPI declarado",
+                        line=dict(color=DANGER, width=2.5, dash="dash"),
+                        marker=dict(size=10, symbol="diamond"),
+                        connectgaps=False,
+                        hovertemplate="<b>%{x}</b><br>KPI: %{y:,.0f}<extra></extra>",
+                    ))
+        except Exception:
+            pass
+
+    fig.update_layout(
+        plot_bgcolor=EFE_WHITE, paper_bgcolor=EFE_WHITE,
+        margin=dict(l=20, r=20, t=30, b=20), height=380,
+        font=dict(color=TEXT_MAIN, size=PLOT_FONT_SIZE),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    fig.update_xaxes(title="", tickangle=-45)
+    fig.update_yaxes(title="Boletos vendidos", gridcolor="#E8EEF4")
+    show_plot(fig, width="stretch")
+
+    # ---- Distribución por tipo de pasajero (cards) ----
+    st.markdown(
+        "<div class='section-title' style='font-size:0.95rem; margin-top:0.7rem;'>"
+        f"Distribución por tipo de pasajero — {month_period_to_label(mes_sel)}</div>",
+        unsafe_allow_html=True,
+    )
+    pax_dist = _build_lt_passenger_distribution(month_df)
+
+    type_slug = {
+        "Normal":        "--monedero",      # mismo slug = color azul corporativo
+        "Estudiante":    "--estudiante",
+        "Adulto Mayor":  "--adulto-mayor",
+        "Discapacitado": "--discapacitado",
+        "Otros":         "--otros",
+    }
+    rows_by_type = {row["tipo_pasajero"]: row for _, row in pax_dist.iterrows()}
+    cols = st.columns(len(LT_PASSENGER_TYPE_ORDER))
+    for col_box, tipo in zip(cols, LT_PASSENGER_TYPE_ORDER):
+        row = rows_by_type.get(tipo)
+        if row is not None:
+            boletos_t = int(row["boletos"])
+            pct_t     = float(row["porcentaje"])
+            tarifa_t  = row["tarifa_media"]
+        else:
+            boletos_t, pct_t, tarifa_t = 0, 0.0, np.nan
+
+        tarifa_label = fmt_number(tarifa_t, "CLP") if pd.notna(tarifa_t) else "-"
+        empty_cls = " is-empty" if (boletos_t == 0 and not pd.notna(tarifa_t)) else ""
+        color_cls = type_slug.get(tipo, "")
+
+        card = (
+            f"<div class='pax-type-card {color_cls}{empty_cls}'>"
+            f"  <div class='pax-card-title'>{tipo}</div>"
+            f"  <div class='pax-card-value'>{fmt_pax(boletos_t)}</div>"
+            f"  <div class='pax-card-pct'>{fmt_pct(pct_t)} del mes</div>"
+            f"  <div class='pax-card-fare'>Tarifa media: {tarifa_label}</div>"
+            f"</div>"
+        )
+        with col_box:
+            st.markdown(card, unsafe_allow_html=True)
+
+    # ---- Distribución por sentido ----
+    st.markdown(
+        "<div class='section-title' style='font-size:0.95rem; margin-top:0.7rem;'>"
+        f"Boletos por sentido — {month_period_to_label(mes_sel)}</div>",
+        unsafe_allow_html=True,
+    )
+    sent_grp = (
+        month_df.groupby("sentido_viaje", as_index=False)
+        .agg(boletos=("tarifa_pagada", "size"),
+             recaudacion=("tarifa_pagada", "sum"))
+    )
+    sent_grp["label"] = sent_grp["sentido_viaje"].map(LT_SENTIDO_LABELS).fillna(sent_grp["sentido_viaje"])
+    sent_grp = sent_grp.sort_values("boletos", ascending=False)
+    c_left, c_right = st.columns(2)
+    for col_box, (_, r) in zip([c_left, c_right], sent_grp.iterrows()):
+        with col_box:
+            pct = float(r["boletos"]) / max(boletos, 1) * 100.0
+            st.markdown(
+                f"<div class='efe-card' style='border-left:5px solid {EFE_BLUE};'>"
+                f"<div class='efe-card-title'>{r['label']}</div>"
+                f"<div class='efe-card-value'>{fmt_pax(r['boletos'])}</div>"
+                f"<div class='efe-card-meta'>{pct:.1f}% del mes</div>"
+                f"<div class='efe-card-delta'>Recaudación: {fmt_number(r['recaudacion'], 'CLP')}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    # ---- Top estaciones origen y destino del mes ----
+    st.markdown(
+        "<div class='section-title' style='font-size:0.95rem; margin-top:0.7rem;'>"
+        f"Estaciones más utilizadas — {month_period_to_label(mes_sel)}</div>",
+        unsafe_allow_html=True,
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        fig_o = _build_lt_top_stations_chart(
+            month_df, "estacion_origen",
+            "Top estaciones de origen", EFE_BLUE, top_n=15,
+        )
+        if fig_o is not None:
+            show_plot(fig_o, width="stretch")
+    with c2:
+        fig_d = _build_lt_top_stations_chart(
+            month_df, "estacion_destino",
+            "Top estaciones de destino", EFE_RED, top_n=15,
+        )
+        if fig_d is not None:
+            show_plot(fig_d, width="stretch")
+
+
 # ================================================================
 # 33. MENÚ DE CABECERA — TEMA + ⋮ (LIMPIAR CACHÉ)
 # ================================================================
@@ -7976,6 +9189,7 @@ SERVICE_NAV_OPTIONS = [
     "Llanquihue Puerto Montt", "Personas",
 ]
 BIOTREN_DETAIL_PAGES = ["KPIs", "Perfil de Carga", "Análisis por Estación"]
+LAJA_TH_DETAIL_PAGES = ["KPIs", "Perfil de Carga"]
 STANDARD_SERVICE_PAGES = ["KPIs"]
 
 
@@ -7989,6 +9203,7 @@ SECTION_ICONS = {
     "KPIs":                    "📊",
     "KPIs por Servicio":       "📊",
     "Perfil de Carga":         "📈",
+    "Perfil de Carga LT":      "📈",
     "Análisis por Estación":   "🗺️",
     "OD Estaciones":           "🗺️",
     "Estaciones":              "📍",
@@ -8031,9 +9246,18 @@ def render_navigation() -> tuple[str, str]:
         if root_sel == "Personas":
             section_sel = "Personas"
         else:
-            sub = BIOTREN_DETAIL_PAGES if root_sel == "Biotren" else STANDARD_SERVICE_PAGES
+            # Subpáginas según servicio:
+            #   Biotren        → KPIs / Perfil de Carga / Análisis por Estación
+            #   Laja Talcahuano → KPIs / Perfil de Carga  (nuevo en v16)
+            #   Otros          → solo KPIs
+            if root_sel == "Biotren":
+                sub = BIOTREN_DETAIL_PAGES
+            elif root_sel == "Laja Talcahuano":
+                sub = LAJA_TH_DETAIL_PAGES
+            else:
+                sub = STANDARD_SERVICE_PAGES
             label = option_selector(
-                "Navegación", sub, key="main_service_page_selector",
+                "Navegación", sub, key=f"main_service_page_selector_{root_sel}",
                 default=sub[0], horizontal=True,
             )
             section_map = {
@@ -8042,6 +9266,10 @@ def render_navigation() -> tuple[str, str]:
                 "Análisis por Estación": "OD Estaciones",
             }
             section_sel = section_map.get(label, "KPIs por Servicio")
+            # Distinguir Perfil de Carga LT del Perfil de Carga Biotren
+            # para que el dispatch llame al renderer correcto.
+            if section_sel == "Perfil de Carga" and root_sel == "Laja Talcahuano":
+                section_sel = "Perfil de Carga LT"
         st.markdown("</div>", unsafe_allow_html=True)
     return root_sel, section_sel
 
@@ -8101,11 +9329,12 @@ def main():
 
     # Breadcrumb visible (mejora UX: el usuario siempre sabe dónde está)
     breadcrumb_section_label = {
-        "KPIs por Servicio": "KPIs",
-        "Perfil de Carga":   "Perfil de Carga",
-        "OD Estaciones":     "Análisis por Estación",
-        "Personas":          "Iniciativas y responsables",
-        "Estaciones":        "Estaciones",
+        "KPIs por Servicio":  "KPIs",
+        "Perfil de Carga":    "Perfil de Carga",
+        "Perfil de Carga LT": "Perfil de Carga",
+        "OD Estaciones":      "Análisis por Estación",
+        "Personas":           "Iniciativas y responsables",
+        "Estaciones":         "Estaciones",
     }.get(section_sel, section_sel)
     # Contexto extra: período activo para KPIs, mes activo para Perfil
     extra_context = None
@@ -8159,6 +9388,10 @@ def main():
             diag_checkpoint("DISPATCH_PERFIL_BEGIN")
             render_perfil_carga(data_path, default_service=selected_service_context)
             diag_checkpoint("DISPATCH_PERFIL_END")
+        elif section_sel == "Perfil de Carga LT":
+            diag_checkpoint("DISPATCH_PERFIL_LT_BEGIN")
+            render_perfil_carga_lt(data_path, kpis, estaciones)
+            diag_checkpoint("DISPATCH_PERFIL_LT_END")
         elif section_sel == "OD Estaciones":
             diag_checkpoint("DISPATCH_OD_BEGIN")
             render_od_estaciones(data_path, estaciones)
