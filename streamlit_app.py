@@ -60,8 +60,8 @@ import streamlit.components.v1 as components
 
 # Identificador de versión visible en la UI para confirmar qué archivo
 # está corriendo en producción. Se incrementa con cada release.
-APP_VERSION = "v16-2026-05-13-laja-talcahuano"
-APP_VERSION_HASH = "2467917778e1"
+APP_VERSION = "v17-2026-05-13-lt-diario-mensual"
+APP_VERSION_HASH = "e9a2d4c7810f"
 
 # Ruta del log diagnóstico. En Streamlit Cloud, /tmp se borra al reiniciar
 # el contenedor — pero el archivo SÍ persiste durante la sesión del usuario,
@@ -3637,9 +3637,14 @@ def build_lt_service_summary(month_df: pd.DataFrame,
                               station_order_hint: list | None = None) -> pd.DataFrame:
     """
     Resumen por servicio del mes filtrado (un sentido), con:
-      servicio_label, n_boletos, max_abordo, recaudacion, tarifa_media
+      servicio_label, n_pasajeros, n_dias_operados, max_abordo,
+      recaudacion, tarifa_media, estacion_origen_principal
+
+    Nota terminológica (v17): el término 'boletos' se reserva para la
+    pestaña de Afluencia (es el nombre del KPI). En este resumen del
+    perfil de carga usamos 'pasajeros' / 'viajes realizados'.
     """
-    cols = ["servicio_label", "n_boletos", "max_abordo",
+    cols = ["servicio_label", "n_pasajeros", "n_dias_operados", "max_abordo",
             "recaudacion", "tarifa_media", "estacion_origen_principal"]
     if month_df is None or month_df.empty:
         return pd.DataFrame(columns=cols)
@@ -3650,10 +3655,11 @@ def build_lt_service_summary(month_df: pd.DataFrame,
         if profile.empty:
             continue
 
-        n_boletos = int(len(svc_df))
+        n_pax = int(len(svc_df))
+        n_dias = int(svc_df["fecha"].nunique()) if "fecha" in svc_df.columns else 0
         max_a = int(profile["L_out_abordo"].max()) if not profile["L_out_abordo"].empty else 0
         recaud = float(pd.to_numeric(svc_df["tarifa_pagada"], errors="coerce").fillna(0).sum())
-        tarifa_media = recaud / n_boletos if n_boletos > 0 else np.nan
+        tarifa_media = recaud / n_pax if n_pax > 0 else np.nan
 
         # Estación origen principal: la más usada como origen en este servicio
         try:
@@ -3667,7 +3673,8 @@ def build_lt_service_summary(month_df: pd.DataFrame,
 
         rows.append({
             "servicio_label": str(srv_label),
-            "n_boletos": n_boletos,
+            "n_pasajeros": n_pax,
+            "n_dias_operados": n_dias,
             "max_abordo": max_a,
             "recaudacion": recaud,
             "tarifa_media": tarifa_media,
@@ -3678,7 +3685,82 @@ def build_lt_service_summary(month_df: pd.DataFrame,
         return pd.DataFrame(columns=cols)
 
     summary = pd.DataFrame(rows)
-    return summary.sort_values("n_boletos", ascending=False).reset_index(drop=True)
+    return summary.sort_values("n_pasajeros", ascending=False).reset_index(drop=True)
+
+
+def build_lt_service_profile_mensual(month_df: pd.DataFrame,
+                                       servicio_label: str,
+                                       sentido: str,
+                                       station_order_hint: list | None = None,
+                                       mode: str = "total") -> tuple[pd.DataFrame, dict]:
+    """
+    Perfil mensual de un servicio. Retorna (perfil_df, info_dict).
+
+    `mode`:
+      - "total":    suma cruda de pasajeros que subieron/bajaron en el mes
+      - "average":  promedio diario = total ÷ nº de días en que operó el servicio
+
+    `info_dict` contiene:
+      - n_pasajeros_mes: total bruto del mes
+      - n_dias_operados: días distintos en que operó el servicio
+      - recaudacion_mes
+      - tarifa_media
+      - max_abordo (en el modo solicitado)
+    """
+    if month_df is None or month_df.empty:
+        return pd.DataFrame(columns=LT_PROFILE_COLS), {}
+
+    svc_df = month_df[
+        (month_df["servicio_label"].astype(str) == str(servicio_label)) &
+        (month_df["sentido_viaje"].astype(str) == str(sentido))
+    ].copy()
+
+    if svc_df.empty:
+        return pd.DataFrame(columns=LT_PROFILE_COLS), {}
+
+    # Días en que operó el servicio (≠ días con datos del mes)
+    n_dias = int(svc_df["fecha"].nunique())
+    n_pax  = int(len(svc_df))
+    recaud = float(pd.to_numeric(svc_df["tarifa_pagada"], errors="coerce").fillna(0).sum())
+    tarifa_media = recaud / n_pax if n_pax > 0 else 0.0
+
+    # Construir el perfil agregado del mes (suma)
+    profile_total = build_lt_service_profile(svc_df, station_order_hint)
+
+    if profile_total.empty:
+        return profile_total, {
+            "n_pasajeros_mes": n_pax,
+            "n_dias_operados": n_dias,
+            "recaudacion_mes": recaud,
+            "tarifa_media": tarifa_media,
+            "max_abordo": 0,
+        }
+
+    if mode == "average" and n_dias > 0:
+        # Escalar a promedio diario. NO recalculamos el cumsum desde cero;
+        # promediar B_embarque y D_bajadas mantiene el invariante
+        # L_out_abordo == cumsum(B - D) si dividimos también L_out_abordo.
+        profile = profile_total.copy()
+        for col in ["B_embarque", "D_bajadas", "L_in_abordo", "L_out_abordo"]:
+            profile[col] = (profile[col].astype(float) / n_dias).round(1)
+    else:
+        profile = profile_total
+
+    max_abordo = int(profile_total["L_out_abordo"].max()) if not profile_total.empty else 0
+    if mode == "average" and n_dias > 0:
+        max_abordo_modo = float(round(max_abordo / n_dias, 1))
+    else:
+        max_abordo_modo = float(max_abordo)
+
+    info = {
+        "n_pasajeros_mes":   n_pax,
+        "n_dias_operados":   n_dias,
+        "recaudacion_mes":   recaud,
+        "tarifa_media":      tarifa_media,
+        "max_abordo":        max_abordo_modo,
+        "max_abordo_total":  max_abordo,
+    }
+    return profile, info
 
 
 # ================================================================
@@ -8450,20 +8532,31 @@ def render_perfil_carga_lt(data_path: Path, kpis_df: pd.DataFrame,
         except Exception:
             estaciones_serial = None
 
-    tab_perfil, tab_afluencia = st.tabs([
-        "📈 Análisis de carga",
+    tab_diario, tab_mensual, tab_afluencia = st.tabs([
+        "📅 Análisis diario",
+        "📊 Promedio mensual",
         "🎫 Afluencia / Boletos vendidos",
     ])
 
-    with tab_perfil:
+    with tab_diario:
         try:
-            _render_lt_tab_perfil(full_df, service_name, estaciones_serial,
+            _render_lt_tab_diario(full_df, service_name, estaciones_serial,
                                    folder_path, archivos_cargados)
         except BaseException as exc:
             if is_streamlit_internal_exception(exc):
                 raise
-            diag_error("RENDER_LT_PERFIL_TAB_FAIL", exc=exc)
-            st.error(f"Error en pestaña Análisis de carga: {type(exc).__name__}: {exc}")
+            diag_error("RENDER_LT_DIARIO_TAB_FAIL", exc=exc)
+            st.error(f"Error en pestaña Análisis diario: {type(exc).__name__}: {exc}")
+
+    with tab_mensual:
+        try:
+            _render_lt_tab_mensual(full_df, service_name, estaciones_serial,
+                                    folder_path, archivos_cargados)
+        except BaseException as exc:
+            if is_streamlit_internal_exception(exc):
+                raise
+            diag_error("RENDER_LT_MENSUAL_TAB_FAIL", exc=exc)
+            st.error(f"Error en pestaña Promedio mensual: {type(exc).__name__}: {exc}")
 
     with tab_afluencia:
         try:
@@ -8477,11 +8570,297 @@ def render_perfil_carga_lt(data_path: Path, kpis_df: pd.DataFrame,
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
-def _render_lt_tab_perfil(full_df: pd.DataFrame, service_name: str,
+def _render_lt_tab_diario(full_df: pd.DataFrame, service_name: str,
                            estaciones_serial: str | None,
                            folder_path: str,
                            archivos_cargados: list):
-    """Tab 1: perfil de carga por servicio del mes seleccionado."""
+    """
+    Tab Análisis diario: selecciona una fecha + sentido + servicio y muestra
+    el perfil de carga de ese servicio operado ese día específico.
+
+    Terminología v17: usamos 'pasajeros' / 'viajes' (el término 'boletos'
+    se reserva para la pestaña de Afluencia / KPI).
+    """
+    # Fechas disponibles en el dataset
+    fechas_disp = sorted(full_df["fecha"].dropna().unique().tolist())
+    if not fechas_disp:
+        render_empty_state("Sin fechas en el dataset.", icon="📅")
+        return
+
+    fechas_set = set(fechas_disp)
+    fecha_default = fechas_disp[-1]
+
+    col_f, col_s = st.columns([1.1, 1.0])
+    with col_f:
+        fecha_input = st.date_input(
+            "📅 Fecha", value=fecha_default,
+            min_value=fechas_disp[0], max_value=fechas_disp[-1],
+            format="DD/MM/YYYY",
+            key="lt_diario_fecha",
+        )
+        # Si la fecha tipeada no tiene datos, ir a la más cercana
+        if fecha_input not in fechas_set:
+            fecha_sel = min(fechas_disp, key=lambda d: abs((d - fecha_input).days))
+            st.info(
+                f"Fecha sin datos. Se usa la más cercana: "
+                f"{pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}.",
+            )
+        else:
+            fecha_sel = fecha_input
+
+    # Día filtrado
+    day_df = full_df[full_df["fecha"] == fecha_sel].copy()
+    if day_df.empty:
+        render_empty_state(
+            f"Sin viajes para {pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}.",
+            icon="📅",
+        )
+        return
+
+    with col_s:
+        sentidos_disp = sorted(day_df["sentido_viaje"].dropna().astype(str).unique().tolist())
+        sentido_sel = option_selector(
+            "Sentido", sentidos_disp,
+            key="lt_diario_sentido",
+            default=sentidos_disp[0] if sentidos_disp else None,
+            horizontal=True,
+        )
+        if sentido_sel:
+            st.caption(f"📍 {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)}")
+
+    day_dir = day_df[day_df["sentido_viaje"].astype(str) == str(sentido_sel)].copy()
+    if day_dir.empty:
+        render_empty_state(
+            f"Sin viajes en {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)} "
+            f"para esa fecha.",
+            icon="🎫",
+        )
+        return
+
+    # Tarjetas resumen del día/sentido
+    n_pax_dia = int(len(day_dir))
+    recaud_dia = float(pd.to_numeric(day_dir["tarifa_pagada"], errors="coerce").fillna(0).sum())
+    tarifa_dia = recaud_dia / n_pax_dia if n_pax_dia > 0 else 0
+    n_servicios_dia = int(day_dir["servicio_asignado"].nunique())
+
+    cards_html = (
+        f"<div class='efe-summary-row'>"
+        f"<div class='efe-summary-card' style='border-left:4px solid {EFE_BLUE};'>"
+        f"<div class='efe-summary-label'>Pasajeros del día</div>"
+        f"<div class='efe-summary-value'>{fmt_pax(n_pax_dia)}</div>"
+        f"<div class='efe-summary-sub'>"
+        f"{pd.to_datetime(fecha_sel).strftime('%a %d-%m-%Y')}</div>"
+        f"</div>"
+        f"<div class='efe-summary-card'>"
+        f"<div class='efe-summary-label'>Servicios operados</div>"
+        f"<div class='efe-summary-value'>{n_servicios_dia}</div>"
+        f"<div class='efe-summary-sub'>"
+        f"Prom. {n_pax_dia / max(n_servicios_dia, 1):,.0f} pax/serv</div>"
+        f"</div>"
+        f"<div class='efe-summary-card' style='border-left:4px solid {SUCCESS};'>"
+        f"<div class='efe-summary-label'>Recaudación del día</div>"
+        f"<div class='efe-summary-value'>{fmt_number(recaud_dia, 'CLP')}</div>"
+        f"<div class='efe-summary-sub'>Suma de tarifas</div>"
+        f"</div>"
+        f"<div class='efe-summary-card'>"
+        f"<div class='efe-summary-label'>Tarifa media</div>"
+        f"<div class='efe-summary-value'>{fmt_number(tarifa_dia, 'CLP')}</div>"
+        f"<div class='efe-summary-sub'>Recaudación ÷ pasajeros</div>"
+        f"</div>"
+        f"</div>"
+    )
+    st.markdown(cards_html, unsafe_allow_html=True)
+
+    # Orden de estaciones según estaciones.csv para este sentido
+    station_order_hint = get_lt_station_sequence(
+        service_name, estaciones_serial, sentido=str(sentido_sel),
+    )
+
+    # Resumen por servicio (del día/sentido)
+    summary = build_lt_service_summary(day_dir, station_order_hint)
+    if summary.empty:
+        render_empty_state("No hay servicios con datos para este día.", icon="🚂")
+        return
+
+    # Selector de servicio del día
+    servicios_disp = summary["servicio_label"].tolist()
+    servicio_sel = st.selectbox(
+        f"Servicio específico ({len(servicios_disp)} servicios este día/sentido)",
+        options=servicios_disp,
+        index=0,
+        key=f"lt_diario_servicio_{fecha_sel}_{sentido_sel}",
+        help="Servicios ordenados por nº de pasajeros descendente.",
+    )
+
+    svc_df = day_dir[day_dir["servicio_label"].astype(str) == str(servicio_sel)].copy()
+    profile = build_lt_service_profile(svc_df, station_order_hint)
+
+    if profile.empty:
+        st.warning("No fue posible reconstruir el perfil del servicio en ese día.")
+        return
+
+    n_pax_srv = int(len(svc_df))
+    max_abordo_srv = int(profile["L_out_abordo"].max()) if not profile["L_out_abordo"].empty else 0
+    recaud_srv = float(pd.to_numeric(svc_df["tarifa_pagada"], errors="coerce").fillna(0).sum())
+    tarifa_media_srv = recaud_srv / n_pax_srv if n_pax_srv > 0 else 0
+
+    # Tramo crítico
+    tramo_max = "-"
+    if not profile.empty:
+        idx_max = profile["L_out_abordo"].idxmax()
+        pos = profile.index.get_loc(idx_max)
+        estaciones_list = profile["estacion"].astype(str).tolist()
+        if pos < len(estaciones_list) - 1:
+            tramo_max = f"{estaciones_list[pos]} → {estaciones_list[pos + 1]}"
+        elif pos > 0:
+            tramo_max = f"{estaciones_list[pos - 1]} → {estaciones_list[pos]}"
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric(
+        "Pasajeros del servicio", fmt_pax(n_pax_srv),
+        help="Total de viajes realizados en este servicio durante el día.",
+    )
+    m2.metric(
+        "Máximo a bordo", fmt_pax(max_abordo_srv),
+        help="Pico de pasajeros simultáneamente a bordo en el recorrido.",
+    )
+    m3.metric(
+        "Tramo crítico", tramo_max,
+        help="Tramo donde se alcanza el máximo a bordo.",
+    )
+    m4.metric(
+        "Tarifa media", fmt_number(tarifa_media_srv, "CLP"),
+        help="Recaudación ÷ pasajeros del servicio.",
+    )
+
+    # Toggle comparativo con promedio del mes (en mismo servicio y sentido)
+    fecha_dt = pd.to_datetime(fecha_sel)
+    mes_iso_dia = fecha_dt.to_period("M").strftime("%Y-%m")
+    show_comp = st.toggle(
+        "Comparar con promedio diario del mes (mismo servicio y sentido)",
+        value=False,
+        key=f"lt_diario_comp_toggle_{fecha_sel}_{sentido_sel}_{servicio_sel}",
+        help=(
+            f"Superpone una línea con el promedio diario del servicio "
+            f"{servicio_sel} en {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)} "
+            f"durante {month_period_to_label(mes_iso_dia)}."
+        ),
+    )
+
+    titulo = (
+        f"{service_name} | {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)} | "
+        f"Servicio {servicio_sel} | "
+        f"{pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}"
+    )
+
+    if show_comp:
+        # Construir perfil promedio del mes para overlay
+        month_df_for_avg = full_df[full_df["mes_iso"].astype(str) == mes_iso_dia].copy()
+        prof_avg, info_avg = build_lt_service_profile_mensual(
+            month_df_for_avg, str(servicio_sel), str(sentido_sel),
+            station_order_hint, mode="average",
+        )
+        if not prof_avg.empty:
+            fig = _build_lt_perfil_chart_with_overlay(
+                profile, prof_avg, titulo,
+                overlay_label=f"Promedio diario {month_period_to_label(mes_iso_dia)}",
+            )
+        else:
+            fig = _build_lt_perfil_chart(profile, titulo)
+    else:
+        fig = _build_lt_perfil_chart(profile, titulo)
+
+    show_plot(fig, width="stretch")
+
+    # Tabla detalle por servicio del día
+    st.markdown(
+        "<div class='section-title'>Detalle por servicio (este día)</div>",
+        unsafe_allow_html=True,
+    )
+    out = pd.DataFrame()
+    out["Servicio"]        = summary["servicio_label"].astype(str)
+    out["Estación origen"] = summary["estacion_origen_principal"].astype(str)
+    out["Pasajeros"]       = summary["n_pasajeros"].apply(fmt_pax)
+    out["Máximo a bordo"]  = summary["max_abordo"].apply(fmt_pax)
+    out["Recaudación"]     = summary["recaudacion"].apply(
+        lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-",
+    )
+    out["Tarifa media"]    = summary["tarifa_media"].apply(
+        lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-",
+    )
+    st.dataframe(out, width="stretch", hide_index=True)
+
+    csv_bytes = out.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    st.download_button(
+        "⬇ Descargar detalle del día (CSV)",
+        data=csv_bytes,
+        file_name=f"detalle_servicios_lt_dia_{pd.to_datetime(fecha_sel).strftime('%Y%m%d')}_{sentido_sel}.csv",
+        mime="text/csv",
+        key="download_detalle_lt_dia",
+    )
+
+    # Captions
+    ref_parts = []
+    if archivos_cargados:
+        ref_parts.append(f"Archivos cargados: {len(archivos_cargados)} en {folder_path}")
+    if not station_order_hint:
+        ref_parts.append(
+            "⚠ Sin orden oficial en estaciones.csv para este servicio · "
+            "se usa orden alfabético"
+        )
+    else:
+        ref_parts.append(
+            f"Orden de estaciones desde estaciones.csv "
+            f"({len(station_order_hint)} estaciones)"
+        )
+    if ref_parts:
+        st.caption(" · ".join(ref_parts))
+
+
+def _build_lt_perfil_chart_with_overlay(profile_today: pd.DataFrame,
+                                          profile_avg: pd.DataFrame,
+                                          title: str,
+                                          overlay_label: str) -> go.Figure:
+    """
+    Perfil de carga con línea overlay del promedio (diario del mes vs día actual).
+    Mantiene las barras suben/bajan + línea 'A bordo (hoy)' y agrega una
+    línea adicional 'A bordo (promedio)'.
+    """
+    fig = _build_lt_perfil_chart(profile_today, title)
+    if profile_avg is None or profile_avg.empty:
+        return fig
+
+    # Alinear por estación
+    merged = profile_today[["estacion"]].astype(str).merge(
+        profile_avg[["estacion", "L_out_abordo"]].astype({"estacion": str}),
+        on="estacion", how="left",
+    )
+    fig.add_trace(go.Scatter(
+        x=merged["estacion"].tolist(),
+        y=merged["L_out_abordo"].tolist(),
+        mode="lines+markers",
+        name=overlay_label,
+        line=dict(color=EFE_BLUE, width=2, dash="dot"),
+        marker=dict(size=6, symbol="circle-open"),
+        opacity=0.85,
+        hovertemplate="<b>%{x}</b><br>Promedio: %{y:,.1f}<extra></extra>",
+    ))
+    return fig
+
+
+def _render_lt_tab_mensual(full_df: pd.DataFrame, service_name: str,
+                            estaciones_serial: str | None,
+                            folder_path: str,
+                            archivos_cargados: list):
+    """
+    Tab Promedio mensual: muestra el comportamiento del servicio
+    agregado por mes, en dos modos:
+      • Total del mes — suma cruda de pasajeros del mes
+      • Promedio diario — total ÷ N días en que operó el servicio
+
+    Terminología v17: aquí usamos 'pasajeros' / 'viajes realizados'.
+    'Boletos' se reserva para la pestaña de Afluencia (KPI).
+    """
 
     # Filtros
     meses_disp = sorted(full_df["mes_iso"].dropna().astype(str).unique().tolist())
@@ -8489,7 +8868,7 @@ def _render_lt_tab_perfil(full_df: pd.DataFrame, service_name: str,
         render_empty_state("No hay meses con datos en el dataset.", icon="📅")
         return
 
-    col_m, col_s = st.columns([1.1, 1.0])
+    col_m, col_s, col_mode = st.columns([1.0, 1.0, 1.1])
     with col_m:
         mes_sel = st.selectbox(
             "Mes", options=meses_disp,
@@ -8509,6 +8888,19 @@ def _render_lt_tab_perfil(full_df: pd.DataFrame, service_name: str,
         )
         if sentido_sel:
             st.caption(f"📍 {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)}")
+    with col_mode:
+        mode_label = option_selector(
+            "Modo de agregación",
+            ["Total del mes", "Promedio diario"],
+            key="lt_perfil_mode_selector",
+            default="Total del mes",
+            horizontal=True,
+        )
+        mode = "total" if mode_label == "Total del mes" else "average"
+        st.caption(
+            "Suma cruda" if mode == "total"
+            else "Total ÷ días que operó el servicio"
+        )
 
     # Filtrar
     month_df = full_df[
@@ -8518,30 +8910,32 @@ def _render_lt_tab_perfil(full_df: pd.DataFrame, service_name: str,
 
     if month_df.empty:
         render_empty_state(
-            f"Sin boletos para {month_period_to_label(mes_sel)} en {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)}",
+            f"Sin viajes para {month_period_to_label(mes_sel)} en "
+            f"{LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)}",
             "Pruebe seleccionar otro mes o sentido.",
-            icon="🎫",
+            icon="🚂",
         )
         return
 
-    # Tarjetas resumen del mes/sentido
-    n_boletos = int(len(month_df))
+    # Tarjetas resumen del mes/sentido (siempre en valores totales)
+    n_pax = int(len(month_df))
     recaudacion = float(pd.to_numeric(month_df["tarifa_pagada"], errors="coerce").fillna(0).sum())
-    tarifa_media = recaudacion / n_boletos if n_boletos > 0 else 0
+    tarifa_media = recaudacion / n_pax if n_pax > 0 else 0
     n_servicios = int(month_df["servicio_asignado"].nunique())
     n_dias = int(month_df["fecha"].nunique())
 
     cards_html = (
         f"<div class='efe-summary-row'>"
         f"<div class='efe-summary-card' style='border-left:4px solid {EFE_BLUE};'>"
-        f"<div class='efe-summary-label'>Boletos del mes</div>"
-        f"<div class='efe-summary-value'>{fmt_pax(n_boletos)}</div>"
+        f"<div class='efe-summary-label'>Pasajeros del mes</div>"
+        f"<div class='efe-summary-value'>{fmt_pax(n_pax)}</div>"
         f"<div class='efe-summary-sub'>{n_dias} día(s) con datos</div>"
         f"</div>"
         f"<div class='efe-summary-card'>"
         f"<div class='efe-summary-label'>Servicios distintos</div>"
         f"<div class='efe-summary-value'>{n_servicios}</div>"
-        f"<div class='efe-summary-sub'>Promedio {n_boletos / max(n_servicios, 1):,.0f} bol/serv</div>"
+        f"<div class='efe-summary-sub'>"
+        f"Prom. {n_pax / max(n_servicios, 1):,.0f} pax/serv</div>"
         f"</div>"
         f"<div class='efe-summary-card' style='border-left:4px solid {SUCCESS};'>"
         f"<div class='efe-summary-label'>Recaudación</div>"
@@ -8551,7 +8945,7 @@ def _render_lt_tab_perfil(full_df: pd.DataFrame, service_name: str,
         f"<div class='efe-summary-card'>"
         f"<div class='efe-summary-label'>Tarifa media</div>"
         f"<div class='efe-summary-value'>{fmt_number(tarifa_media, 'CLP')}</div>"
-        f"<div class='efe-summary-sub'>Recaudación ÷ boletos</div>"
+        f"<div class='efe-summary-sub'>Recaudación ÷ pasajeros</div>"
         f"</div>"
         f"</div>"
     )
@@ -8562,10 +8956,8 @@ def _render_lt_tab_perfil(full_df: pd.DataFrame, service_name: str,
         service_name, estaciones_serial, sentido=str(sentido_sel),
     )
 
-    # Top servicios del mes (resumen)
+    # Resumen por servicio (siempre en total — más útil para ordenar/elegir)
     summary = build_lt_service_summary(month_df, station_order_hint)
-
-    # Selector de servicio específico
     if summary.empty:
         render_empty_state("No hay servicios para mostrar.", icon="🚂")
         return
@@ -8576,24 +8968,28 @@ def _render_lt_tab_perfil(full_df: pd.DataFrame, service_name: str,
         options=servicios_disp,
         index=0,
         key=f"lt_perfil_servicio_selector_{mes_sel}_{sentido_sel}",
-        help="Servicios ordenados por número de boletos descendente.",
+        help="Servicios ordenados por nº de pasajeros descendente.",
     )
 
-    # Construir perfil del servicio seleccionado
-    svc_df = month_df[month_df["servicio_label"].astype(str) == str(servicio_sel)].copy()
-    profile = build_lt_service_profile(svc_df, station_order_hint)
+    # Perfil del servicio con el modo seleccionado
+    profile, info = build_lt_service_profile_mensual(
+        month_df, str(servicio_sel), str(sentido_sel),
+        station_order_hint, mode=mode,
+    )
 
     if profile.empty:
         st.warning("No fue posible reconstruir el perfil para el servicio seleccionado.")
         return
 
-    # Métricas del servicio
-    n_boletos_srv = int(len(svc_df))
-    max_abordo_srv = int(profile["L_out_abordo"].max()) if not profile["L_out_abordo"].empty else 0
-    recaud_srv = float(pd.to_numeric(svc_df["tarifa_pagada"], errors="coerce").fillna(0).sum())
-    tarifa_media_srv = recaud_srv / n_boletos_srv if n_boletos_srv > 0 else 0
+    # Métricas del servicio (etiqueta dependiente del modo)
+    n_pax_srv     = int(info.get("n_pasajeros_mes", 0))
+    n_dias_op     = int(info.get("n_dias_operados", 0))
+    max_abordo_modo = info.get("max_abordo", 0)
+    recaud_srv    = float(info.get("recaudacion_mes", 0))
+    tarifa_media_srv = float(info.get("tarifa_media", 0))
 
-    # Tramo crítico
+    # Tramo crítico desde el perfil (el modo lo afecta solo en valor abs.,
+    # pero el tramo es el mismo porque proporcional)
     tramo_max = "-"
     if not profile.empty:
         idx_max = profile["L_out_abordo"].idxmax()
@@ -8604,58 +9000,92 @@ def _render_lt_tab_perfil(full_df: pd.DataFrame, service_name: str,
         elif pos > 0:
             tramo_max = f"{estaciones_list[pos - 1]} → {estaciones_list[pos]}"
 
+    if mode == "average":
+        label_pax = "Pasajeros promedio / día"
+        val_pax   = fmt_avg_pax(n_pax_srv / n_dias_op) if n_dias_op > 0 else "-"
+        help_pax  = (f"Total mensual ({fmt_pax(n_pax_srv)}) "
+                     f"÷ {n_dias_op} día(s) operados.")
+        label_max = "Máx. a bordo promedio"
+        val_max   = fmt_avg_pax(max_abordo_modo)
+        help_max  = "Pico promedio a bordo por día."
+    else:
+        label_pax = "Pasajeros del servicio (mes)"
+        val_pax   = fmt_pax(n_pax_srv)
+        help_pax  = (f"Total de viajes realizados en este servicio durante "
+                     f"{month_period_to_label(mes_sel)}.")
+        label_max = "Máximo a bordo (mes)"
+        val_max   = fmt_pax(max_abordo_modo)
+        help_max  = "Pico de pasajeros simultáneamente a bordo en el mes."
+
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric(
-        "Boletos del servicio", fmt_pax(n_boletos_srv),
-        help="Total de boletos vendidos en este servicio durante el mes.",
-    )
-    m2.metric(
-        "Máximo a bordo", fmt_pax(max_abordo_srv),
-        help="Pico de pasajeros simultáneamente a bordo en el recorrido.",
-    )
+    m1.metric(label_pax, val_pax, help=help_pax)
+    m2.metric(label_max, val_max, help=help_max)
     m3.metric(
         "Tramo crítico", tramo_max,
         help="Tramo donde se alcanza el máximo a bordo.",
     )
     m4.metric(
-        "Tarifa media", fmt_number(tarifa_media_srv, "CLP"),
-        help="Recaudación ÷ boletos del servicio.",
+        "Días operados",
+        n_dias_op,
+        help=(f"Días distintos en que operó el servicio {servicio_sel} "
+              f"en {month_period_to_label(mes_sel)}."),
     )
 
-    # Gráfico de perfil
+    # Gráfico de perfil — etiqueta dependiente del modo
+    modo_lbl = ("promedio diario" if mode == "average" else "total del mes")
     titulo = (
         f"{service_name} | {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)} | "
-        f"Servicio {servicio_sel} | {month_period_to_label(mes_sel)}"
+        f"Servicio {servicio_sel} | {month_period_to_label(mes_sel)} "
+        f"— {modo_lbl}"
     )
     show_plot(_build_lt_perfil_chart(profile, titulo), width="stretch")
+
+    if mode == "average":
+        st.caption(
+            f"💡 Valores expresados como promedio por día. "
+            f"Total mensual de pasajeros: {fmt_pax(n_pax_srv)} "
+            f"distribuidos en {n_dias_op} día(s) operados."
+        )
+    else:
+        st.caption(
+            f"💡 Valores expresados como total acumulado del mes "
+            f"({n_dias_op} día(s) operados)."
+        )
 
     # Tabla detalle por servicio
     st.markdown(
         "<div class='section-title'>Detalle por servicio</div>",
         unsafe_allow_html=True,
     )
+
     detalle = summary.copy()
     out = pd.DataFrame()
-    out["Servicio"]           = detalle["servicio_label"].astype(str)
-    out["Estación origen"]    = detalle["estacion_origen_principal"].astype(str)
-    out["Boletos"]            = detalle["n_boletos"].apply(fmt_pax)
-    out["Máximo a bordo"]     = detalle["max_abordo"].apply(fmt_pax)
-    out["Recaudación"]        = detalle["recaudacion"].apply(
+    out["Servicio"]                = detalle["servicio_label"].astype(str)
+    out["Estación origen"]         = detalle["estacion_origen_principal"].astype(str)
+    out["Pasajeros (mes)"]         = detalle["n_pasajeros"].apply(fmt_pax)
+    out["Días operados"]           = detalle["n_dias_operados"].astype(int).astype(str)
+    # Calcular promedio diario al vuelo
+    avg_diario = (detalle["n_pasajeros"].astype(float)
+                  / detalle["n_dias_operados"].replace(0, np.nan))
+    out["Pasajeros prom./día"]     = avg_diario.apply(
+        lambda v: fmt_avg_pax(v) if pd.notna(v) else "-"
+    )
+    out["Máximo a bordo (mes)"]    = detalle["max_abordo"].apply(fmt_pax)
+    out["Recaudación"]             = detalle["recaudacion"].apply(
         lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-",
     )
-    out["Tarifa media"]       = detalle["tarifa_media"].apply(
+    out["Tarifa media"]            = detalle["tarifa_media"].apply(
         lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-",
     )
     st.dataframe(out, width="stretch", hide_index=True)
 
-    # Botón de descarga
     csv_bytes = out.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
     st.download_button(
         "⬇ Descargar detalle (CSV)",
         data=csv_bytes,
-        file_name=f"detalle_servicios_lt_{mes_sel}_{sentido_sel}.csv",
+        file_name=f"detalle_servicios_lt_mes_{mes_sel}_{sentido_sel}.csv",
         mime="text/csv",
-        key="download_detalle_lt",
+        key="download_detalle_lt_mes",
     )
 
     # Caption de referencias
