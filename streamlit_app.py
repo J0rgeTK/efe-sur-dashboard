@@ -60,8 +60,8 @@ import streamlit.components.v1 as components
 
 # Identificador de versión visible en la UI para confirmar qué archivo
 # está corriendo en producción. Se incrementa con cada release.
-APP_VERSION = "v18-2026-05-13-lt-stations-hardcoded"
-APP_VERSION_HASH = "5374cfe63517"
+APP_VERSION = "v19-2026-05-14-ta-lpm-perfiles"
+APP_VERSION_HASH = "8016cb9af97c"
 
 # Ruta del log diagnóstico. En Streamlit Cloud, /tmp se borra al reiniciar
 # el contenedor — pero el archivo SÍ persiste durante la sesión del usuario,
@@ -1960,6 +1960,105 @@ LT_STATION_SEQUENCE_TH_LJ = [
     "Laja",
 ]
 
+# ================================================================
+# 10c. CONFIGURACIÓN TREN ARAUCANÍA (v19)
+# ================================================================
+# Schema idéntico al de LT (mismas 7 columnas). Lo que cambia:
+#   • Carpeta de datos:  perfil_ta
+#   • Estaciones (14):   tramo Victoria ↔ Pitrufquén
+#   • Sentidos:          VI-FQ (Victoria → Pitrufquén/Freire)
+#                        FQ-VI (Pitrufquén/Freire → Victoria)
+PROFILE_TA_SERVICE_CONFIG = {
+    "Tren Araucanía": {
+        "folder_candidates": ["perfil_ta", "perfil_tren_araucania", ".perfil_ta"],
+        "description": "Base de boletos vendidos del servicio Tren Araucanía.",
+    },
+}
+
+TA_SENTIDO_LABELS = {
+    "VI-FQ": "Victoria → Pitrufquén",
+    "FQ-VI": "Pitrufquén → Victoria",
+}
+
+# Orden geográfico Victoria (norte) → Pitrufquén (sur). Hardcodeado por las
+# mismas razones que LT: visualización consistente sin depender de CSVs externos.
+# Inferido topológicamente desde los pares O-D del CSV (consistencia perfecta,
+# cero pares O-D apareciendo en ambos sentidos).
+TA_STATION_SEQUENCE_VI_FQ = [
+    "Victoria",
+    "Púa",
+    "Perquenco",
+    "Quillén",
+    "Lautaro",
+    "Lautaro Centro",
+    "Pillanlelbún",
+    "Cajón",
+    "Instituto Claret",
+    "Temuco",
+    "Padre Las Casas-Paradero",
+    "Quepe",
+    "Freire",
+    "Pitrufquén",
+]
+
+
+# ================================================================
+# 10d. CONFIGURACIÓN LLANQUIHUE - PUERTO MONTT (v19)
+# ================================================================
+# Mismo schema y patrón que LT/TA. Pendiente: subir CSV y confirmar
+# orden geográfico de estaciones. Mientras no se suba el archivo a
+# `perfil_lpm/`, la página mostrará el empty state estándar.
+PROFILE_LPM_SERVICE_CONFIG = {
+    "Llanquihue Puerto Montt": {
+        "folder_candidates": ["perfil_lpm", "perfil_llanquihue_pm", ".perfil_lpm"],
+        "description": "Base de boletos vendidos del servicio Llanquihue – Puerto Montt.",
+    },
+}
+
+LPM_SENTIDO_LABELS: dict = {
+    # A completar cuando se suba el CSV (ej. "PM-LL", "LL-PM")
+}
+
+# Orden geográfico. Vacío por ahora; se completará al subir el primer
+# archivo de boletos. Si está vacío, el sistema cae al fallback alfabético
+# (los datos del CSV definen las estaciones presentes).
+LPM_STATION_SEQUENCE: list = []
+
+
+# ================================================================
+# 10e. DICT MAESTRO DE SERVICIOS PROVINCIALES (v19)
+# ================================================================
+# Un único punto de configuración para los 3 servicios provinciales con
+# perfil de carga (LT, TA, LPM). Permite escribir helpers genéricos y
+# evita duplicar código entre renderers.
+PROVINCIAL_SERVICES_CONFIG = {
+    "Laja Talcahuano": {
+        "folder_candidates": PROFILE_LT_SERVICE_CONFIG["Laja Talcahuano"]["folder_candidates"],
+        "station_sequence_base":         LT_STATION_SEQUENCE_TH_LJ,
+        "station_sequence_base_sentido": "TH-LJ",
+        "sentido_labels":                LT_SENTIDO_LABELS,
+    },
+    "Tren Araucanía": {
+        "folder_candidates": PROFILE_TA_SERVICE_CONFIG["Tren Araucanía"]["folder_candidates"],
+        "station_sequence_base":         TA_STATION_SEQUENCE_VI_FQ,
+        "station_sequence_base_sentido": "VI-FQ",
+        "sentido_labels":                TA_SENTIDO_LABELS,
+    },
+    "Llanquihue Puerto Montt": {
+        "folder_candidates": PROFILE_LPM_SERVICE_CONFIG["Llanquihue Puerto Montt"]["folder_candidates"],
+        "station_sequence_base":         LPM_STATION_SEQUENCE,
+        "station_sequence_base_sentido": "",
+        "sentido_labels":                LPM_SENTIDO_LABELS,
+    },
+}
+
+# Unión de etiquetas de sentido para el normalizador (que necesita mapear
+# cualquier valor de `sentido_viaje` a una etiqueta legible). Si un sentido
+# desconocido aparece, fallback al string crudo (manejado en normalize).
+ALL_PROVINCIAL_SENTIDO_LABELS: dict = {}
+for _svc_cfg in PROVINCIAL_SERVICES_CONFIG.values():
+    ALL_PROVINCIAL_SENTIDO_LABELS.update(_svc_cfg.get("sentido_labels", {}))
+
 
 def _resolve_folder(service_name: str, config_dict: dict, data_path: Path) -> tuple[list, str]:
     """Devuelve (lista_archivos_csv, ruta_carpeta) buscando candidatos."""
@@ -2880,7 +2979,7 @@ def _normalize_lt_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         if str(out["sentido_viaje"].dtype) == "category":
             out["sentido_viaje"] = out["sentido_viaje"].astype(str)
         out["sentido_viaje"] = out["sentido_viaje"].str.strip()
-        out["sentido_label"] = out["sentido_viaje"].map(LT_SENTIDO_LABELS).fillna(
+        out["sentido_label"] = out["sentido_viaje"].map(ALL_PROVINCIAL_SENTIDO_LABELS).fillna(
             out["sentido_viaje"]
         )
 
@@ -2914,9 +3013,14 @@ def load_lt_full_dataset(service_name: str, data_path_str: str) -> tuple[pd.Data
     """
     diag_checkpoint("LOAD_LT_BEGIN", srv=service_name)
     data_path = Path(data_path_str)
-    csv_files, folder_path = _resolve_folder(
-        service_name, PROFILE_LT_SERVICE_CONFIG, data_path,
-    )
+    # v19: resolución de carpeta desde el dict maestro provincial.
+    # Construir un dict ad-hoc compatible con _resolve_folder a partir
+    # de PROVINCIAL_SERVICES_CONFIG (que contiene los 3 servicios).
+    _prov_config = {
+        svc_name: {"folder_candidates": cfg.get("folder_candidates", [])}
+        for svc_name, cfg in PROVINCIAL_SERVICES_CONFIG.items()
+    }
+    csv_files, folder_path = _resolve_folder(service_name, _prov_config, data_path)
 
     if not csv_files:
         diag_warn(f"LOAD_LT_NO_FILES: srv={service_name}")
@@ -2967,32 +3071,37 @@ def get_lt_station_sequence(service_name: str,
                              sentido: str = "TH-LJ") -> list:
     """
     Retorna la secuencia ordenada y FIJA de estaciones del servicio
-    Laja Talcahuano para el sentido pedido.
+    provincial pedido, para el sentido solicitado.
 
-    v18: el orden está hardcodeado en `LT_STATION_SEQUENCE_TH_LJ` para
-    evitar problemas de visualización producidos al leerlo desde
-    `estaciones.csv`. El argumento `estaciones_df_serialized` se conserva
-    en la firma por retrocompatibilidad pero ya NO se utiliza.
+    v18 — orden hardcodeado para Laja Talcahuano.
+    v19 — generalizado a los 3 servicios provinciales (LT, TA, LPM) vía
+          el dict maestro `PROVINCIAL_SERVICES_CONFIG`. El nombre de la
+          función conserva el prefijo `lt_` por retrocompatibilidad.
 
-    Parámetros:
-      service_name : nombre del servicio (debe ser "Laja Talcahuano";
-                     cualquier otro valor retorna lista vacía).
-      estaciones_df_serialized : IGNORADO (se mantiene la firma para no
-                     romper llamadas existentes).
-      sentido      : "TH-LJ" → orden base (Talcahuano → Laja)
-                     "LJ-TH" → orden invertido (Laja → Talcahuano)
+    Para cada servicio, el dict contiene:
+      • station_sequence_base:         lista de estaciones en un sentido base
+      • station_sequence_base_sentido: identificador de ese sentido
+    Si `sentido` coincide con el base, retorna la lista; si no, invertida.
 
-    Las 22 estaciones siempre se retornan, en el orden definido.
+    Si la lista base está vacía (caso LPM sin datos cargados aún), retorna [].
     """
-    if str(service_name) != "Laja Talcahuano":
+    config = PROVINCIAL_SERVICES_CONFIG.get(str(service_name))
+    if not config:
         return []
 
-    base_seq = list(LT_STATION_SEQUENCE_TH_LJ)
-    if sentido == "TH-LJ":
+    base_seq = list(config.get("station_sequence_base") or [])
+    if not base_seq:
+        return []
+
+    base_sentido = str(config.get("station_sequence_base_sentido") or "")
+    if str(sentido) == base_sentido:
         return base_seq
-    elif sentido == "LJ-TH":
-        return list(reversed(base_seq))
-    return base_seq
+    # Cualquier otro sentido se asume "el opuesto" — orden invertido.
+    return list(reversed(base_seq))
+
+
+# Alias semántico (v19): nombre genérico para uso futuro.
+get_provincial_station_sequence = get_lt_station_sequence
 
 
 # ================================================================
@@ -3579,7 +3688,7 @@ def build_lt_service_profile(service_df: pd.DataFrame,
         return ""
 
     sentido        = _first_str("sentido_viaje")
-    sentido_label  = _first_str("sentido_label") or LT_SENTIDO_LABELS.get(sentido, sentido)
+    sentido_label  = _first_str("sentido_label") or ALL_PROVINCIAL_SENTIDO_LABELS.get(sentido, sentido)
     servicio_label = _first_str("servicio_label") or "-"
 
     # --- v18: order_list SIEMPRE es el hint completo si viene definido ---
@@ -8500,28 +8609,49 @@ def _build_lt_perfil_chart(profile: pd.DataFrame, title: str) -> go.Figure:
     return fig
 
 
-@maybe_fragment
-def render_perfil_carga_lt(data_path: Path, kpis_df: pd.DataFrame,
-                            estaciones_df: pd.DataFrame):
+def render_perfil_carga_provincial(service_name: str, data_path: Path,
+                                     kpis_df: pd.DataFrame,
+                                     estaciones_df: pd.DataFrame):
     """
-    Página de Perfil de Carga para Laja Talcahuano. Dos tabs:
-      • Análisis de carga (perfil por servicio del mes filtrado)
-      • Afluencia mensual (comparación con KPI de boletos vendidos)
+    Renderer genérico de Perfil de Carga para servicios provinciales
+    (Laja Talcahuano, Tren Araucanía, Llanquihue Puerto Montt).
+
+    v19 — parametrizado vía PROVINCIAL_SERVICES_CONFIG. Reutiliza los
+    tabs `_render_lt_tab_diario`, `_render_lt_tab_mensual`,
+    `_render_lt_tab_afluencia` (conservan el prefijo `lt_` por historia
+    pero internamente leen el config del servicio).
+
+    Tres tabs:
+      📅 Análisis diario   — perfil por fecha + sentido + servicio
+      📊 Promedio mensual  — perfil agregado del mes (total o promedio diario)
+      🎫 Afluencia / KPI    — comparación de boletos vendidos vs KPI declarado
     """
-    diag_checkpoint("RENDER_LT_PERFIL_BEGIN")
+    diag_checkpoint("RENDER_PROVINCIAL_PERFIL_BEGIN", srv=service_name)
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='section-title'>Perfil de Carga — Laja Talcahuano</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<div class='section-subtitle'>Análisis mensual del perfil de "
-        "carga por servicio y comparación de afluencia (boletos vendidos) "
-        "del servicio Laja → Talcahuano y Talcahuano → Laja.</div>",
+        f"<div class='section-title'>Perfil de Carga — {service_name}</div>",
         unsafe_allow_html=True,
     )
 
-    service_name = "Laja Talcahuano"
+    # Descripción específica del servicio en base a las etiquetas de sentido
+    _svc_cfg = PROVINCIAL_SERVICES_CONFIG.get(service_name, {})
+    sent_labels = _svc_cfg.get("sentido_labels") or {}
+    if sent_labels:
+        sentidos_legibles = " y ".join(sent_labels.values())
+        subtitle = (
+            f"Análisis mensual del perfil de carga por servicio y "
+            f"comparación de afluencia (boletos vendidos) del servicio "
+            f"{sentidos_legibles}."
+        )
+    else:
+        subtitle = (
+            f"Análisis mensual del perfil de carga por servicio y "
+            f"comparación de afluencia (boletos vendidos)."
+        )
+    st.markdown(
+        f"<div class='section-subtitle'>{subtitle}</div>",
+        unsafe_allow_html=True,
+    )
 
     # Cargar dataset completo (cacheado)
     try:
@@ -8591,6 +8721,30 @@ def render_perfil_carga_lt(data_path: Path, kpis_df: pd.DataFrame,
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
+# ----------------------------------------------------------------
+# Wrappers concretos: una página por servicio provincial (v19)
+# ----------------------------------------------------------------
+@maybe_fragment
+def render_perfil_carga_lt(data_path: Path, kpis_df: pd.DataFrame,
+                            estaciones_df: pd.DataFrame):
+    """Perfil de Carga — Laja Talcahuano. Wrapper a render_perfil_carga_provincial."""
+    render_perfil_carga_provincial("Laja Talcahuano", data_path, kpis_df, estaciones_df)
+
+
+@maybe_fragment
+def render_perfil_carga_ta(data_path: Path, kpis_df: pd.DataFrame,
+                            estaciones_df: pd.DataFrame):
+    """Perfil de Carga — Tren Araucanía. Wrapper a render_perfil_carga_provincial."""
+    render_perfil_carga_provincial("Tren Araucanía", data_path, kpis_df, estaciones_df)
+
+
+@maybe_fragment
+def render_perfil_carga_lpm(data_path: Path, kpis_df: pd.DataFrame,
+                              estaciones_df: pd.DataFrame):
+    """Perfil de Carga — Llanquihue Puerto Montt. Wrapper a render_perfil_carga_provincial."""
+    render_perfil_carga_provincial("Llanquihue Puerto Montt", data_path, kpis_df, estaciones_df)
+
+
 def _render_lt_tab_diario(full_df: pd.DataFrame, service_name: str,
                            estaciones_serial: str | None,
                            folder_path: str,
@@ -8601,7 +8755,12 @@ def _render_lt_tab_diario(full_df: pd.DataFrame, service_name: str,
 
     Terminología v17: usamos 'pasajeros' / 'viajes' (el término 'boletos'
     se reserva para la pestaña de Afluencia / KPI).
+    v19: parametrizado vía PROVINCIAL_SERVICES_CONFIG (LT/TA/LPM).
     """
+    # v19: resolver etiquetas de sentido específicas del servicio
+    _svc_cfg = PROVINCIAL_SERVICES_CONFIG.get(service_name, {})
+    sentido_labels = _svc_cfg.get("sentido_labels") or ALL_PROVINCIAL_SENTIDO_LABELS
+
     # Fechas disponibles en el dataset
     fechas_disp = sorted(full_df["fecha"].dropna().unique().tolist())
     if not fechas_disp:
@@ -8647,12 +8806,12 @@ def _render_lt_tab_diario(full_df: pd.DataFrame, service_name: str,
             horizontal=True,
         )
         if sentido_sel:
-            st.caption(f"📍 {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)}")
+            st.caption(f"📍 {sentido_labels.get(sentido_sel, sentido_sel)}")
 
     day_dir = day_df[day_df["sentido_viaje"].astype(str) == str(sentido_sel)].copy()
     if day_dir.empty:
         render_empty_state(
-            f"Sin viajes en {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)} "
+            f"Sin viajes en {sentido_labels.get(sentido_sel, sentido_sel)} "
             f"para esa fecha.",
             icon="🎫",
         )
@@ -8763,13 +8922,13 @@ def _render_lt_tab_diario(full_df: pd.DataFrame, service_name: str,
         key=f"lt_diario_comp_toggle_{fecha_sel}_{sentido_sel}_{servicio_sel}",
         help=(
             f"Superpone una línea con el promedio diario del servicio "
-            f"{servicio_sel} en {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)} "
+            f"{servicio_sel} en {sentido_labels.get(sentido_sel, sentido_sel)} "
             f"durante {month_period_to_label(mes_iso_dia)}."
         ),
     )
 
     titulo = (
-        f"{service_name} | {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)} | "
+        f"{service_name} | {sentido_labels.get(sentido_sel, sentido_sel)} | "
         f"Servicio {servicio_sel} | "
         f"{pd.to_datetime(fecha_sel).strftime('%d-%m-%Y')}"
     )
@@ -8877,7 +9036,11 @@ def _render_lt_tab_mensual(full_df: pd.DataFrame, service_name: str,
 
     Terminología v17: aquí usamos 'pasajeros' / 'viajes realizados'.
     'Boletos' se reserva para la pestaña de Afluencia (KPI).
+    v19: parametrizado vía PROVINCIAL_SERVICES_CONFIG (LT/TA/LPM).
     """
+    # v19: etiquetas de sentido específicas del servicio
+    _svc_cfg = PROVINCIAL_SERVICES_CONFIG.get(service_name, {})
+    sentido_labels = _svc_cfg.get("sentido_labels") or ALL_PROVINCIAL_SENTIDO_LABELS
 
     # Filtros
     meses_disp = sorted(full_df["mes_iso"].dropna().astype(str).unique().tolist())
@@ -8904,7 +9067,7 @@ def _render_lt_tab_mensual(full_df: pd.DataFrame, service_name: str,
             horizontal=True,
         )
         if sentido_sel:
-            st.caption(f"📍 {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)}")
+            st.caption(f"📍 {sentido_labels.get(sentido_sel, sentido_sel)}")
     with col_mode:
         mode_label = option_selector(
             "Modo de agregación",
@@ -8928,7 +9091,7 @@ def _render_lt_tab_mensual(full_df: pd.DataFrame, service_name: str,
     if month_df.empty:
         render_empty_state(
             f"Sin viajes para {month_period_to_label(mes_sel)} en "
-            f"{LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)}",
+            f"{sentido_labels.get(sentido_sel, sentido_sel)}",
             "Pruebe seleccionar otro mes o sentido.",
             icon="🚂",
         )
@@ -9051,7 +9214,7 @@ def _render_lt_tab_mensual(full_df: pd.DataFrame, service_name: str,
     # Gráfico de perfil — etiqueta dependiente del modo
     modo_lbl = ("promedio diario" if mode == "average" else "total del mes")
     titulo = (
-        f"{service_name} | {LT_SENTIDO_LABELS.get(sentido_sel, sentido_sel)} | "
+        f"{service_name} | {sentido_labels.get(sentido_sel, sentido_sel)} | "
         f"Servicio {servicio_sel} | {month_period_to_label(mes_sel)} "
         f"— {modo_lbl}"
     )
@@ -9121,12 +9284,19 @@ def _render_lt_tab_mensual(full_df: pd.DataFrame, service_name: str,
 
 def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
                               kpis_df: pd.DataFrame):
-    """Tab 2: afluencia mensual / boletos vendidos + comparación con KPI."""
+    """Tab 2: afluencia mensual / boletos vendidos + comparación con KPI.
+
+    v19: parametrizado por service_name (LT/TA/LPM). Las etiquetas de
+    sentido se resuelven desde PROVINCIAL_SERVICES_CONFIG.
+    """
+    # v19: etiquetas de sentido específicas del servicio
+    _svc_cfg = PROVINCIAL_SERVICES_CONFIG.get(service_name, {})
+    sentido_labels = _svc_cfg.get("sentido_labels") or ALL_PROVINCIAL_SENTIDO_LABELS
 
     st.markdown(
-        "<div class='section-subtitle'>Comparación de boletos vendidos mes "
-        "a mes y contraste con el KPI de afluencia reportado oficialmente "
-        "para Laja Talcahuano.</div>",
+        f"<div class='section-subtitle'>Comparación de boletos vendidos mes "
+        f"a mes y contraste con el KPI de afluencia reportado oficialmente "
+        f"para {service_name}.</div>",
         unsafe_allow_html=True,
     )
 
@@ -9351,7 +9521,7 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
         .agg(boletos=("tarifa_pagada", "size"),
              recaudacion=("tarifa_pagada", "sum"))
     )
-    sent_grp["label"] = sent_grp["sentido_viaje"].map(LT_SENTIDO_LABELS).fillna(sent_grp["sentido_viaje"])
+    sent_grp["label"] = sent_grp["sentido_viaje"].map(sentido_labels).fillna(sent_grp["sentido_viaje"])
     sent_grp = sent_grp.sort_values("boletos", ascending=False)
     c_left, c_right = st.columns(2)
     for col_box, (_, r) in zip([c_left, c_right], sent_grp.iterrows()):
@@ -9631,9 +9801,11 @@ SERVICE_NAV_OPTIONS = [
     "Biotren", "Tren Araucanía", "Laja Talcahuano",
     "Llanquihue Puerto Montt", "Personas",
 ]
-BIOTREN_DETAIL_PAGES = ["KPIs", "Perfil de Carga", "Análisis por Estación"]
-LAJA_TH_DETAIL_PAGES = ["KPIs", "Perfil de Carga"]
-STANDARD_SERVICE_PAGES = ["KPIs"]
+BIOTREN_DETAIL_PAGES        = ["KPIs", "Perfil de Carga", "Análisis por Estación"]
+LAJA_TH_DETAIL_PAGES        = ["KPIs", "Perfil de Carga"]
+TREN_ARAUCANIA_DETAIL_PAGES = ["KPIs", "Perfil de Carga"]   # v19
+LLANQUIHUE_PM_DETAIL_PAGES  = ["KPIs", "Perfil de Carga"]   # v19
+STANDARD_SERVICE_PAGES      = ["KPIs"]
 
 
 # Mapeo de iconos por sección (mejor identificación visual)
@@ -9647,6 +9819,8 @@ SECTION_ICONS = {
     "KPIs por Servicio":       "📊",
     "Perfil de Carga":         "📈",
     "Perfil de Carga LT":      "📈",
+    "Perfil de Carga TA":      "📈",
+    "Perfil de Carga LPM":     "📈",
     "Análisis por Estación":   "🗺️",
     "OD Estaciones":           "🗺️",
     "Estaciones":              "📍",
@@ -9689,14 +9863,20 @@ def render_navigation() -> tuple[str, str]:
         if root_sel == "Personas":
             section_sel = "Personas"
         else:
-            # Subpáginas según servicio:
-            #   Biotren        → KPIs / Perfil de Carga / Análisis por Estación
-            #   Laja Talcahuano → KPIs / Perfil de Carga  (nuevo en v16)
-            #   Otros          → solo KPIs
+            # Subpáginas según servicio (v19: TA y LPM también con Perfil de Carga):
+            #   Biotren                  → KPIs / Perfil de Carga / Análisis por Estación
+            #   Laja Talcahuano          → KPIs / Perfil de Carga  (v16)
+            #   Tren Araucanía           → KPIs / Perfil de Carga  (v19)
+            #   Llanquihue Puerto Montt  → KPIs / Perfil de Carga  (v19)
+            #   Otros                    → solo KPIs
             if root_sel == "Biotren":
                 sub = BIOTREN_DETAIL_PAGES
             elif root_sel == "Laja Talcahuano":
                 sub = LAJA_TH_DETAIL_PAGES
+            elif root_sel == "Tren Araucanía":
+                sub = TREN_ARAUCANIA_DETAIL_PAGES
+            elif root_sel == "Llanquihue Puerto Montt":
+                sub = LLANQUIHUE_PM_DETAIL_PAGES
             else:
                 sub = STANDARD_SERVICE_PAGES
             label = option_selector(
@@ -9709,10 +9889,15 @@ def render_navigation() -> tuple[str, str]:
                 "Análisis por Estación": "OD Estaciones",
             }
             section_sel = section_map.get(label, "KPIs por Servicio")
-            # Distinguir Perfil de Carga LT del Perfil de Carga Biotren
+            # Distinguir Perfiles de Carga provinciales del de Biotren
             # para que el dispatch llame al renderer correcto.
-            if section_sel == "Perfil de Carga" and root_sel == "Laja Talcahuano":
-                section_sel = "Perfil de Carga LT"
+            if section_sel == "Perfil de Carga":
+                if root_sel == "Laja Talcahuano":
+                    section_sel = "Perfil de Carga LT"
+                elif root_sel == "Tren Araucanía":
+                    section_sel = "Perfil de Carga TA"
+                elif root_sel == "Llanquihue Puerto Montt":
+                    section_sel = "Perfil de Carga LPM"
         st.markdown("</div>", unsafe_allow_html=True)
     return root_sel, section_sel
 
@@ -9772,12 +9957,14 @@ def main():
 
     # Breadcrumb visible (mejora UX: el usuario siempre sabe dónde está)
     breadcrumb_section_label = {
-        "KPIs por Servicio":  "KPIs",
-        "Perfil de Carga":    "Perfil de Carga",
-        "Perfil de Carga LT": "Perfil de Carga",
-        "OD Estaciones":      "Análisis por Estación",
-        "Personas":           "Iniciativas y responsables",
-        "Estaciones":         "Estaciones",
+        "KPIs por Servicio":   "KPIs",
+        "Perfil de Carga":     "Perfil de Carga",
+        "Perfil de Carga LT":  "Perfil de Carga",
+        "Perfil de Carga TA":  "Perfil de Carga",
+        "Perfil de Carga LPM": "Perfil de Carga",
+        "OD Estaciones":       "Análisis por Estación",
+        "Personas":            "Iniciativas y responsables",
+        "Estaciones":          "Estaciones",
     }.get(section_sel, section_sel)
     # Contexto extra: período activo para KPIs, mes activo para Perfil
     extra_context = None
@@ -9835,6 +10022,14 @@ def main():
             diag_checkpoint("DISPATCH_PERFIL_LT_BEGIN")
             render_perfil_carga_lt(data_path, kpis, estaciones)
             diag_checkpoint("DISPATCH_PERFIL_LT_END")
+        elif section_sel == "Perfil de Carga TA":
+            diag_checkpoint("DISPATCH_PERFIL_TA_BEGIN")
+            render_perfil_carga_ta(data_path, kpis, estaciones)
+            diag_checkpoint("DISPATCH_PERFIL_TA_END")
+        elif section_sel == "Perfil de Carga LPM":
+            diag_checkpoint("DISPATCH_PERFIL_LPM_BEGIN")
+            render_perfil_carga_lpm(data_path, kpis, estaciones)
+            diag_checkpoint("DISPATCH_PERFIL_LPM_END")
         elif section_sel == "OD Estaciones":
             diag_checkpoint("DISPATCH_OD_BEGIN")
             render_od_estaciones(data_path, estaciones)
