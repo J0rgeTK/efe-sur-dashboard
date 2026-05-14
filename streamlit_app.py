@@ -60,8 +60,8 @@ import streamlit.components.v1 as components
 
 # Identificador de versión visible en la UI para confirmar qué archivo
 # está corriendo en producción. Se incrementa con cada release.
-APP_VERSION = "v19-2026-05-14-ta-lpm-perfiles"
-APP_VERSION_HASH = "8016cb9af97c"
+APP_VERSION = "v20-2026-05-14-ta-orden-fix-lpm-pasajeros"
+APP_VERSION_HASH = "54568568b633"
 
 # Ruta del log diagnóstico. En Streamlit Cloud, /tmp se borra al reiniciar
 # el contenedor — pero el archivo SÍ persiste durante la sesión del usuario,
@@ -1899,7 +1899,7 @@ TURNSTILE_SERVICE_CONFIG = {
 PROFILE_LT_SERVICE_CONFIG = {
     "Laja Talcahuano": {
         "folder_candidates": ["perfil_lt", "perfil_laja_talcahuano", ".perfil_lt"],
-        "description": "Base de boletos vendidos diarios (sin timestamps).",
+        "description": "Base de pasajeros del servicio (boletos vendidos) (sin timestamps).",
     },
 }
 
@@ -1971,7 +1971,7 @@ LT_STATION_SEQUENCE_TH_LJ = [
 PROFILE_TA_SERVICE_CONFIG = {
     "Tren Araucanía": {
         "folder_candidates": ["perfil_ta", "perfil_tren_araucania", ".perfil_ta"],
-        "description": "Base de boletos vendidos del servicio Tren Araucanía.",
+        "description": "Base de pasajeros del servicio Tren Araucanía (boletos vendidos).",
     },
 }
 
@@ -1982,8 +1982,8 @@ TA_SENTIDO_LABELS = {
 
 # Orden geográfico Victoria (norte) → Pitrufquén (sur). Hardcodeado por las
 # mismas razones que LT: visualización consistente sin depender de CSVs externos.
-# Inferido topológicamente desde los pares O-D del CSV (consistencia perfecta,
-# cero pares O-D apareciendo en ambos sentidos).
+# Orden confirmado por la operación (v20). Nota: Instituto Claret precede a
+# Cajón en este recorrido (en v19 estaban invertidos por mi análisis topológico).
 TA_STATION_SEQUENCE_VI_FQ = [
     "Victoria",
     "Púa",
@@ -1992,8 +1992,8 @@ TA_STATION_SEQUENCE_VI_FQ = [
     "Lautaro",
     "Lautaro Centro",
     "Pillanlelbún",
-    "Cajón",
     "Instituto Claret",
+    "Cajón",
     "Temuco",
     "Padre Las Casas-Paradero",
     "Quepe",
@@ -2011,18 +2011,26 @@ TA_STATION_SEQUENCE_VI_FQ = [
 PROFILE_LPM_SERVICE_CONFIG = {
     "Llanquihue Puerto Montt": {
         "folder_candidates": ["perfil_lpm", "perfil_llanquihue_pm", ".perfil_lpm"],
-        "description": "Base de boletos vendidos del servicio Llanquihue – Puerto Montt.",
+        "description": "Base de pasajeros del servicio Llanquihue – Puerto Montt (boletos vendidos).",
     },
 }
 
 LPM_SENTIDO_LABELS: dict = {
-    # A completar cuando se suba el CSV (ej. "PM-LL", "LL-PM")
+    "LL-LP": "Llanquihue → La Paloma",
+    "LP-LL": "La Paloma → Llanquihue",
 }
 
-# Orden geográfico. Vacío por ahora; se completará al subir el primer
-# archivo de boletos. Si está vacío, el sistema cae al fallback alfabético
-# (los datos del CSV definen las estaciones presentes).
-LPM_STATION_SEQUENCE: list = []
+# Orden geográfico Llanquihue → La Paloma, confirmado por operación.
+# (El servicio se llama "Llanquihue Puerto Montt" porque La Paloma es la
+# estación que sirve a Puerto Montt.)
+LPM_STATION_SEQUENCE_LL_LP: list = [
+    "Llanquihue",
+    "Puerto Varas",
+    "Alerce",
+    "La Paloma",
+]
+# Alias para mantener compatibilidad con código v19 que usaba LPM_STATION_SEQUENCE
+LPM_STATION_SEQUENCE = LPM_STATION_SEQUENCE_LL_LP
 
 
 # ================================================================
@@ -2046,8 +2054,8 @@ PROVINCIAL_SERVICES_CONFIG = {
     },
     "Llanquihue Puerto Montt": {
         "folder_candidates": PROFILE_LPM_SERVICE_CONFIG["Llanquihue Puerto Montt"]["folder_candidates"],
-        "station_sequence_base":         LPM_STATION_SEQUENCE,
-        "station_sequence_base_sentido": "",
+        "station_sequence_base":         LPM_STATION_SEQUENCE_LL_LP,
+        "station_sequence_base_sentido": "LL-LP",
         "sentido_labels":                LPM_SENTIDO_LABELS,
     },
 }
@@ -3778,7 +3786,7 @@ def build_lt_service_summary(month_df: pd.DataFrame,
       servicio_label, n_pasajeros, n_dias_operados, max_abordo,
       recaudacion, tarifa_media, estacion_origen_principal
 
-    Nota terminológica (v17): el término 'boletos' se reserva para la
+    Nota terminológica (v17): el término 'pasajeros' se reserva para la
     pestaña de Afluencia (es el nombre del KPI). En este resumen del
     perfil de carga usamos 'pasajeros' / 'viajes realizados'.
     """
@@ -8401,8 +8409,8 @@ def render_od_estaciones(data_path: Path, estaciones: pd.DataFrame):
 # 32b. RENDERER — Perfil de Carga Laja Talcahuano (v16)
 # ================================================================
 def _build_lt_passenger_distribution(month_df: pd.DataFrame) -> pd.DataFrame:
-    """Distribución por tipo de pasajero (boletos y % y tarifa media)."""
-    cols = ["tipo_pasajero", "boletos", "porcentaje", "tarifa_media"]
+    """Distribución por tipo de pasajero (pasajeros, % y tarifa media)."""
+    cols = ["tipo_pasajero", "pasajeros", "porcentaje", "tarifa_media"]
     if month_df is None or month_df.empty:
         return pd.DataFrame(columns=cols)
 
@@ -8411,29 +8419,29 @@ def _build_lt_passenger_distribution(month_df: pd.DataFrame) -> pd.DataFrame:
 
     stats = (
         df.groupby("tipo_pasajero", as_index=False)
-          .agg(boletos=("tarifa_pagada", "size"),
+          .agg(pasajeros=("tarifa_pagada", "size"),
                tarifa_media=("tarifa_pagada", "mean"))
     )
-    total = float(stats["boletos"].sum())
-    stats["porcentaje"] = (stats["boletos"].astype(float) / total * 100.0) if total > 0 else 0.0
+    total = float(stats["pasajeros"].sum())
+    stats["porcentaje"] = (stats["pasajeros"].astype(float) / total * 100.0) if total > 0 else 0.0
 
     base = pd.DataFrame({"tipo_pasajero": LT_PASSENGER_TYPE_ORDER})
     out = base.merge(stats, on="tipo_pasajero", how="left")
-    out["boletos"]      = out["boletos"].fillna(0).astype(int)
+    out["pasajeros"]      = out["pasajeros"].fillna(0).astype(int)
     out["porcentaje"]   = out["porcentaje"].fillna(0.0)
     out["tarifa_media"] = out["tarifa_media"]
     return out[cols]
 
 
 def _build_lt_monthly_evolution(full_df: pd.DataFrame) -> pd.DataFrame:
-    """Evolución por mes: boletos totales, recaudación, tarifa promedio."""
-    cols = ["mes_iso", "mes_label", "boletos", "recaudacion", "tarifa_media"]
+    """Evolución por mes: pasajeros totales, recaudación, tarifa promedio."""
+    cols = ["mes_iso", "mes_label", "pasajeros", "recaudacion", "tarifa_media"]
     if full_df is None or full_df.empty:
         return pd.DataFrame(columns=cols)
 
     grp = (
         full_df.groupby("mes_iso", as_index=False)
-        .agg(boletos=("tarifa_pagada", "size"),
+        .agg(pasajeros=("tarifa_pagada", "size"),
              recaudacion=("tarifa_pagada", "sum"),
              tarifa_media=("tarifa_pagada", "mean"))
         .sort_values("mes_iso")
@@ -8445,16 +8453,16 @@ def _build_lt_monthly_evolution(full_df: pd.DataFrame) -> pd.DataFrame:
 def _build_lt_kpi_comparison(month_df: pd.DataFrame, kpis_df: pd.DataFrame,
                               servicio: str, mes_iso: str) -> dict | None:
     """
-    Compara boletos vendidos (del CSV) vs KPI de afluencia declarado
+    Compara pasajeros (del CSV) vs KPI de afluencia declarado
     (de kpis.csv) para Laja Talcahuano en el mes.
 
-    Retorna dict con: kpi_valor, kpi_meta, boletos_csv, diff_abs, diff_pct
+    Retorna dict con: kpi_valor, kpi_meta, pasajeros_csv, diff_abs, diff_pct
     o None si no hay KPI de afluencia disponible.
     """
     if kpis_df is None or kpis_df.empty or month_df is None or month_df.empty:
         return None
 
-    boletos_csv = int(len(month_df))
+    pasajeros_csv = int(len(month_df))
 
     # Buscar KPI con nombre que contenga "afluencia" o "pasajeros transportados"
     kdf = kpis_df.copy()
@@ -8463,17 +8471,17 @@ def _build_lt_kpi_comparison(month_df: pd.DataFrame, kpis_df: pd.DataFrame,
     kdf = kdf[kdf["periodo"].astype(str).str[:7] == str(mes_iso)[:7]]
 
     if kdf.empty:
-        return {"boletos_csv": boletos_csv, "kpi_valor": None, "kpi_meta": None,
+        return {"pasajeros_csv": pasajeros_csv, "kpi_valor": None, "kpi_meta": None,
                 "kpi_nombre": None, "diff_abs": None, "diff_pct": None}
 
     # Priorizar coincidencia con "afluencia" o "pasajeros"
     candidates = kdf[
         kdf["nombre_norm"].str.contains("afluencia", regex=False, na=False) |
         kdf["nombre_norm"].str.contains("pasajeros", regex=False, na=False) |
-        kdf["nombre_norm"].str.contains("boletos", regex=False, na=False)
+        kdf["nombre_norm"].str.contains("pasajeros", regex=False, na=False)
     ]
     if candidates.empty:
-        return {"boletos_csv": boletos_csv, "kpi_valor": None, "kpi_meta": None,
+        return {"pasajeros_csv": pasajeros_csv, "kpi_valor": None, "kpi_meta": None,
                 "kpi_nombre": None, "diff_abs": None, "diff_pct": None}
 
     row = candidates.iloc[0]
@@ -8482,14 +8490,14 @@ def _build_lt_kpi_comparison(month_df: pd.DataFrame, kpis_df: pd.DataFrame,
     kpi_nombre = str(row.get("nombre", ""))
 
     if pd.isna(kpi_valor):
-        return {"boletos_csv": boletos_csv, "kpi_valor": None, "kpi_meta": kpi_meta,
+        return {"pasajeros_csv": pasajeros_csv, "kpi_valor": None, "kpi_meta": kpi_meta,
                 "kpi_nombre": kpi_nombre, "diff_abs": None, "diff_pct": None}
 
-    diff_abs = boletos_csv - float(kpi_valor)
+    diff_abs = pasajeros_csv - float(kpi_valor)
     diff_pct = (diff_abs / float(kpi_valor) * 100.0) if float(kpi_valor) != 0 else None
 
     return {
-        "boletos_csv": boletos_csv,
+        "pasajeros_csv": pasajeros_csv,
         "kpi_valor":   float(kpi_valor),
         "kpi_meta":    float(kpi_meta) if pd.notna(kpi_meta) else None,
         "kpi_nombre":  kpi_nombre,
@@ -8511,20 +8519,20 @@ def _build_lt_top_stations_chart(month_df: pd.DataFrame,
         .value_counts().head(top_n)
         .reset_index()
     )
-    series.columns = ["estacion", "boletos"]
+    series.columns = ["estacion", "pasajeros"]
     if series.empty:
         return None
 
-    series = series.sort_values("boletos", ascending=True)  # Para que la mayor quede arriba
+    series = series.sort_values("pasajeros", ascending=True)  # Para que la mayor quede arriba
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=series["boletos"].tolist(),
+        x=series["pasajeros"].tolist(),
         y=series["estacion"].tolist(),
         orientation="h",
         marker_color=color,
-        text=[fmt_pax(v) for v in series["boletos"].tolist()],
+        text=[fmt_pax(v) for v in series["pasajeros"].tolist()],
         textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Boletos: %{x:,.0f}<extra></extra>",
+        hovertemplate="<b>%{y}</b><br>Pasajeros: %{x:,.0f}<extra></extra>",
     ))
     fig.update_layout(
         title=title,
@@ -8535,7 +8543,7 @@ def _build_lt_top_stations_chart(month_df: pd.DataFrame,
         title_font=dict(color=EFE_BLUE, size=PLOT_TITLE_SIZE),
         showlegend=False,
     )
-    fig.update_xaxes(title="Boletos", gridcolor="#E8EEF4")
+    fig.update_xaxes(title="Pasajeros", gridcolor="#E8EEF4")
     fig.update_yaxes(title="")
     return fig
 
@@ -8624,7 +8632,7 @@ def render_perfil_carga_provincial(service_name: str, data_path: Path,
     Tres tabs:
       📅 Análisis diario   — perfil por fecha + sentido + servicio
       📊 Promedio mensual  — perfil agregado del mes (total o promedio diario)
-      🎫 Afluencia / KPI    — comparación de boletos vendidos vs KPI declarado
+      🎫 Afluencia / KPI    — comparación de pasajeros vs KPI declarado
     """
     diag_checkpoint("RENDER_PROVINCIAL_PERFIL_BEGIN", srv=service_name)
     st.markdown("<div class='content-panel'><div class='section-shell'>", unsafe_allow_html=True)
@@ -8640,13 +8648,13 @@ def render_perfil_carga_provincial(service_name: str, data_path: Path,
         sentidos_legibles = " y ".join(sent_labels.values())
         subtitle = (
             f"Análisis mensual del perfil de carga por servicio y "
-            f"comparación de afluencia (boletos vendidos) del servicio "
+            f"comparación mensual de afluencia (pasajeros) del servicio "
             f"{sentidos_legibles}."
         )
     else:
         subtitle = (
             f"Análisis mensual del perfil de carga por servicio y "
-            f"comparación de afluencia (boletos vendidos)."
+            f"comparación mensual de afluencia (pasajeros)."
         )
     st.markdown(
         f"<div class='section-subtitle'>{subtitle}</div>",
@@ -8655,7 +8663,7 @@ def render_perfil_carga_provincial(service_name: str, data_path: Path,
 
     # Cargar dataset completo (cacheado)
     try:
-        with st.spinner("Cargando base de boletos de Laja Talcahuano…"):
+        with st.spinner(f"Cargando base de pasajeros del servicio {service_name}…"):
             full_df, folder_path, archivos_cargados, status = load_lt_full_dataset(
                 service_name, str(data_path),
             )
@@ -8669,7 +8677,7 @@ def render_perfil_carga_provincial(service_name: str, data_path: Path,
         folder_name = PROFILE_LT_SERVICE_CONFIG[service_name]["folder_candidates"][0]
         render_empty_state(
             f"Sin datos en {folder_name}",
-            "Agregue archivos CSV de boletos con las columnas: "
+            "Agregue archivos CSV de pasajeros con las columnas: "
             "fecha_viaje, estacion_origen, estacion_destino, sentido_viaje, "
             "servicio_asignado, tarifa_pagada, tipo_pasajero.",
             icon="📂",
@@ -8686,7 +8694,7 @@ def render_perfil_carga_provincial(service_name: str, data_path: Path,
     tab_diario, tab_mensual, tab_afluencia = st.tabs([
         "📅 Análisis diario",
         "📊 Promedio mensual",
-        "🎫 Afluencia / Boletos vendidos",
+        "🎫 Afluencia / Pasajeros vendidos",
     ])
 
     with tab_diario:
@@ -8753,7 +8761,7 @@ def _render_lt_tab_diario(full_df: pd.DataFrame, service_name: str,
     Tab Análisis diario: selecciona una fecha + sentido + servicio y muestra
     el perfil de carga de ese servicio operado ese día específico.
 
-    Terminología v17: usamos 'pasajeros' / 'viajes' (el término 'boletos'
+    Terminología v17: usamos 'pasajeros' / 'viajes' (el término 'pasajeros'
     se reserva para la pestaña de Afluencia / KPI).
     v19: parametrizado vía PROVINCIAL_SERVICES_CONFIG (LT/TA/LPM).
     """
@@ -9284,7 +9292,7 @@ def _render_lt_tab_mensual(full_df: pd.DataFrame, service_name: str,
 
 def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
                               kpis_df: pd.DataFrame):
-    """Tab 2: afluencia mensual / boletos vendidos + comparación con KPI.
+    """Tab 2: afluencia mensual / pasajeros + comparación con KPI declarado.
 
     v19: parametrizado por service_name (LT/TA/LPM). Las etiquetas de
     sentido se resuelven desde PROVINCIAL_SERVICES_CONFIG.
@@ -9294,7 +9302,7 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
     sentido_labels = _svc_cfg.get("sentido_labels") or ALL_PROVINCIAL_SENTIDO_LABELS
 
     st.markdown(
-        f"<div class='section-subtitle'>Comparación de boletos vendidos mes "
+        f"<div class='section-subtitle'>Comparación de pasajeros mes "
         f"a mes y contraste con el KPI de afluencia reportado oficialmente "
         f"para {service_name}.</div>",
         unsafe_allow_html=True,
@@ -9321,20 +9329,20 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
         return
 
     # ---- Tarjetas resumen del mes con comparativos ----
-    boletos = int(len(month_df))
+    pax_mes = int(len(month_df))
     recaud  = float(pd.to_numeric(month_df["tarifa_pagada"], errors="coerce").fillna(0).sum())
-    tarifa_m = recaud / boletos if boletos > 0 else 0
+    tarifa_m = recaud / pax_mes if pax_mes > 0 else 0
 
     # Mes anterior (si hay)
-    boletos_prev = None
+    pasajeros_prev = None
     diff_vs_prev = None
     try:
         idx_curr = meses_disp.index(mes_sel)
         if idx_curr > 0:
             mes_prev = meses_disp[idx_curr - 1]
-            boletos_prev = int(evolucion.loc[evolucion["mes_iso"] == mes_prev, "boletos"].iloc[0])
-            if boletos_prev > 0:
-                diff_vs_prev = (boletos - boletos_prev) / boletos_prev * 100.0
+            pasajeros_prev = int(evolucion.loc[evolucion["mes_iso"] == mes_prev, "pasajeros"].iloc[0])
+            if pasajeros_prev > 0:
+                diff_vs_prev = (pax_mes - pasajeros_prev) / pasajeros_prev * 100.0
     except (ValueError, IndexError):
         pass
 
@@ -9353,7 +9361,7 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
             f"<div class='efe-summary-value' style='color:{color};'>"
             f"{arrow} {sign}{diff_vs_prev:.1f}%</div>"
             f"<div class='efe-summary-sub'>"
-            f"vs {month_period_to_label(meses_disp[idx_curr - 1])}: {fmt_pax(boletos_prev)}</div>"
+            f"vs {month_period_to_label(meses_disp[idx_curr - 1])}: {fmt_pax(pasajeros_prev)}</div>"
             f"</div>"
         )
     else:
@@ -9395,8 +9403,8 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
     cards_html = (
         f"<div class='efe-summary-row'>"
         f"<div class='efe-summary-card' style='border-left:4px solid {EFE_BLUE};'>"
-        f"<div class='efe-summary-label'>Boletos del mes (CSV)</div>"
-        f"<div class='efe-summary-value'>{fmt_pax(boletos)}</div>"
+        f"<div class='efe-summary-label'>Pasajeros del mes (CSV)</div>"
+        f"<div class='efe-summary-value'>{fmt_pax(pax_mes)}</div>"
         f"<div class='efe-summary-sub'>Suma de filas del CSV</div>"
         f"</div>"
         f"{card_diff_html}"
@@ -9413,18 +9421,18 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
     # ---- Gráfico evolución mensual con marcador de KPI declarado ----
     st.markdown(
         "<div class='section-title' style='font-size:0.95rem; margin-top:0.6rem;'>"
-        "Evolución mensual de boletos vendidos</div>",
+        "Evolución mensual de pasajeros</div>",
         unsafe_allow_html=True,
     )
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=evolucion["mes_label"].tolist(),
-        y=evolucion["boletos"].tolist(),
+        y=evolucion["pasajeros"].tolist(),
         marker_color=EFE_BLUE,
-        text=[fmt_pax(v) for v in evolucion["boletos"].tolist()],
+        text=[fmt_pax(v) for v in evolucion["pasajeros"].tolist()],
         textposition="outside",
-        name="Boletos (CSV)",
-        hovertemplate="<b>%{x}</b><br>Boletos: %{y:,.0f}<extra></extra>",
+        name="Pasajeros (CSV)",
+        hovertemplate="<b>%{x}</b><br>Pasajeros: %{y:,.0f}<extra></extra>",
     ))
 
     # Superponer KPI declarado por mes (si existe)
@@ -9436,7 +9444,7 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
             kdf = kdf[
                 kdf["nombre_norm"].str.contains("afluencia", regex=False, na=False) |
                 kdf["nombre_norm"].str.contains("pasajeros", regex=False, na=False) |
-                kdf["nombre_norm"].str.contains("boletos", regex=False, na=False)
+                kdf["nombre_norm"].str.contains("pasajeros", regex=False, na=False)
             ]
             if not kdf.empty:
                 kdf["valor"] = pd.to_numeric(kdf["valor"], errors="coerce")
@@ -9466,7 +9474,7 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     fig.update_xaxes(title="", tickangle=-45)
-    fig.update_yaxes(title="Boletos vendidos", gridcolor="#E8EEF4")
+    fig.update_yaxes(title="Pasajeros", gridcolor="#E8EEF4")
     show_plot(fig, width="stretch")
 
     # ---- Distribución por tipo de pasajero (cards) ----
@@ -9489,20 +9497,20 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
     for col_box, tipo in zip(cols, LT_PASSENGER_TYPE_ORDER):
         row = rows_by_type.get(tipo)
         if row is not None:
-            boletos_t = int(row["boletos"])
+            pax_t = int(row["pasajeros"])
             pct_t     = float(row["porcentaje"])
             tarifa_t  = row["tarifa_media"]
         else:
-            boletos_t, pct_t, tarifa_t = 0, 0.0, np.nan
+            pax_t, pct_t, tarifa_t = 0, 0.0, np.nan
 
         tarifa_label = fmt_number(tarifa_t, "CLP") if pd.notna(tarifa_t) else "-"
-        empty_cls = " is-empty" if (boletos_t == 0 and not pd.notna(tarifa_t)) else ""
+        empty_cls = " is-empty" if (pax_t == 0 and not pd.notna(tarifa_t)) else ""
         color_cls = type_slug.get(tipo, "")
 
         card = (
             f"<div class='pax-type-card {color_cls}{empty_cls}'>"
             f"  <div class='pax-card-title'>{tipo}</div>"
-            f"  <div class='pax-card-value'>{fmt_pax(boletos_t)}</div>"
+            f"  <div class='pax-card-value'>{fmt_pax(pax_t)}</div>"
             f"  <div class='pax-card-pct'>{fmt_pct(pct_t)} del mes</div>"
             f"  <div class='pax-card-fare'>Tarifa media: {tarifa_label}</div>"
             f"</div>"
@@ -9513,24 +9521,24 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
     # ---- Distribución por sentido ----
     st.markdown(
         "<div class='section-title' style='font-size:0.95rem; margin-top:0.7rem;'>"
-        f"Boletos por sentido — {month_period_to_label(mes_sel)}</div>",
+        f"Pasajeros por sentido — {month_period_to_label(mes_sel)}</div>",
         unsafe_allow_html=True,
     )
     sent_grp = (
         month_df.groupby("sentido_viaje", as_index=False)
-        .agg(boletos=("tarifa_pagada", "size"),
+        .agg(pasajeros=("tarifa_pagada", "size"),
              recaudacion=("tarifa_pagada", "sum"))
     )
     sent_grp["label"] = sent_grp["sentido_viaje"].map(sentido_labels).fillna(sent_grp["sentido_viaje"])
-    sent_grp = sent_grp.sort_values("boletos", ascending=False)
+    sent_grp = sent_grp.sort_values("pasajeros", ascending=False)
     c_left, c_right = st.columns(2)
     for col_box, (_, r) in zip([c_left, c_right], sent_grp.iterrows()):
         with col_box:
-            pct = float(r["boletos"]) / max(boletos, 1) * 100.0
+            pct = float(r["pasajeros"]) / max(pax_mes, 1) * 100.0
             st.markdown(
                 f"<div class='efe-card' style='border-left:5px solid {EFE_BLUE};'>"
                 f"<div class='efe-card-title'>{r['label']}</div>"
-                f"<div class='efe-card-value'>{fmt_pax(r['boletos'])}</div>"
+                f"<div class='efe-card-value'>{fmt_pax(r['pasajeros'])}</div>"
                 f"<div class='efe-card-meta'>{pct:.1f}% del mes</div>"
                 f"<div class='efe-card-delta'>Recaudación: {fmt_number(r['recaudacion'], 'CLP')}</div>"
                 f"</div>",
