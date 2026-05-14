@@ -60,8 +60,8 @@ import streamlit.components.v1 as components
 
 # Identificador de versión visible en la UI para confirmar qué archivo
 # está corriendo en producción. Se incrementa con cada release.
-APP_VERSION = "v17-2026-05-13-lt-diario-mensual"
-APP_VERSION_HASH = "e9a2d4c7810f"
+APP_VERSION = "v18-2026-05-13-lt-stations-hardcoded"
+APP_VERSION_HASH = "5374cfe63517"
 
 # Ruta del log diagnóstico. En Streamlit Cloud, /tmp se borra al reiniciar
 # el contenedor — pero el archivo SÍ persiste durante la sesión del usuario,
@@ -1926,6 +1926,40 @@ LT_SENTIDO_LABELS = {
     "TH-LJ": "Talcahuano → Laja",
 }
 
+# ----------------------------------------------------------------
+# Secuencia oficial de estaciones del servicio Laja Talcahuano (v18)
+# ----------------------------------------------------------------
+# Orden definido por la operación, sentido TH-LJ (Talcahuano → Laja).
+# Hardcodeado dentro del código para evitar problemas de visualización
+# que se producían al leerlo desde estaciones.csv.
+# Para el sentido inverso (LJ-TH) se usa la lista invertida.
+# El match con los nombres del CSV de boletos se hace vía normalize_text
+# (que tolera diferencias de tildes y mayúsculas/minúsculas).
+LT_STATION_SEQUENCE_TH_LJ = [
+    "Mercado",
+    "El Arenal",
+    "Hospital Las Higueras",
+    "Los Condores",
+    "UTF Santa Maria",
+    "Lorenzo Arenas",
+    "Concepción",
+    "Chiguayante",
+    "Pedro Medina",
+    "Manquimavida",
+    "La Leonera",
+    "Hualqui",
+    "Quilacoya",
+    "San Miguel",
+    "Unihue",
+    "Valle Chanco",
+    "Los Acacios",
+    "Talcamavida",
+    "Gomero",
+    "Buenuraqui",
+    "San Rosendo",
+    "Laja",
+]
+
 
 def _resolve_folder(service_name: str, config_dict: dict, data_path: Path) -> tuple[list, str]:
     """Devuelve (lista_archivos_csv, ruta_carpeta) buscando candidatos."""
@@ -2928,56 +2962,37 @@ def get_lt_available_months(service_name: str, data_path_str: str) -> list:
 
 
 @st.cache_data(ttl=900, show_spinner=False, max_entries=8)
-def get_lt_station_sequence(service_name: str, estaciones_df_serialized: str | None,
+def get_lt_station_sequence(service_name: str,
+                             estaciones_df_serialized: str | None = None,
                              sentido: str = "TH-LJ") -> list:
     """
-    Retorna la secuencia ordenada de estaciones para el servicio Laja
-    Talcahuano en el sentido pedido.
+    Retorna la secuencia ordenada y FIJA de estaciones del servicio
+    Laja Talcahuano para el sentido pedido.
 
-    Si `estaciones.csv` tiene filas con `servicio=Laja Talcahuano` y
-    `orden_trazado`, usa esa secuencia (asumiendo orden Talcahuano → Laja
-    como base, según se informó en el repo). Si no las tiene, retorna
-    lista vacía y el caller usa el orden alfabético del dataset como
-    fallback.
+    v18: el orden está hardcodeado en `LT_STATION_SEQUENCE_TH_LJ` para
+    evitar problemas de visualización producidos al leerlo desde
+    `estaciones.csv`. El argumento `estaciones_df_serialized` se conserva
+    en la firma por retrocompatibilidad pero ya NO se utiliza.
 
-    El argumento `estaciones_df_serialized` debe ser un string JSON de las
-    columnas relevantes para que el caché funcione (DataFrames no son
-    hashables). Lo pasamos así desde el caller.
+    Parámetros:
+      service_name : nombre del servicio (debe ser "Laja Talcahuano";
+                     cualquier otro valor retorna lista vacía).
+      estaciones_df_serialized : IGNORADO (se mantiene la firma para no
+                     romper llamadas existentes).
+      sentido      : "TH-LJ" → orden base (Talcahuano → Laja)
+                     "LJ-TH" → orden invertido (Laja → Talcahuano)
+
+    Las 22 estaciones siempre se retornan, en el orden definido.
     """
-    if not estaciones_df_serialized:
-        return []
-    try:
-        import json
-        records = json.loads(estaciones_df_serialized)
-        df = pd.DataFrame(records)
-    except Exception:
+    if str(service_name) != "Laja Talcahuano":
         return []
 
-    if df.empty or "estacion" not in df.columns:
-        return []
-
-    # Filtrar por servicio
-    if "servicio" in df.columns:
-        df = df[df["servicio"].astype(str) == str(service_name)].copy()
-    # Filtrar activas si existe el flag
-    if "activa" in df.columns:
-        df = df[pd.to_numeric(df["activa"], errors="coerce").fillna(0).astype(int) == 1]
-
-    if df.empty:
-        return []
-
-    # Orden Talcahuano → Laja (base)
-    if "orden_trazado" in df.columns:
-        df["orden_trazado"] = pd.to_numeric(df["orden_trazado"], errors="coerce")
-        df = df.dropna(subset=["orden_trazado"]).sort_values("orden_trazado")
-
-    estaciones_th_lj = df["estacion"].astype(str).str.strip().tolist()
-
+    base_seq = list(LT_STATION_SEQUENCE_TH_LJ)
     if sentido == "TH-LJ":
-        return estaciones_th_lj
+        return base_seq
     elif sentido == "LJ-TH":
-        return list(reversed(estaciones_th_lj))
-    return estaciones_th_lj
+        return list(reversed(base_seq))
+    return base_seq
 
 
 # ================================================================
@@ -3507,23 +3522,45 @@ LT_PROFILE_COLS = [
 def build_lt_service_profile(service_df: pd.DataFrame,
                               station_order_hint: list | None = None) -> pd.DataFrame:
     """
-    Reconstruye un perfil de carga por estación a partir de los boletos
+    Reconstruye un perfil de carga por estación a partir de los viajes
     de UN servicio Laja Talcahuano.
 
-    Diferencia con build_transactional_service_profile:
-      - Schema distinto (estacion_origen / estacion_destino vs origen / destino)
-      - SIN timestamps → no podemos derivar orden temporal, dependemos del
-        orden externo (station_order_hint que viene de estaciones.csv)
+    v18 — comportamiento:
+      • Si viene `station_order_hint` con N estaciones, el perfil de salida
+        SIEMPRE contiene esas N filas en ese orden, AUNQUE algunas no
+        tengan viajes en el servicio (aparecen con B_embarque=0, D_bajadas=0).
+        Esto permite visualizar siempre el tramo completo del servicio
+        Laja Talcahuano (22 estaciones).
+      • Si `station_order_hint` es None o vacío, fallback legacy: solo se
+        incluyen las estaciones que aparecen en los datos, en orden
+        alfabético. Este camino casi no se usa en producción porque
+        `get_lt_station_sequence` ahora siempre retorna la lista hardcodeada.
 
     Implementación:
-      1. Orden de estaciones: si viene hint válido lo usamos; si no,
-         derivamos uno alfabético (no ideal pero permite seguir).
-      2. Para cada boleto: índice de origen y destino en la secuencia.
-      3. Agregaciones: embarques = nº boletos con origen=estación,
-         bajadas = nº boletos con destino=estación.
-      4. A bordo: cumsum simple sobre arrays numpy.
+      1. order_list = hint si viene; si no, alfabético desde el df.
+      2. Mapeo origen/destino → índice usando normalize_text para tolerar
+         diferencias de mayúsculas/tildes entre el hint canónico y el CSV.
+      3. Agregaciones B = nº viajes con origen=estación, D = nº con destino.
+      4. A bordo: cumsum sobre arrays numpy.
+
+    Las estaciones del hint que no estén en los datos del CSV simplemente
+    quedan con B=0 y D=0 — el cumsum sigue funcionando porque sumar 0
+    preserva el valor anterior.
     """
+    # --- Caso totalmente vacío con hint: devolver perfil de 22 filas en 0
     if service_df is None or service_df.empty:
+        if station_order_hint:
+            n = len(station_order_hint)
+            return pd.DataFrame({
+                "estacion":       list(station_order_hint),
+                "B_embarque":     [0] * n,
+                "D_bajadas":      [0] * n,
+                "L_in_abordo":    [0] * n,
+                "L_out_abordo":   [0] * n,
+                "servicio_label": ["-"] * n,
+                "sentido":        [""] * n,
+                "sentido_label":  [""] * n,
+            })[LT_PROFILE_COLS].copy()
         return pd.DataFrame(columns=LT_PROFILE_COLS)
 
     df = service_df.copy()
@@ -3545,35 +3582,25 @@ def build_lt_service_profile(service_df: pd.DataFrame,
     sentido_label  = _first_str("sentido_label") or LT_SENTIDO_LABELS.get(sentido, sentido)
     servicio_label = _first_str("servicio_label") or "-"
 
-    # --- Determinar orden de estaciones --------------------------------
-    stations_present = list(dict.fromkeys(
-        df.loc[df["estacion_origen"]  != "", "estacion_origen"].astype(str).tolist() +
-        df.loc[df["estacion_destino"] != "", "estacion_destino"].astype(str).tolist()
-    ))
-
+    # --- v18: order_list SIEMPRE es el hint completo si viene definido ---
+    # Esto garantiza que el tramo se muestre completo (22 estaciones)
+    # aunque algunos servicios no se detengan en todas.
     if station_order_hint:
-        # Mapear hint (que viene de estaciones.csv) a estaciones presentes
-        # usando normalización para tolerar diferencias de tildes/case.
-        norm_to_actual: dict[str, str] = {}
-        for s in stations_present:
-            clean = str(s).strip()
-            if clean:
-                norm_to_actual.setdefault(normalize_text(clean), clean)
-        ordered_from_hint = [
-            norm_to_actual[normalize_text(s)]
-            for s in station_order_hint
-            if normalize_text(s) in norm_to_actual
-        ]
-        # Extras (estaciones del CSV que no están en hint) al final
-        extras = [s for s in stations_present if s not in ordered_from_hint]
-        order_list = ordered_from_hint + extras
+        order_list = list(station_order_hint)
     else:
+        # Legacy fallback (camino casi no usado en producción tras v18)
+        stations_present = list(dict.fromkeys(
+            df.loc[df["estacion_origen"]  != "", "estacion_origen"].astype(str).tolist() +
+            df.loc[df["estacion_destino"] != "", "estacion_destino"].astype(str).tolist()
+        ))
         order_list = sorted(stations_present)
 
     if not order_list:
         return pd.DataFrame(columns=LT_PROFILE_COLS)
 
     # --- Asignar índices ----------------------------------------------
+    # station_key es normalize_text(estacion) para que el CSV (MAYÚSCULAS
+    # con tildes) y la lista canónica (Title Case sin tildes) hagan match.
     order_df = pd.DataFrame({
         "estacion":    order_list,
         "station_idx": range(len(order_list)),
@@ -3592,6 +3619,8 @@ def build_lt_service_profile(service_df: pd.DataFrame,
         valid["destino_idx"] = valid["destino_idx"].astype(int)
 
     # --- Agregaciones por estación ------------------------------------
+    # Las estaciones del hint sin viajes terminan con B=0/D=0 gracias al
+    # merge LEFT + fillna(0). Esto preserva el invariante del cumsum.
     if valid.empty:
         profile = order_df[["estacion", "station_idx"]].copy()
         profile["B_embarque"]   = 0
@@ -8518,19 +8547,11 @@ def render_perfil_carga_lt(data_path: Path, kpis_df: pd.DataFrame,
         st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
-    # Serializar estaciones para get_lt_station_sequence (debe ser hashable)
-    import json
+    # v18: la secuencia de estaciones está hardcodeada en
+    # LT_STATION_SEQUENCE_TH_LJ; ya no se serializa estaciones.csv.
+    # Mantenemos el argumento `estaciones_serial=None` en los tabs por
+    # compatibilidad de firma (callees lo ignoran).
     estaciones_serial = None
-    if estaciones_df is not None and not estaciones_df.empty:
-        try:
-            est_cols = [c for c in ["servicio", "estacion", "orden_trazado", "activa"]
-                        if c in estaciones_df.columns]
-            estaciones_serial = json.dumps(
-                estaciones_df[est_cols].to_dict("records"),
-                default=str,
-            )
-        except Exception:
-            estaciones_serial = None
 
     tab_diario, tab_mensual, tab_afluencia = st.tabs([
         "📅 Análisis diario",
@@ -8803,15 +8824,11 @@ def _render_lt_tab_diario(full_df: pd.DataFrame, service_name: str,
     ref_parts = []
     if archivos_cargados:
         ref_parts.append(f"Archivos cargados: {len(archivos_cargados)} en {folder_path}")
-    if not station_order_hint:
+    # v18: secuencia hardcodeada → siempre se muestran las 22 estaciones
+    if station_order_hint:
         ref_parts.append(
-            "⚠ Sin orden oficial en estaciones.csv para este servicio · "
-            "se usa orden alfabético"
-        )
-    else:
-        ref_parts.append(
-            f"Orden de estaciones desde estaciones.csv "
-            f"({len(station_order_hint)} estaciones)"
+            f"Tramo completo: {len(station_order_hint)} estaciones · "
+            f"orden fijo del servicio"
         )
     if ref_parts:
         st.caption(" · ".join(ref_parts))
@@ -9092,15 +9109,11 @@ def _render_lt_tab_mensual(full_df: pd.DataFrame, service_name: str,
     ref_parts = []
     if archivos_cargados:
         ref_parts.append(f"Archivos cargados: {len(archivos_cargados)} en {folder_path}")
-    if not station_order_hint:
+    # v18: secuencia hardcodeada → siempre se muestran las 22 estaciones
+    if station_order_hint:
         ref_parts.append(
-            "⚠ Sin orden oficial en estaciones.csv para este servicio · "
-            "se usa orden alfabético"
-        )
-    else:
-        ref_parts.append(
-            f"Orden de estaciones desde estaciones.csv "
-            f"({len(station_order_hint)} estaciones)"
+            f"Tramo completo: {len(station_order_hint)} estaciones · "
+            f"orden fijo del servicio"
         )
     if ref_parts:
         st.caption(" · ".join(ref_parts))
