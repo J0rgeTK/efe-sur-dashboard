@@ -60,8 +60,8 @@ import streamlit.components.v1 as components
 
 # Identificador de versión visible en la UI para confirmar qué archivo
 # está corriendo en producción. Se incrementa con cada release.
-APP_VERSION = "v20-2026-05-14-ta-orden-fix-lpm-pasajeros"
-APP_VERSION_HASH = "54568568b633"
+APP_VERSION = "v21-2026-05-14-exclusion-fechas-descarga"
+APP_VERSION_HASH = "893ab0e15034"
 
 # Ruta del log diagnóstico. En Streamlit Cloud, /tmp se borra al reiniciar
 # el contenedor — pero el archivo SÍ persiste durante la sesión del usuario,
@@ -4612,7 +4612,8 @@ def build_monthly_profile_tables_cached(profile_srv: str,
                                           data_path_str: str,
                                           month_period: str,
                                           linea_sel: str,
-                                          turnstile_status: str) -> tuple[dict, list, dict, pd.DataFrame]:
+                                          turnstile_status: str,
+                                          excluded_dates_str: str = "") -> tuple[dict, list, dict, pd.DataFrame]:
     """
     Versión cacheada de build_monthly_profile_tables. Recibe SOLO claves
     primitivas (strings) en lugar de DataFrames, evitando que Streamlit tenga
@@ -4620,6 +4621,10 @@ def build_monthly_profile_tables_cached(profile_srv: str,
 
     Internamente carga el slice mensual y los datos auxiliares por su cuenta
     (a través de los caches existentes get_profile_for_month, etc.).
+
+    v21: `excluded_dates_str` (fechas ISO separadas por coma) permite excluir
+    días específicos del cálculo. Al ser un string es hashable → el caché
+    distingue correctamente cada combinación de fechas excluidas.
     """
     # Cargar slice mensual desde cache
     try:
@@ -4651,6 +4656,7 @@ def build_monthly_profile_tables_cached(profile_srv: str,
     return build_monthly_profile_tables(
         perfil_month, profile_schema, profile_srv, month_period, linea_sel,
         itinerary_summary_df, service_order_df, turnstile_df, turnstile_status,
+        excluded_dates_str=excluded_dates_str,
     )
 
 
@@ -4713,10 +4719,15 @@ def build_monthly_profile_tables(perfil_df: pd.DataFrame,
                                  itinerary_summary_df: pd.DataFrame,
                                  service_order_df: pd.DataFrame,
                                  turnstile_df: pd.DataFrame,
-                                 turnstile_status: str) -> tuple[dict, list, dict, pd.DataFrame]:
+                                 turnstile_status: str,
+                                 excluded_dates_str: str = "") -> tuple[dict, list, dict, pd.DataFrame]:
     """
     Construye tablas mensuales por tipo_dia x dirección con métricas ejecutivas.
     Retorna: (tablas_dict, directions_list, monthly_metrics_dict, monthly_daily_df)
+
+    v21: `excluded_dates_str` es una lista de fechas ISO (YYYY-MM-DD) separadas
+    por coma que se EXCLUYEN del cálculo de promedios/totales. Se aplica como
+    string (no lista) para ser hashable y compatible con el caché.
     """
     diag_checkpoint(
         "MONTHLY_BEGIN",
@@ -4743,6 +4754,29 @@ def build_monthly_profile_tables(perfil_df: pd.DataFrame,
     if perfil_mes.empty:
         diag_warn(f"MONTHLY_EXIT_NO_LINE_DATA: linea={linea_sel}")
         return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}, pd.DataFrame()
+
+    # v21: excluir fechas marcadas por el usuario del cálculo de promedios.
+    if excluded_dates_str:
+        try:
+            excl_dates = {
+                pd.to_datetime(s.strip()).date()
+                for s in str(excluded_dates_str).split(",")
+                if s.strip()
+            }
+            if excl_dates:
+                fecha_norm = pd.to_datetime(perfil_mes["fecha"], errors="coerce").dt.date
+                before = len(perfil_mes)
+                perfil_mes = perfil_mes.loc[~fecha_norm.isin(excl_dates)].copy()
+                diag_checkpoint(
+                    "MONTHLY_FILTRO_FECHAS_EXCLUIDAS",
+                    excluidas=len(excl_dates),
+                    filas_antes=before, filas_despues=len(perfil_mes),
+                )
+                if perfil_mes.empty:
+                    diag_warn("MONTHLY_EXIT_ALL_DATES_EXCLUDED")
+                    return {}, [], {"linea": {}, "por_sentido": {}, "por_tipo_dia": {}}, pd.DataFrame()
+        except Exception as exc:
+            diag_warn(f"MONTHLY_EXCLUDE_DATES_FAIL: {type(exc).__name__}: {exc}")
 
     directions = [
         x for x in list(dict.fromkeys(
@@ -7358,6 +7392,54 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
         )
         return
 
+    # --- v21: exclusión acumulativa de fechas del cálculo de promedios ---
+    # Fechas disponibles del mes/línea (desde el slice ya cargado).
+    fechas_mes_disp = []
+    if perfil_month is not None and not perfil_month.empty:
+        try:
+            _pm_line = perfil_month[
+                perfil_month["linea"].astype(str).str.strip() == str(linea_mes_sel)
+            ]
+            fechas_mes_disp = sorted([
+                d for d in pd.to_datetime(_pm_line["fecha"], errors="coerce")
+                              .dt.date.dropna().unique().tolist()
+            ])
+        except Exception:
+            fechas_mes_disp = []
+
+    fechas_excluidas = []
+    if len(fechas_mes_disp) > 1:
+        with st.expander(
+            f"🗓 Excluir fechas del cálculo de promedios "
+            f"({len(fechas_mes_disp)} días disponibles)",
+            expanded=False,
+        ):
+            st.caption(
+                "Seleccione una o más fechas para quitarlas del cálculo de "
+                "promedios mensuales. Útil para descartar días atípicos "
+                "(feriados, fallas de registro, eventos especiales). "
+                "La selección es acumulativa y afecta tarjetas, tendencia y tablas."
+            )
+            fechas_excluidas = st.multiselect(
+                "Fechas a excluir",
+                options=fechas_mes_disp,
+                default=[],
+                format_func=lambda d: pd.to_datetime(d).strftime("%a %d-%m-%Y"),
+                key=f"perfil_mensual_fechas_excluidas_{profile_srv}_{month_sel}_{linea_mes_sel}",
+                help="Las fechas marcadas no se consideran en el cálculo mensual.",
+            )
+            if fechas_excluidas:
+                restantes = len(fechas_mes_disp) - len(fechas_excluidas)
+                st.warning(
+                    f"⚠ {len(fechas_excluidas)} fecha(s) excluida(s). "
+                    f"El cálculo usa {restantes} de {len(fechas_mes_disp)} días."
+                )
+
+    # Serializar fechas excluidas a string ordenado (hashable para el caché)
+    excluded_dates_str = ",".join(
+        sorted(pd.to_datetime(d).strftime("%Y-%m-%d") for d in fechas_excluidas)
+    )
+
     # Detectar cambio de mes y liberar memoria agresivamente para evitar
     # que Streamlit Cloud mate el proceso por OOM (límite 1 GB).
     last_month_key = f"_last_month_processed_{profile_srv}"
@@ -7437,6 +7519,7 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
                     month_period=month_sel,
                     linea_sel=linea_mes_sel,
                     turnstile_status=turnstile_status,
+                    excluded_dates_str=excluded_dates_str,
                 )
             else:
                 # Camino fallback: pasaje directo de DataFrames (más lento)
@@ -7444,6 +7527,7 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
                     perfil_month, profile_schema, profile_srv, month_sel, linea_mes_sel,
                     itinerary_summary_df, service_order_df,
                     turnstile_df, turnstile_status,
+                    excluded_dates_str=excluded_dates_str,
                 )
             diag_checkpoint(
                 "RENDER_MENSUAL_POST_CALC",
@@ -7569,7 +7653,14 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
     )
     st.markdown(cards_html, unsafe_allow_html=True)
 
-    st.caption(f"Mes analizado: {month_period_to_label(month_sel)} · Línea: {linea_mes_sel}")
+    _excl_caption = ""
+    if excluded_dates_str:
+        _n_excl = len([s for s in excluded_dates_str.split(",") if s])
+        _excl_caption = f" · {_n_excl} fecha(s) excluida(s) del cálculo"
+    st.caption(
+        f"Mes analizado: {month_period_to_label(month_sel)} · "
+        f"Línea: {linea_mes_sel}{_excl_caption}"
+    )
 
     # ============================================================
     # TENDENCIA DIARIA + HEATMAP (siempre visibles)
@@ -7658,6 +7749,8 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
             "Detalle por tipo de día</div>",
             unsafe_allow_html=True,
         )
+        # v21: acumulador para la descarga consolidada de todas las tablas
+        download_rows = []
         for tipo_dia in ["Laboral", "Sábado", "Domingo"]:
             st.markdown(
                 f"<div class='section-title' style='font-size:0.92rem'>{tipo_dia}</div>",
@@ -7705,8 +7798,36 @@ def _render_perfil_mensual(perfil_df, profile_schema, profile_srv,
                         ).apply(lambda v: fmt_number(v, "CLP") if pd.notna(v) else "-")
                         st.dataframe(show_df, width="stretch", hide_index=True)
 
+                        # v21: acumular filas para la descarga consolidada
+                        dl = show_df.copy()
+                        dl.insert(0, "Tipo de día", tipo_dia)
+                        dl.insert(1, "Dirección", str(dir_val))
+                        download_rows.append(dl)
+
             if not showed_any:
                 st.info(f"No existen datos para {tipo_dia.lower()} con los filtros seleccionados.")
+
+        # v21: botón de descarga consolidada de todas las tablas de detalle
+        if download_rows:
+            full_detail = pd.concat(download_rows, ignore_index=True)
+            csv_bytes = full_detail.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            excl_suffix = ""
+            if excluded_dates_str:
+                n_excl = len([s for s in excluded_dates_str.split(",") if s])
+                excl_suffix = f" · {n_excl} fecha(s) excluida(s)"
+            st.download_button(
+                "⬇ Descargar detalle mensual (CSV)",
+                data=csv_bytes,
+                file_name=f"detalle_mensual_{profile_srv}_{month_sel}_{linea_mes_sel}.csv",
+                mime="text/csv",
+                key=f"download_detalle_mensual_{profile_srv}_{month_sel}_{linea_mes_sel}",
+                help=("Tabla consolidada de todos los tipos de día y "
+                      "direcciones." + excl_suffix),
+            )
+            st.caption(
+                f"La descarga incluye {len(full_detail)} fila(s) "
+                f"(tipo de día × dirección × servicio).{excl_suffix}"
+            )
     else:
         st.caption(
             "💡 Active la vista **Detalle** (selector arriba a la derecha) "
@@ -9104,6 +9225,52 @@ def _render_lt_tab_mensual(full_df: pd.DataFrame, service_name: str,
             icon="🚂",
         )
         return
+
+    # --- v21: exclusión acumulativa de fechas del cálculo de promedios ---
+    # El usuario puede ir quitando fechas específicas (feriados atípicos,
+    # días con fallas de registro, etc.). Las fechas seleccionadas en el
+    # multiselect se EXCLUYEN. El multiselect es acumulativo por naturaleza
+    # y su estado persiste en session_state durante la sesión.
+    fechas_mes_disp = sorted(month_df["fecha"].dropna().unique().tolist())
+    fechas_excluidas = []
+    if len(fechas_mes_disp) > 1:
+        with st.expander(
+            f"🗓 Excluir fechas del cálculo de promedios "
+            f"({len(fechas_mes_disp)} días disponibles)",
+            expanded=False,
+        ):
+            st.caption(
+                "Seleccione una o más fechas para quitarlas del cálculo de "
+                "promedios y totales. Útil para descartar días atípicos "
+                "(feriados, fallas de registro, eventos especiales). "
+                "La selección es acumulativa."
+            )
+            fechas_excluidas = st.multiselect(
+                "Fechas a excluir",
+                options=fechas_mes_disp,
+                default=[],
+                format_func=lambda d: pd.to_datetime(d).strftime("%a %d-%m-%Y"),
+                key=f"lt_mensual_fechas_excluidas_{mes_sel}_{sentido_sel}",
+                help="Las fechas marcadas no se consideran en promedios ni totales.",
+            )
+            if fechas_excluidas:
+                fechas_restantes = len(fechas_mes_disp) - len(fechas_excluidas)
+                st.warning(
+                    f"⚠ {len(fechas_excluidas)} fecha(s) excluida(s). "
+                    f"El cálculo usa {fechas_restantes} de {len(fechas_mes_disp)} días."
+                )
+
+    # Aplicar exclusión
+    if fechas_excluidas:
+        excl_set = set(fechas_excluidas)
+        month_df = month_df[~month_df["fecha"].isin(excl_set)].copy()
+        if month_df.empty:
+            render_empty_state(
+                "Todas las fechas fueron excluidas",
+                "Quite alguna fecha de la lista de exclusión para ver datos.",
+                icon="🗓",
+            )
+            return
 
     # Tarjetas resumen del mes/sentido (siempre en valores totales)
     n_pax = int(len(month_df))
