@@ -60,8 +60,8 @@ import streamlit.components.v1 as components
 
 # Identificador de versión visible en la UI para confirmar qué archivo
 # está corriendo en producción. Se incrementa con cada release.
-APP_VERSION = "v21-2026-05-14-exclusion-fechas-descarga"
-APP_VERSION_HASH = "893ab0e15034"
+APP_VERSION = "v22-2026-05-14-componentes-ui-tipos-pasajero"
+APP_VERSION_HASH = "c3096e1dc3c4"
 
 # Ruta del log diagnóstico. En Streamlit Cloud, /tmp se borra al reiniciar
 # el contenedor — pero el archivo SÍ persiste durante la sesión del usuario,
@@ -511,6 +511,24 @@ div[data-testid="stPlotlyChart"] {{
 }}
 .pax-type-card .pax-card-pct {{ font-size: 0.92rem; color: {TEXT_MAIN}; font-weight: 700; }}
 .pax-type-card .pax-card-fare {{ font-size: 0.82rem; color: {TEXT_MUTED}; margin-top: 0.22rem; }}
+/* v22: barra de proporción dentro de la tarjeta de tipo de pasajero */
+.pax-type-card .pax-card-bar {{
+    margin: 0.4rem 0 0.3rem; height: 7px; width: 100%;
+    background: rgba(0,40,87,0.07); border-radius: 999px; overflow: hidden;
+}}
+.pax-type-card .pax-card-bar-fill {{
+    height: 100%; border-radius: 999px;
+    transition: width 0.4s ease;
+}}
+/* v22: caja de lectura automática (insight) */
+.efe-insight-box {{
+    background: rgba(0,40,87,0.05);
+    border-left: 3px solid {EFE_BLUE};
+    border-radius: 10px;
+    padding: 0.6rem 0.85rem;
+    margin: 0.4rem 0 0.7rem;
+    font-size: 0.9rem; color: {TEXT_MAIN}; line-height: 1.45;
+}}
 .integrity-badge {{
     display: inline-flex; align-items: center; gap: 0.35rem;
     background: #ECFDF5; color: {SUCCESS}; border: 1px solid #A7F3D0;
@@ -1432,6 +1450,187 @@ def render_trend_arrow_inline(current_value, previous_value,
         f"<span class='efe-trend-arrow {cls}' "
         f"title='Variación vs período anterior'>{arrow} {sign}{diff_pct:.1f}%</span>"
     )
+
+
+# ================================================================
+# 9a-bis. COMPONENTES UI REUTILIZABLES (v22)
+# ================================================================
+# Estos helpers centralizan patrones de presentación que estaban
+# duplicados como f-strings HTML gigantes a lo largo del dashboard
+# (35+ bloques de 'efe-summary-card'). Beneficios:
+#   • Una sola fuente de verdad para el markup → estilo consistente
+#   • Menos líneas, menos errores de tipeo en HTML inline
+#   • Cambios de diseño en un solo lugar
+
+def build_summary_cards_html(cards: list[dict]) -> str:
+    """
+    Construye una fila de tarjetas resumen ('efe-summary-row') a partir de
+    una lista de descriptores. Cada card es un dict con claves:
+        label   (str)  — etiqueta superior              [requerido]
+        value   (str)  — valor central destacado         [requerido]
+        sub     (str)  — texto secundario inferior        [opcional]
+        accent  (str)  — color de la barra lateral izq.   [opcional]
+        value_color (str) — color del valor central       [opcional]
+
+    Retorna el HTML completo de la fila, listo para st.markdown(..., True).
+    """
+    if not cards:
+        return ""
+    pieces = ["<div class='efe-summary-row'>"]
+    for c in cards:
+        label = str(c.get("label", ""))
+        value = str(c.get("value", "—"))
+        sub = c.get("sub")
+        accent = c.get("accent")
+        value_color = c.get("value_color")
+
+        style = f" style='border-left:4px solid {accent};'" if accent else ""
+        val_style = f" style='color:{value_color};'" if value_color else ""
+
+        card_html = (
+            f"<div class='efe-summary-card'{style}>"
+            f"<div class='efe-summary-label'>{label}</div>"
+            f"<div class='efe-summary-value'{val_style}>{value}</div>"
+        )
+        if sub:
+            card_html += f"<div class='efe-summary-sub'>{sub}</div>"
+        card_html += "</div>"
+        pieces.append(card_html)
+    pieces.append("</div>")
+    return "".join(pieces)
+
+
+def render_summary_cards(cards: list[dict]) -> None:
+    """Atajo: construye y renderiza directamente una fila de tarjetas."""
+    html = build_summary_cards_html(cards)
+    if html:
+        st.markdown(html, unsafe_allow_html=True)
+
+
+def build_passenger_type_summary(df: pd.DataFrame,
+                                  type_order: list,
+                                  type_col: str = "tipo_pasajero",
+                                  fare_col: str = "tarifa_pagada") -> pd.DataFrame:
+    """
+    Análisis ejecutivo enriquecido de tipos de pasajero (v22).
+
+    Para cada tipo de pasajero calcula:
+        • pasajeros       — nº de viajes
+        • porcentaje      — participación sobre el total
+        • tarifa_media    — tarifa promedio pagada
+        • recaudacion     — recaudación total aportada
+        • aporte_recaud   — participación en la recaudación total
+
+    Va más allá del simple conteo: permite ver qué segmentos aportan
+    más ingreso vs cuáles más volumen (no siempre coinciden, por las
+    tarifas rebajadas de estudiante / adulto mayor).
+
+    Retorna un DataFrame ordenado según `type_order`.
+    """
+    cols = ["tipo_pasajero", "pasajeros", "porcentaje",
+            "tarifa_media", "recaudacion", "aporte_recaud"]
+    if df is None or df.empty or type_col not in df.columns:
+        return pd.DataFrame(columns=cols)
+
+    work = df.copy()
+    work[fare_col] = pd.to_numeric(work.get(fare_col), errors="coerce")
+
+    grp = (
+        work.groupby(type_col, as_index=False)
+        .agg(pasajeros=(fare_col, "size"),
+             tarifa_media=(fare_col, "mean"),
+             recaudacion=(fare_col, "sum"))
+    )
+    total_pax = float(grp["pasajeros"].sum())
+    total_rec = float(grp["recaudacion"].sum())
+    grp["porcentaje"] = (grp["pasajeros"] / total_pax * 100.0) if total_pax > 0 else 0.0
+    grp["aporte_recaud"] = (grp["recaudacion"] / total_rec * 100.0) if total_rec > 0 else 0.0
+
+    base = pd.DataFrame({type_col: type_order})
+    out = base.merge(grp, on=type_col, how="left")
+    out["pasajeros"]     = out["pasajeros"].fillna(0).astype(int)
+    out["porcentaje"]    = out["porcentaje"].fillna(0.0)
+    out["recaudacion"]   = out["recaudacion"].fillna(0.0)
+    out["aporte_recaud"] = out["aporte_recaud"].fillna(0.0)
+    out = out.rename(columns={type_col: "tipo_pasajero"})
+    return out[cols]
+
+
+def render_passenger_type_executive_summary(pax_summary: pd.DataFrame,
+                                            type_colors: dict | None = None,
+                                            titulo: str = "Análisis de tipos de pasajero") -> None:
+    """
+    Renderiza un resumen ejecutivo visual del análisis de tipos de pasajero
+    construido por `build_passenger_type_summary`.
+
+    Muestra, por cada tipo: volumen, % participación, tarifa media y aporte
+    a la recaudación — con una barra de proporción visual. Incluye una
+    lectura automática del segmento dominante en volumen vs en recaudación.
+    """
+    if pax_summary is None or pax_summary.empty:
+        render_empty_state("Sin datos de tipos de pasajero.", icon="👥")
+        return
+
+    type_colors = type_colors or {}
+
+    st.markdown(
+        f"<div class='section-title' style='font-size:0.95rem;'>{titulo}</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Lectura automática: segmento líder en volumen vs en recaudación
+    nonzero = pax_summary[pax_summary["pasajeros"] > 0]
+    if not nonzero.empty:
+        top_vol = nonzero.loc[nonzero["pasajeros"].idxmax()]
+        top_rec = nonzero.loc[nonzero["recaudacion"].idxmax()]
+        if str(top_vol["tipo_pasajero"]) != str(top_rec["tipo_pasajero"]):
+            insight = (
+                f"El segmento <b>{top_vol['tipo_pasajero']}</b> lidera en "
+                f"volumen ({fmt_pct(top_vol['porcentaje'])} de los viajes), "
+                f"pero <b>{top_rec['tipo_pasajero']}</b> aporta la mayor "
+                f"parte de la recaudación ({fmt_pct(top_rec['aporte_recaud'])})."
+            )
+        else:
+            insight = (
+                f"El segmento <b>{top_vol['tipo_pasajero']}</b> domina tanto "
+                f"en volumen ({fmt_pct(top_vol['porcentaje'])}) como en "
+                f"recaudación ({fmt_pct(top_vol['aporte_recaud'])})."
+            )
+        st.markdown(
+            f"<div class='efe-insight-box'>{insight}</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Tarjetas por tipo de pasajero
+    rows = list(pax_summary.itertuples(index=False))
+    cols = st.columns(len(rows)) if rows else []
+    for col_box, row in zip(cols, rows):
+        tipo = str(row.tipo_pasajero)
+        accent = type_colors.get(tipo, EFE_BLUE)
+        pax = int(row.pasajeros)
+        pct = float(row.porcentaje)
+        tarifa = row.tarifa_media
+        aporte = float(row.aporte_recaud)
+        tarifa_txt = fmt_number(tarifa, "CLP") if pd.notna(tarifa) else "-"
+        is_empty = " is-empty" if pax == 0 else ""
+
+        with col_box:
+            st.markdown(
+                f"<div class='pax-type-card{is_empty}' "
+                f"style='border-top:3px solid {accent};'>"
+                f"<div class='pax-card-title'>{tipo}</div>"
+                f"<div class='pax-card-value'>{fmt_pax(pax)}</div>"
+                f"<div class='pax-card-pct'>{fmt_pct(pct)} de viajes</div>"
+                f"<div class='pax-card-bar'>"
+                f"<div class='pax-card-bar-fill' "
+                f"style='width:{min(pct,100):.1f}%; background:{accent};'></div>"
+                f"</div>"
+                f"<div class='pax-card-fare'>Tarifa media: {tarifa_txt}</div>"
+                f"<div class='pax-card-fare'>Aporte recaudación: "
+                f"{fmt_pct(aporte)}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
 
 # ================================================================
@@ -8946,39 +9145,23 @@ def _render_lt_tab_diario(full_df: pd.DataFrame, service_name: str,
         )
         return
 
-    # Tarjetas resumen del día/sentido
+    # Tarjetas resumen del día/sentido (v22: componente reutilizable)
     n_pax_dia = int(len(day_dir))
     recaud_dia = float(pd.to_numeric(day_dir["tarifa_pagada"], errors="coerce").fillna(0).sum())
     tarifa_dia = recaud_dia / n_pax_dia if n_pax_dia > 0 else 0
     n_servicios_dia = int(day_dir["servicio_asignado"].nunique())
 
-    cards_html = (
-        f"<div class='efe-summary-row'>"
-        f"<div class='efe-summary-card' style='border-left:4px solid {EFE_BLUE};'>"
-        f"<div class='efe-summary-label'>Pasajeros del día</div>"
-        f"<div class='efe-summary-value'>{fmt_pax(n_pax_dia)}</div>"
-        f"<div class='efe-summary-sub'>"
-        f"{pd.to_datetime(fecha_sel).strftime('%a %d-%m-%Y')}</div>"
-        f"</div>"
-        f"<div class='efe-summary-card'>"
-        f"<div class='efe-summary-label'>Servicios operados</div>"
-        f"<div class='efe-summary-value'>{n_servicios_dia}</div>"
-        f"<div class='efe-summary-sub'>"
-        f"Prom. {n_pax_dia / max(n_servicios_dia, 1):,.0f} pax/serv</div>"
-        f"</div>"
-        f"<div class='efe-summary-card' style='border-left:4px solid {SUCCESS};'>"
-        f"<div class='efe-summary-label'>Recaudación del día</div>"
-        f"<div class='efe-summary-value'>{fmt_number(recaud_dia, 'CLP')}</div>"
-        f"<div class='efe-summary-sub'>Suma de tarifas</div>"
-        f"</div>"
-        f"<div class='efe-summary-card'>"
-        f"<div class='efe-summary-label'>Tarifa media</div>"
-        f"<div class='efe-summary-value'>{fmt_number(tarifa_dia, 'CLP')}</div>"
-        f"<div class='efe-summary-sub'>Recaudación ÷ pasajeros</div>"
-        f"</div>"
-        f"</div>"
-    )
-    st.markdown(cards_html, unsafe_allow_html=True)
+    render_summary_cards([
+        {"label": "Pasajeros del día", "value": fmt_pax(n_pax_dia),
+         "sub": pd.to_datetime(fecha_sel).strftime("%a %d-%m-%Y"),
+         "accent": EFE_BLUE},
+        {"label": "Servicios operados", "value": str(n_servicios_dia),
+         "sub": f"Prom. {n_pax_dia / max(n_servicios_dia, 1):,.0f} pax/serv"},
+        {"label": "Recaudación del día", "value": fmt_number(recaud_dia, "CLP"),
+         "sub": "Suma de tarifas", "accent": SUCCESS},
+        {"label": "Tarifa media", "value": fmt_number(tarifa_dia, "CLP"),
+         "sub": "Recaudación ÷ pasajeros"},
+    ])
 
     # Orden de estaciones según estaciones.csv para este sentido
     station_order_hint = get_lt_station_sequence(
@@ -9272,39 +9455,23 @@ def _render_lt_tab_mensual(full_df: pd.DataFrame, service_name: str,
             )
             return
 
-    # Tarjetas resumen del mes/sentido (siempre en valores totales)
+    # Tarjetas resumen del mes/sentido (v22: componente reutilizable)
     n_pax = int(len(month_df))
     recaudacion = float(pd.to_numeric(month_df["tarifa_pagada"], errors="coerce").fillna(0).sum())
     tarifa_media = recaudacion / n_pax if n_pax > 0 else 0
     n_servicios = int(month_df["servicio_asignado"].nunique())
     n_dias = int(month_df["fecha"].nunique())
 
-    cards_html = (
-        f"<div class='efe-summary-row'>"
-        f"<div class='efe-summary-card' style='border-left:4px solid {EFE_BLUE};'>"
-        f"<div class='efe-summary-label'>Pasajeros del mes</div>"
-        f"<div class='efe-summary-value'>{fmt_pax(n_pax)}</div>"
-        f"<div class='efe-summary-sub'>{n_dias} día(s) con datos</div>"
-        f"</div>"
-        f"<div class='efe-summary-card'>"
-        f"<div class='efe-summary-label'>Servicios distintos</div>"
-        f"<div class='efe-summary-value'>{n_servicios}</div>"
-        f"<div class='efe-summary-sub'>"
-        f"Prom. {n_pax / max(n_servicios, 1):,.0f} pax/serv</div>"
-        f"</div>"
-        f"<div class='efe-summary-card' style='border-left:4px solid {SUCCESS};'>"
-        f"<div class='efe-summary-label'>Recaudación</div>"
-        f"<div class='efe-summary-value'>{fmt_number(recaudacion, 'CLP')}</div>"
-        f"<div class='efe-summary-sub'>Suma de tarifa pagada</div>"
-        f"</div>"
-        f"<div class='efe-summary-card'>"
-        f"<div class='efe-summary-label'>Tarifa media</div>"
-        f"<div class='efe-summary-value'>{fmt_number(tarifa_media, 'CLP')}</div>"
-        f"<div class='efe-summary-sub'>Recaudación ÷ pasajeros</div>"
-        f"</div>"
-        f"</div>"
-    )
-    st.markdown(cards_html, unsafe_allow_html=True)
+    render_summary_cards([
+        {"label": "Pasajeros del mes", "value": fmt_pax(n_pax),
+         "sub": f"{n_dias} día(s) con datos", "accent": EFE_BLUE},
+        {"label": "Servicios distintos", "value": str(n_servicios),
+         "sub": f"Prom. {n_pax / max(n_servicios, 1):,.0f} pax/serv"},
+        {"label": "Recaudación", "value": fmt_number(recaudacion, "CLP"),
+         "sub": "Suma de tarifa pagada", "accent": SUCCESS},
+        {"label": "Tarifa media", "value": fmt_number(tarifa_media, "CLP"),
+         "sub": "Recaudación ÷ pasajeros"},
+    ])
 
     # Orden de estaciones según estaciones.csv para este sentido
     station_order_hint = get_lt_station_sequence(
@@ -9516,74 +9683,56 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
     # KPI declarado
     kpi_cmp = _build_lt_kpi_comparison(month_df, kpis_df, service_name, mes_sel)
 
-    # 4 cards
-    card_diff_html = ""
+    # 4 cards (v22: componente reutilizable con descriptores dict)
+    # Card de variación vs mes anterior
     if diff_vs_prev is not None:
         arrow = "↑" if diff_vs_prev >= 0 else "↓"
         sign = "+" if diff_vs_prev >= 0 else ""
         color = SUCCESS if diff_vs_prev >= 0 else DANGER
-        card_diff_html = (
-            f"<div class='efe-summary-card' style='border-left:4px solid {color};'>"
-            f"<div class='efe-summary-label'>Variación vs mes anterior</div>"
-            f"<div class='efe-summary-value' style='color:{color};'>"
-            f"{arrow} {sign}{diff_vs_prev:.1f}%</div>"
-            f"<div class='efe-summary-sub'>"
-            f"vs {month_period_to_label(meses_disp[idx_curr - 1])}: {fmt_pax(pasajeros_prev)}</div>"
-            f"</div>"
-        )
+        card_diff = {
+            "label": "Variación vs mes anterior",
+            "value": f"{arrow} {sign}{diff_vs_prev:.1f}%",
+            "value_color": color, "accent": color,
+            "sub": (f"vs {month_period_to_label(meses_disp[idx_curr - 1])}: "
+                    f"{fmt_pax(pasajeros_prev)}"),
+        }
     else:
-        card_diff_html = (
-            f"<div class='efe-summary-card'>"
-            f"<div class='efe-summary-label'>Variación vs mes anterior</div>"
-            f"<div class='efe-summary-value'>—</div>"
-            f"<div class='efe-summary-sub'>Sin mes previo en el dataset</div>"
-            f"</div>"
-        )
+        card_diff = {
+            "label": "Variación vs mes anterior", "value": "—",
+            "sub": "Sin mes previo en el dataset",
+        }
 
-    # Card KPI comparison
+    # Card de comparación con KPI declarado
     if kpi_cmp and kpi_cmp.get("kpi_valor") is not None:
         diff_pct_kpi = kpi_cmp.get("diff_pct")
         if diff_pct_kpi is not None:
             arrow_kpi = "↑" if diff_pct_kpi >= 0 else "↓"
             sign_kpi = "+" if diff_pct_kpi >= 0 else ""
-            color_kpi = SUCCESS if abs(diff_pct_kpi) < 5 else (WARNING if abs(diff_pct_kpi) < 15 else DANGER)
+            color_kpi = SUCCESS if abs(diff_pct_kpi) < 5 else (
+                WARNING if abs(diff_pct_kpi) < 15 else DANGER)
             diff_label = f"{arrow_kpi} {sign_kpi}{diff_pct_kpi:.1f}% vs KPI"
         else:
             color_kpi = TEXT_MUTED
             diff_label = "—"
-        card_kpi_html = (
-            f"<div class='efe-summary-card' style='border-left:4px solid {color_kpi};'>"
-            f"<div class='efe-summary-label'>KPI declarado ({kpi_cmp.get('kpi_nombre', '')})</div>"
-            f"<div class='efe-summary-value'>{fmt_pax(kpi_cmp['kpi_valor'])}</div>"
-            f"<div class='efe-summary-sub' style='color:{color_kpi}; font-weight:700;'>{diff_label}</div>"
-            f"</div>"
-        )
+        card_kpi = {
+            "label": f"KPI declarado ({kpi_cmp.get('kpi_nombre', '')})",
+            "value": fmt_pax(kpi_cmp["kpi_valor"]),
+            "sub": diff_label, "accent": color_kpi,
+        }
     else:
-        card_kpi_html = (
-            f"<div class='efe-summary-card'>"
-            f"<div class='efe-summary-label'>KPI declarado</div>"
-            f"<div class='efe-summary-value'>—</div>"
-            f"<div class='efe-summary-sub'>Sin KPI de afluencia para este mes</div>"
-            f"</div>"
-        )
+        card_kpi = {
+            "label": "KPI declarado", "value": "—",
+            "sub": "Sin KPI de afluencia para este mes",
+        }
 
-    cards_html = (
-        f"<div class='efe-summary-row'>"
-        f"<div class='efe-summary-card' style='border-left:4px solid {EFE_BLUE};'>"
-        f"<div class='efe-summary-label'>Pasajeros del mes (CSV)</div>"
-        f"<div class='efe-summary-value'>{fmt_pax(pax_mes)}</div>"
-        f"<div class='efe-summary-sub'>Suma de filas del CSV</div>"
-        f"</div>"
-        f"{card_diff_html}"
-        f"{card_kpi_html}"
-        f"<div class='efe-summary-card' style='border-left:4px solid {SUCCESS};'>"
-        f"<div class='efe-summary-label'>Recaudación del mes</div>"
-        f"<div class='efe-summary-value'>{fmt_number(recaud, 'CLP')}</div>"
-        f"<div class='efe-summary-sub'>Tarifa media: {fmt_number(tarifa_m, 'CLP')}</div>"
-        f"</div>"
-        f"</div>"
-    )
-    st.markdown(cards_html, unsafe_allow_html=True)
+    render_summary_cards([
+        {"label": "Pasajeros del mes (CSV)", "value": fmt_pax(pax_mes),
+         "sub": "Suma de filas del CSV", "accent": EFE_BLUE},
+        card_diff,
+        card_kpi,
+        {"label": "Recaudación del mes", "value": fmt_number(recaud, "CLP"),
+         "sub": f"Tarifa media: {fmt_number(tarifa_m, 'CLP')}", "accent": SUCCESS},
+    ])
 
     # ---- Gráfico evolución mensual con marcador de KPI declarado ----
     st.markdown(
@@ -9644,46 +9793,15 @@ def _render_lt_tab_afluencia(full_df: pd.DataFrame, service_name: str,
     fig.update_yaxes(title="Pasajeros", gridcolor="#E8EEF4")
     show_plot(fig, width="stretch")
 
-    # ---- Distribución por tipo de pasajero (cards) ----
-    st.markdown(
-        "<div class='section-title' style='font-size:0.95rem; margin-top:0.7rem;'>"
-        f"Distribución por tipo de pasajero — {month_period_to_label(mes_sel)}</div>",
-        unsafe_allow_html=True,
+    # ---- Análisis ejecutivo de tipos de pasajero (v22) ----
+    # Reemplaza la distribución simple por un resumen que cruza volumen,
+    # tarifa media y aporte a la recaudación, con lectura automática.
+    pax_summary = build_passenger_type_summary(month_df, LT_PASSENGER_TYPE_ORDER)
+    render_passenger_type_executive_summary(
+        pax_summary,
+        type_colors=LT_PASSENGER_TYPE_COLORS,
+        titulo=f"Análisis de tipos de pasajero — {month_period_to_label(mes_sel)}",
     )
-    pax_dist = _build_lt_passenger_distribution(month_df)
-
-    type_slug = {
-        "Normal":        "--monedero",      # mismo slug = color azul corporativo
-        "Estudiante":    "--estudiante",
-        "Adulto Mayor":  "--adulto-mayor",
-        "Discapacitado": "--discapacitado",
-        "Otros":         "--otros",
-    }
-    rows_by_type = {row["tipo_pasajero"]: row for _, row in pax_dist.iterrows()}
-    cols = st.columns(len(LT_PASSENGER_TYPE_ORDER))
-    for col_box, tipo in zip(cols, LT_PASSENGER_TYPE_ORDER):
-        row = rows_by_type.get(tipo)
-        if row is not None:
-            pax_t = int(row["pasajeros"])
-            pct_t     = float(row["porcentaje"])
-            tarifa_t  = row["tarifa_media"]
-        else:
-            pax_t, pct_t, tarifa_t = 0, 0.0, np.nan
-
-        tarifa_label = fmt_number(tarifa_t, "CLP") if pd.notna(tarifa_t) else "-"
-        empty_cls = " is-empty" if (pax_t == 0 and not pd.notna(tarifa_t)) else ""
-        color_cls = type_slug.get(tipo, "")
-
-        card = (
-            f"<div class='pax-type-card {color_cls}{empty_cls}'>"
-            f"  <div class='pax-card-title'>{tipo}</div>"
-            f"  <div class='pax-card-value'>{fmt_pax(pax_t)}</div>"
-            f"  <div class='pax-card-pct'>{fmt_pct(pct_t)} del mes</div>"
-            f"  <div class='pax-card-fare'>Tarifa media: {tarifa_label}</div>"
-            f"</div>"
-        )
-        with col_box:
-            st.markdown(card, unsafe_allow_html=True)
 
     # ---- Distribución por sentido ----
     st.markdown(
